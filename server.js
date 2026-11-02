@@ -348,6 +348,12 @@ function bumpRev() {
 
 function upsertTask(meNo, t) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
+  /* 「待接收」只在「待开展」时有意义。承接方一旦把任务推进到进行中/暂缓/已完成，
+     就等于人已经接手了，不能继续挂着待接收——否则页面上会同时出现
+     「进行中」和「待接收」，谁看都觉得系统没弄对。 */
+  const assignee = exist ? exist.assignee_no : (t.assigneeNo || meNo);
+  const intake = (t.intakeStatus === 'pending' && assignee === meNo && t.status && t.status !== 'todo')
+    ? 'accepted' : (t.intakeStatus || null);
   if (exist) {
     if (exist.owner_no !== meNo && exist.assignee_no !== meNo) return false;
     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
@@ -357,7 +363,7 @@ function upsertTask(meNo, t) {
         t.imp == null || t.imp === '' ? null : Number(t.imp),
         t.urg == null || t.urg === '' ? null : Number(t.urg),
         JSON.stringify(t.stages || []), t.detached ? 1 : 0,
-        t.intakeStatus || null, nowStr(), t.id);
+        intake, nowStr(), t.id);
     return true;
   }
   if (t.ownerNo !== meNo && t.assigneeNo !== meNo) return false;
@@ -368,7 +374,7 @@ function upsertTask(meNo, t) {
     t.imp == null || t.imp === '' ? null : Number(t.imp),
     t.urg == null || t.urg === '' ? null : Number(t.urg),
     JSON.stringify(t.stages || []), t.routineId || null, t.planDate || null,
-    t.sourceId || null, t.detached ? 1 : 0, t.intakeStatus || null, now, now
+    t.sourceId || null, t.detached ? 1 : 0, intake, now, now
   );
   return true;
 }
@@ -482,7 +488,7 @@ function seedDemo(meNo) {
       ['数据口径确认与取数', d(-6), d(-2), 1], ['报告初稿撰写', d(-1), d(2), 0], ['经营会评审与修订', d(3), d(4), 0]]],
     ['Top10 客户续约拜访计划', 'assign', pick(0), d(-3), d(7), '覆盖 Top10 客户，输出拜访排期与风险清单', 'doing', 3, 2, [
       ['客户清单与优先级', d(-3), d(-1), 1], ['拜访排期确认', d(0), d(3), 0], ['风险清单输出', d(4), d(7), 0]]],
-    ['新人 30 天带教计划落地', 'assign', pick(3), d(-10), d(20), '新人独立承接 1 个模块需求并通过转正评估', 'todo', 2, 1, []],
+    ['新人 30 天带教计划落地', 'assign', pick(0), d(-10), d(20), '新人独立承接 1 个模块需求并通过转正评估', 'todo', 2, 1, []],
     ['部门数据看板建设', 'special', meNo, d(-15), d(15), '看板覆盖 6 个核心指标，日更可用', 'doing', 3, 2, [
       ['需求梳理与指标定义', d(-15), d(-9), 1], ['数据源接入', d(-8), d(-2), 1], ['看板搭建与试运行', d(-1), d(8), 0], ['验收与推广', d(9), d(15), 0]]],
     ['部门制度修订（考核细则）', 'special', meNo, d(2), d(25), '形成修订稿并通过部门会签', 'todo', 2, 1, [
@@ -498,7 +504,8 @@ function seedDemo(meNo) {
       assignee: who === meNo ? '我' : '', start, end, time: type === 'temp' && i === 6 ? '16:00' : '',
       std, status, cat1: meNo + '_c2', cat2: meNo + '_c22', imp, urg,
       stages: stages.map(s => ({ name: s[0], start: s[1], end: s[2], done: !!s[3] })),
-      intakeStatus: type === 'assign' ? (who === meNo ? null : 'pending') : null
+      /* 已经推进到「进行中」的就不该再挂「待接收」：演示数据也必须自洽 */
+      intakeStatus: type === 'assign' && who !== meNo ? (status === 'todo' ? 'pending' : 'accepted') : null
     });
   }
   /* 下属自己的常规工作，让管理者看板有真实数据可看（每人都有，避免看板出现「今日无节点」的空壳） */

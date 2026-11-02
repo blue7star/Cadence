@@ -297,10 +297,12 @@ function buildMembers() {
   });
 }
 
-/* 承接台：上级派给我、还没被我承接的 assign 任务 */
+/* 承接台：上级派给我、还没被我承接的 assign 任务。
+   已经在推进（不再是待开展）的视为已接手，不再列出来让人重复点确定。 */
 function buildIntake() {
   return S.tasks
-    .filter(t => t.type === 'assign' && t.assigneeNo === S.me.no && t.intakeStatus === 'pending')
+    .filter(t => t.type === 'assign' && t.assigneeNo === S.me.no
+      && t.intakeStatus === 'pending' && t.status === 'todo')
     .map(t => ({
       id: t.id, task: t, title: t.title, from: nameOf(t.ownerNo),
       due: t.end, std: t.std, note: '', status: 'pending'
@@ -517,7 +519,7 @@ function viewAssign() {
             ${carried.map(x => `<div class="mini carry" data-act="open" data-id="${x.id}"
                 title="点开看承接后这条任务的详情"><span class="carry-ar">↳</span>${esc(nameOf(x.ownerNo))} 承接为「${esc(x.title)}」
                 <b>${taskProg(x)}%</b> · ${ST[x.status] ? ST[x.status].name : ''}${overdue(x) ? ' · <span style="color:#dc2626">已逾期</span>' : ''}</div>`).join('')}</td>
-          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${t.intakeStatus === 'pending' ? ' <span class="tag">待接收</span>'
+          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${t.intakeStatus === 'pending' && t.status === 'todo' ? ' <span class="tag">待接收</span>'
             : (t.intakeStatus === 'accepted' && !carried.length ? ' <span class="tag">已接收</span>' : '')}</td>
           <td class="mini" style="white-space:nowrap">${fmt(t.start)} → ${fmt(t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
           <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>

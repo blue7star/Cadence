@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { DatabaseSync } = require('node:sqlite');
+const { SEMVER, getChangelog, getChangelogHistory, getFullVersion } = require('./version');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -570,6 +571,15 @@ const server = http.createServer(async (req, res) => {
   if (!p.startsWith('/api/')) return serveStatic(req, res, p);
 
   try {
+    /* 版本与更新记录：公开只读，不校验登录（登录页也要能看到版本号）。
+       数据源 version.js，前端更新弹窗与顶栏版本号都走这两个接口。 */
+    if (p === '/api/version' && req.method === 'GET') {
+      return sendJSON(res, 200, { ok: true, semver: SEMVER, version: getFullVersion(), changelog: getChangelog() });
+    }
+    if (p === '/api/changelog' && req.method === 'GET') {
+      return sendJSON(res, 200, { ok: true, current: SEMVER, versions: getChangelogHistory() });
+    }
+
     if (p === '/api/login' && req.method === 'POST') {
       const b = await readBody(req);
       const no = String(b.no || '').trim(), name = String(b.name || '').trim();
@@ -676,7 +686,7 @@ server.on('error', (e) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
-  console.log('  Cadence · 初级管理者工作台（MVP）已启动');
+  console.log(`  Cadence · 初级管理者工作台 v${SEMVER}（MVP）已启动`);
   console.log('  ----------------------------------------');
   console.log(`  本机访问：  http://localhost:${PORT}`);
   const ips = lanIPs();

@@ -15,8 +15,11 @@
 
 ```
 server.js              # HTTP 服务 + 接口 + 常规实例生成引擎
+version.js             # 版本号与更新内容的唯一定义点（含自检/生成命令）
+CHANGELOG.md           # 更新记录的人读版本（由 version.js 生成，勿手改）
 public/index.html      # 页面骨架与全部样式
 public/app.js          # 视图渲染、交互、同步
+public/changelog.js    # 顶栏版本号 + 版本更新弹窗
 data/                  # 运行时数据库（已 gitignore）
 docs/product-design.html  # 产品设计方案（含一期范围、权限、决策记录）
 docs/prototype.html       # 交互原型（无后端，localStorage，供对照）
@@ -38,6 +41,8 @@ PORT=8799 node --no-warnings server.js   # 换端口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/version` | 当前版本 `{semver, version, changelog}`；`version` 为 `SEMVER+提交数.短hash`，`changelog` 无登记时为 `null`。公开只读，登录页也取 |
+| GET | `/api/changelog` | 全部已登记版本倒序 `{current, versions[]}`，供「历次更新」 |
 | POST | `/api/login` | `{no, name}`，比对 `emp` 表；返回身份、上级、可见下属 |
 | POST | `/api/setmgr` | 首次登录自选直属上级，服务端做防环校验（不能是自己或自己的下级） |
 | GET | `/api/state?me=<工号>` | 一次返回该用户可见的全量数据（含服务端生成的常规实例） |
@@ -100,6 +105,71 @@ node _dev/e2e.mjs            # 需先起服务，默认 http://localhost:8788
 - 前端不引入构建工具与第三方库，保持“拷过去就能跑”。
 - 数据库结构变更写在 `server.js` 建表处，并对老库做兼容（`ALTER TABLE` 前先查 `pragma table_info`）。
 
-## 10. 已知边界（一期）
+## 10. 版本与发版
+
+### 10.1 版本号在哪儿
+
+**只有一个地方**：`version.js` 顶部的 `SEMVER`。服务端、前端、文档需要版本号时都从这里或接口取，别处不许硬编码。启动窗口和顶栏显示的 `x.y.z+N.hash` 里的提交数与短 hash 由 git 自动派生，不用管。
+
+规则（语义化）：
+
+| 位 | 什么时候 +1 | 例子 |
+|---|---|---|
+| X | 不兼容的大改：数据结构或使用方式推倒重来 | 1.0.0 |
+| Y | 新功能成批上线 | 0.3.0 加「月度复盘」 |
+| Z | 修复与优化；只要使用者能感知到变化就 +1 | 0.2.1 修一个日期算错 |
+
+Z 位这条是硬要求：**用户看得见的变化不 bump 版本号，更新提示就不会触发**，使用者永远不知道东西变了。
+
+### 10.2 更新内容写在哪儿
+
+也是 `version.js` 里的 `CHANGELOG`：按版本号倒序排，每版含 `date`、`title`、`items[]`（分组 + 每条一句话）。
+
+- 分组只能从四类里选：`新增能力` / `体验增强` / `口径变更` / `问题修复`，写别的自检会报错；
+- 写使用者视角的人话：他能做什么、哪里不再出问题。不写表名、接口名、commit、代码细节；
+- 历史版本的文字不要改，只在最前面加新的一块。
+
+`CHANGELOG.md` 是同一份内容的 Markdown 版，**由脚本生成**，不要手改：
+
+```bash
+node version.js            # 打印完整版本串
+node version.js --check    # 发版前自检：当前版本有登记、结构合法
+node version.js --write    # 生成/刷新 CHANGELOG.md
+node version.js --json     # 调试用：接口会返回的完整内容
+```
+
+> 为什么不用「CHANGELOG.md 手写 + 代码里再抄一份」：两份一定会走偏。这里只有一个真相，Markdown 是它的投影。
+
+### 10.3 发一次版的步骤
+
+1. 改 `version.js`：`SEMVER` 加一档，`CHANGELOG` 最前面加这一版的内容。
+2. `node version.js --check` 通过后 `node version.js --write` 刷新 `CHANGELOG.md`。
+3. 跑 `node _dev/e2e.mjs`，全绿再出门（含版本弹窗用例）。
+4. 提交：`release(v0.2.1): 一句话说清这次给使用者带来了什么`。
+5. 打标签并推送：
+
+```bash
+git tag -a v0.2.1 -m "v0.2.1 一句话"
+git push origin main --tags
+```
+
+### 10.4 前端怎么让人知道更新了
+
+| 场景 | 行为 |
+|---|---|
+| 第一次打开（本地无记录） | 只记下当前版本，**不弹** |
+| 版本变了 | 自动弹「本次更新」，点「知道了」写回记录，之后不再弹 |
+| 想看历史 | 点顶栏的版本号，任何时候都能翻历次更新 |
+| 版本接口拿不到 | 版本号隐藏、不弹窗，业务功能照常 |
+
+记录存在浏览器 `localStorage.cadence_seen_version`，所以每台电脑/每个浏览器各自提示一次，互不影响。
+
+### 10.5 提交信息
+
+- 日常改动：`fix(范围): 一句话` / `feat(范围): 一句话` / `docs(范围): 一句话`，范围用中文模块名（如 `常规工作`、`日历`、`版本`）。
+- 发版单独一个 `release(vX.Y.Z): 这版给使用者带来了什么`，只包含 `version.js` 与 `CHANGELOG.md` 的改动。这样回看历史时，能一眼把「发版」和「功能提交」分开。
+- 一次提交只做一件事；版本号与更新内容永远和它描述的那批改动一起进来。
+
+## 11. 已知边界（一期）
 
 无密码、无权限分级、无推送（仅站内）、无验收评分、无组织架构同步、未适配移动端、并发写为后写覆盖。**仅限试点范围使用。**

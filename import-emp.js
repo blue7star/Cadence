@@ -11,6 +11,8 @@
  *   1012,王磊,产品组组长,产品部,1001
  * 说明：
  *   - 只有工号、姓名必填，岗位/部门/上级工号可以留空；
+ *   - 上级工号三种写法：填工号 = 按表设定；留空 = 这次不动（保留本人自己选的，不会被冲掉）；
+ *     填 `-` = 清空上级（写错了要撤掉时用）；
  *   - 上级工号可以是本文件里出现的人，也可以是库里已有的人；
  *   - 同工号重复导入是「更新」不是报错（姓名/岗位/部门/上级会被覆盖，账号重新启用）；
  *   - 全量校验通过才写库，有一行错就整批不写，避免导入一半；
@@ -65,7 +67,9 @@ function parseCsv(raw) {
       name: cells[1] || '',
       role: cells[2] || '',
       dept: cells[3] || '',
-      mgrNo: cells[4] || '',
+      // 上级列三种写法：工号 = 按表设定；留空 = 这次不动（保留本人自己选的）；`-` = 清空
+      mgrNo: cells[4] === '-' ? '' : (cells[4] || ''),
+      mgrClear: cells[4] === '-',
     });
   }
   return rows;
@@ -134,7 +138,7 @@ function main() {
   }
 
   const db = new DatabaseSync(DB_FILE);
-  const existing = new Map(db.prepare('SELECT no FROM emp').all().map(r => [r.no, r]));
+  const existing = new Map(db.prepare('SELECT no, mgr_no FROM emp').all().map(r => [r.no, r]));
   const inFile = new Map();
   const errors = [];
 
@@ -162,18 +166,28 @@ function main() {
     process.exit(1);
   }
 
+  /* 上级列留空 = 「这次没这个信息」，不是「把上级清空」。
+     本人登录后自己选的上级也写在同一列 mgr_no 上，不能被一次留空的导入冲掉：
+     COALESCE 取新值优先、留空时保留库里原值。要真的改上级就填具体工号。 */
   const ins = db.prepare(`INSERT INTO emp(no,name,role,dept,mgr_no,active,created_at) VALUES(?,?,?,?,?,1,?)
     ON CONFLICT(no) DO UPDATE SET name=excluded.name, role=excluded.role, dept=excluded.dept,
-    mgr_no=excluded.mgr_no, active=1`);
+    mgr_no=COALESCE(excluded.mgr_no, emp.mgr_no), active=1`);
   const now = new Date().toISOString();
-  let added = 0, updated = 0;
+  let added = 0, updated = 0, mgrWritten = 0, mgrKept = 0, mgrCleared = 0;
+  const stillNoMgr = [];
   if (!dryRun) {
+    const clearMgr = db.prepare('UPDATE emp SET mgr_no=NULL WHERE no=?');
     db.exec('BEGIN');
     try {
       for (const r of rows) {
-        const isNew = !existing.has(r.no);
+        const old = existing.get(r.no);
         ins.run(r.no, r.name, r.role || null, r.dept || null, r.mgrNo || null, now);
-        if (isNew) added++; else updated++;
+        if (r.mgrClear) clearMgr.run(r.no);
+        if (!old) added++; else updated++;
+        if (r.mgrClear) { if (old && old.mgr_no) mgrCleared++; else stillNoMgr.push(r.name); }
+        else if (r.mgrNo) { if (!old || old.mgr_no !== r.mgrNo) mgrWritten++; }
+        else if (old && old.mgr_no) mgrKept++;
+        else stillNoMgr.push(r.name);
       }
       // 花名册变了，前端要重新拉一次数据才能看到新的下属
       db.prepare('UPDATE meta SET v = CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');
@@ -184,14 +198,23 @@ function main() {
       process.exit(1);
     }
   } else {
-    for (const r of rows) existing.has(r.no) ? updated++ : added++;
+    for (const r of rows) {
+      const old = existing.get(r.no);
+      if (old) updated++; else added++;
+      if (r.mgrClear) { if (old && old.mgr_no) mgrCleared++; else stillNoMgr.push(r.name); }
+      else if (r.mgrNo) { if (!old || old.mgr_no !== r.mgrNo) mgrWritten++; }
+      else if (old && old.mgr_no) mgrKept++;
+      else stillNoMgr.push(r.name);
+    }
   }
 
   console.log('');
   console.log(`  ${dryRun ? '[试运行，未写库] ' : ''}花名册导入完成：新增 ${added} 人，更新 ${updated} 人，共 ${rows.length} 行。`);
-  const noMgr = rows.filter(r => !r.mgrNo);
-  if (noMgr.length) {
-    console.log(`  其中 ${noMgr.length} 人没填上级（登录后会让他自己选）：` + noMgr.map(r => r.name).join('、'));
+  if (mgrWritten) console.log(`  上级关系：本次按表写入 ${mgrWritten} 人。`);
+  if (mgrCleared) console.log(`  上级关系：本次清空 ${mgrCleared} 人（表里写的是 -）。`);
+  if (mgrKept) console.log(`  上级关系：${mgrKept} 人表里没填，保留了他们自己选的上级（不会被清空）。`);
+  if (stillNoMgr.length) {
+    console.log(`  上级关系：${stillNoMgr.length} 人现在还没有上级（${stillNoMgr.join('、')}），登录后会自己选。`);
   }
   if (!dryRun) console.log('  导入后让相关同事刷新页面即可；花名册已生效，不用重启服务。');
   console.log('');

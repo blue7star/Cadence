@@ -1005,7 +1005,10 @@ function drawerHTML(t) {
         <input type="date" value="${t.end}" data-field="end"/>
       </div></div>
       ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
-      <div class="field"><label>承接人</label><select data-field="assigneeNo">${whoOpts}</select></div>
+      <div class="field"><label>承接人</label>${t.type === 'assign'
+        ? `<select data-field="assigneeNo">${whoOpts}</select>`
+        : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
+           <div class="mini" style="margin-top:5px;line-height:1.4">只有「下派任务」能换人；要交给组员，请新建一条下派任务。</div>`}</div>
       <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
       ${cats}
       <div class="field"><label>优先级（可选填）</label><div class="row">
@@ -1099,17 +1102,36 @@ function closeModal() {
   if (pendingRefresh) { pendingRefresh = false; refresh(true).catch(() => { }); }
 }
 
+/* 承接人：只有「下派任务」能指定给别人。
+   专项、临时一律是本人——这两个页面不是派活入口，锁住才不会让人以为能给他人派活。 */
+function canAssignOthers(type) { return type === 'assign'; }
+
+function assigneeFieldInner(type, sel) {
+  if (canAssignOthers(type)) {
+    return `<div class="field"><label>承接人</label><select id="f_assignee">
+      <option value="${S.me.no}" ${!sel || sel === S.me.no ? 'selected' : ''}>我</option>
+      ${S.subs.map(m => `<option value="${m.no}" ${sel === m.no ? 'selected' : ''}>${esc(m.name)}（${esc(m.role || '')}）</option>`).join('')}
+    </select></div>`;
+  }
+  return `<div class="field"><label>承接人</label>
+    <div class="locked">我（本人）<span class="mini">不可改</span></div>
+    <div class="mini" style="margin-top:5px;line-height:1.4">${TYPES[type].name}归自己办；要交给组员，请用「下派任务」。</div>
+    <input type="hidden" id="f_assignee" value="${S.me.no}"/>
+  </div>`;
+}
+
+function assigneeFieldHTML(type, sel) {
+  return `<div id="fAssigneeWrap">${assigneeFieldInner(type, sel)}</div>`;
+}
+
 function taskModalBody(type, preset) {
   const today = (preset && preset.date) || TODAY;
   const base = `
   <div class="field"><label>任务名称</label><input id="f_title" placeholder="例如：季度经营分析报告" value="${preset && preset.title ? esc(preset.title) : ''}"/></div>
-  <div class="field"><label>任务类型</label><select id="f_type">
+  <div class="field"><label>任务类型</label><select id="f_type" data-prev="${type}">
     ${['assign', 'special', 'temp'].map(k => `<option value="${k}" ${k === type ? 'selected' : ''}>${TYPES[k].name}</option>`).join('')}
   </select></div>
-  <div class="field"><label>承接人</label><select id="f_assignee">
-    <option value="${S.me.no}">我</option>
-    ${S.subs.map(m => `<option value="${m.no}" ${(preset && preset.assigneeNo === m.no) ? 'selected' : ''}>${esc(m.name)}（${esc(m.role)}）</option>`).join('')}
-  </select></div>
+  ${assigneeFieldHTML(type, preset && preset.assigneeNo)}
   <div class="field"><label>起止时间 / 时间点（可选）</label><div class="row">
     <input type="date" id="f_start" value="${today}" style="flex:1"/>
     <input type="date" id="f_end" value="${today}" style="flex:1"/>
@@ -1174,7 +1196,8 @@ function openNewTask(type, preset) {
       return { name, start: st, end: en, done: false };
     }).filter(Boolean);
     const typeVal = $('#f_type').value;
-    const assigneeNo = $('#f_assignee').value;
+    // 专项、临时只归自己（界面已锁），这里再兜一层，避免切换类型后残留别人的工号
+    const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
     const task = {
       id: uid('t'), type: typeVal, title,
       ownerNo: S.me.no, assigneeNo,
@@ -1313,16 +1336,13 @@ function openIntakeModal(id) {
   if (!it) return;
   openModal('规划并承接：' + it.title, `
     <div class="note" style="margin-bottom:12px">来源：${esc(it.from)} · 要求 ${fmt(it.due)} 前 · 标准：${esc(it.std || '未填写')}</div>
-    <div class="field"><label>这件事在你这儿算什么</label><select id="f_type">
+    <div class="field"><label>这件事在你这儿算什么</label><select id="f_type" data-prev="special">
       <option value="special">专项任务（需要自己持续推进，可拆阶段）</option>
       <option value="temp">临时任务（一次性，尽快处理）</option>
       <option value="assign">下派任务（交给组员办）</option>
     </select></div>
     <div class="field"><label>任务名称</label><input id="f_title" value="${esc(it.title)}"/></div>
-    <div class="field"><label>承接人</label><select id="f_assignee">
-      <option value="${S.me.no}">我</option>
-      ${S.subs.map(m => `<option value="${m.no}">${esc(m.name)}</option>`).join('')}
-    </select></div>
+    ${assigneeFieldHTML('special', null)}
     <div class="field"><label>起止时间</label><div class="row">
       <input type="date" id="f_start" value="${TODAY}"/>
       <input type="date" id="f_end" value="${it.due}"/>
@@ -1333,7 +1353,7 @@ function openIntakeModal(id) {
     const title = $('#f_title').value.trim();
     if (!title) { toast('先填任务名称'); return false; }
     const type = $('#f_type').value;
-    const assigneeNo = $('#f_assignee').value;
+    const assigneeNo = canAssignOthers(type) ? $('#f_assignee').value : S.me.no;
     S.tasks.push({
       id: uid('t'), type, title, ownerNo: S.me.no, assigneeNo,
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
@@ -1764,7 +1784,17 @@ document.addEventListener('change', e => {
     return;
   }
   if (modal && e.target.matches('#f_type')) {
-    if (e.target.value === 'temp') toast('临时任务默认归入「其他 / 临时事项」');
+    const prev = e.target.dataset.prev || 'special';
+    let next = e.target.value;
+    if (next === 'assign' && !S.subs.length) {
+      toast('你还没有直接下属，无法下派任务');
+      e.target.value = prev; next = prev;
+    }
+    e.target.dataset.prev = next;
+    // 类型一换，承接人就跟着换：只有下派任务能选人，其余锁回本人
+    const wrap = $('#fAssigneeWrap');
+    if (wrap) wrap.innerHTML = assigneeFieldInner(next, null);
+    if (next === 'temp') toast('临时任务默认归入「其他 / 临时事项」');
     return;
   }
   const dr = e.target.closest('#drawer');

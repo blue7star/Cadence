@@ -348,28 +348,35 @@ function bumpRev() {
 
 function upsertTask(meNo, t) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
+  if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) return false;
+
+  /* 承接人：只有「下派任务」存在换人这回事，且只有下发人能换。
+     专项、临时一律归本人——页面不给入口，这里兜底，避免脏数据绕过界面写进来。 */
+  const type = exist ? exist.type : (t.type || 'temp');
+  let assigneeNo = exist ? exist.assignee_no : (t.assigneeNo || meNo);
+  if (type !== 'assign') assigneeNo = exist ? exist.assignee_no : (t.ownerNo || meNo);
+  else if (exist && exist.owner_no === meNo && t.assigneeNo) assigneeNo = t.assigneeNo;
+
   /* 「待接收」只在「待开展」时有意义。承接方一旦把任务推进到进行中/暂缓/已完成，
      就等于人已经接手了，不能继续挂着待接收——否则页面上会同时出现
      「进行中」和「待接收」，谁看都觉得系统没弄对。 */
-  const assignee = exist ? exist.assignee_no : (t.assigneeNo || meNo);
-  const intake = (t.intakeStatus === 'pending' && assignee === meNo && t.status && t.status !== 'todo')
+  const intake = (t.intakeStatus === 'pending' && assigneeNo === meNo && t.status && t.status !== 'todo')
     ? 'accepted' : (t.intakeStatus || null);
   if (exist) {
-    if (exist.owner_no !== meNo && exist.assignee_no !== meNo) return false;
     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
-                imp=?,urg=?,stages=?,detached=?,intake_status=?,updated_at=? WHERE id=?`)
+                imp=?,urg=?,stages=?,detached=?,assignee_no=?,intake_status=?,updated_at=? WHERE id=?`)
       .run(t.title, t.std || '', t.start, t.end, t.time || '', t.status || 'todo',
         t.cat1 || null, t.cat2 || null,
         t.imp == null || t.imp === '' ? null : Number(t.imp),
         t.urg == null || t.urg === '' ? null : Number(t.urg),
         JSON.stringify(t.stages || []), t.detached ? 1 : 0,
-        intake, nowStr(), t.id);
+        assigneeNo, intake, nowStr(), t.id);
     return true;
   }
   if (t.ownerNo !== meNo && t.assigneeNo !== meNo) return false;
   const now = nowStr();
   insTaskStmt.run(
-    t.id, t.ownerNo || meNo, t.assigneeNo || meNo, t.type || 'temp', t.title, t.std || '',
+    t.id, t.ownerNo || meNo, assigneeNo, type, t.title, t.std || '',
     t.start, t.end, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
     t.imp == null || t.imp === '' ? null : Number(t.imp),
     t.urg == null || t.urg === '' ? null : Number(t.urg),

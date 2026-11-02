@@ -603,7 +603,6 @@ function viewRoutine() {
     ${rules.length ? rules.map(r => {
       const steps = r.steps && r.steps.length ? r.steps : [{ name: '', day: r.day, weekday: r.weekday, time: r.time }];
       const inst = S.tasks.filter(t => t.routineId === r.id && t.planDate >= mS && t.planDate <= mE);
-      const liveN = S.tasks.filter(t => t.routineId === r.id).length;
       const doneSteps = inst.reduce((a, t) => a + (t.stages || []).filter(s => s.done).length + (!(t.stages || []).length ? (t.status === 'done' ? 1 : 0) : 0), 0);
       const sortedInst = inst.slice().sort((a, b) => a.start < b.start ? -1 : 1);
       const liveInst = sortedInst.filter(t => t.status !== 'done' && t.end >= TODAY)[0] || sortedInst[sortedInst.length - 1];
@@ -638,7 +637,6 @@ function viewRoutine() {
           <span class="mini">${catName(r.cat1, r.cat2)}</span>
           <button class="btn sm ghost" data-act="rule-edit" data-id="${r.id}">编辑</button>
           <button class="btn sm ghost" data-act="rule-toggle" data-id="${r.id}">${r.active ? '停用' : '启用'}</button>
-          ${!r.active && liveN ? `<button class="btn sm ghost" data-act="rule-clear" data-id="${r.id}">清空实例</button>` : ''}
           <button class="btn sm ghost" data-act="rule-del" data-id="${r.id}">删除</button>
         </div>
         ${nodes.length ? `<div style="margin:6px 0 4px">
@@ -654,7 +652,7 @@ function viewRoutine() {
           </span>`).join('') || '<span class="mini">本月无实例</span>'}
         </div>`}
         ${liveRange ? `<div class="mini" style="color:var(--ink2)">本周期：<b>${fmt(liveRange.start)}${liveRange.start === liveRange.end ? '' : ' → ' + fmt(liveRange.end)}</b>${isCrossMonth(r) ? ' <span class="tag warn">跨月</span>' : ''}</div>` : ''}
-        <div class="mini">本月：${inst.length} 个周期实例 · ${doneSteps} 个节点已完成${!r.active ? ` · <span style="color:#b45309">已停用，共 ${liveN} 条实例仍在日历中</span>` : ''}</div>
+        <div class="mini">本月：${inst.length} 个周期实例 · ${doneSteps} 个节点已完成${!r.active ? ' · <span style="color:#b45309">已停用：今后不再生成，今天及以前保留</span>' : ''}</div>
       </div>`;
     }).join('') : '<div class="empty">这一类还没有常规工作，点右上角新建</div>'}
   </div>
@@ -666,6 +664,8 @@ function viewRoutine() {
       · 跨月周期：节点可以落到次月，一个周期就横跨两个月（如 10/28 → 11/15），卡片上标「跨月」并显示本周期区间。<br/>
       · 节假日：逢法定假日或周末，按节点策略「提前至前一工作日」或「顺延至后一工作日」，也可选择跳过。<br/>
       · 规则可以编辑：保存后重排本月及以后、尚未完成的周期，历史周期与已完成的不动；已勾选的节点会按名称保留。日历里拖动节点只改「本次」，规则本身不变。<br/>
+      · 停用：今后的周期不再生效——<b>今天及以前的安排原样保留</b>（做过的不清、正在做的不打断），明天以后的自动撤掉；点「启用」即恢复生成。<br/>
+      · 删除：这条常规连同它的全部安排一起清掉，日历里不再留任何痕迹。<br/>
       · 实例由服务端统一生成，不依赖谁打开了页面；同事那边看到的就是同一份数据。
     </div>
   </div>`;
@@ -1527,53 +1527,43 @@ document.addEventListener('click', e => {
     case 'rtab': routineTab = el.dataset.tab; render(); break;
     case 'rule-toggle': {
       const r = S.rules.find(x => x.id === id);
-      if (r) {
-        r.active = !r.active;
-        save(); render();
-        if (!r.active) {
-          const c = S.tasks.filter(x => x.routineId === r.id).length;
-          toast(c ? `已停用，不再生成新实例；已排的 ${c} 条仍在日历里，可点「清空实例」` : '已停用，不再生成新实例');
-        } else {
-          toast('已启用，后续实例会在下次刷新时补齐');
-        }
+      if (!r) break;
+      r.active = !r.active;
+      let dropped = 0;
+      if (!r.active) {
+        /* 停用 = 今后不再生效：今天及以前的安排保留（做过的、正在做的都在），明天以后的撤掉 */
+        const cut = S.tasks.filter(x => x.routineId === r.id && x.status !== 'done' &&
+          (x.planDate || x.start) > TODAY);
+        dropped = cut.length;
+        const gone = new Set(cut.map(x => x.id));
+        S.tasks = S.tasks.filter(x => !gone.has(x.id));
+      }
+      save(); render();
+      if (r.active) {
+        toast(`已启用「${r.title}」，后续安排按规则继续生成`);
+      } else {
+        const kept = S.tasks.filter(x => x.routineId === r.id).length;
+        toast(dropped
+          ? `已停用「${r.title}」，明天起的 ${dropped} 项安排已撤掉；今天及以前的 ${kept} 项保留`
+          : `已停用「${r.title}」，今后不再生成；已有的 ${kept} 项保留`);
       }
       break;
     }
     case 'rule-del': {
+      /* 删除 = 彻底删除：规则与它的全部安排一起清掉，与「停用」区分开 */
       const r = S.rules.find(x => x.id === id);
       if (!r) break;
       const inst = S.tasks.filter(x => x.routineId === r.id);
-      const open = inst.filter(x => x.status !== 'done').length;
-      openModal('删除常规工作', `
+      openModal('删除这条常规工作？', `
         <div class="delbox">
-          <p>「<b>${esc(r.title)}</b>」已生成 <em>${inst.length}</em> 条实例，其中 <em>${open}</em> 条还没完成。</p>
-          <label class="rdopt"><input type="radio" name="delmode" value="all" checked/>
-            <span><b>删除规则，同时删掉这 ${inst.length} 条实例</b><i>日历与今日待办里不再出现，推荐</i></span></label>
-          <label class="rdopt"><input type="radio" name="delmode" value="keep"/>
-            <span><b>只删规则，保留这 ${inst.length} 条实例</b><i>已排的日程不动，只是不再自动生成新的</i></span></label>
+          <p>「<b>${esc(r.title)}</b>」以及它在日历里的 <em>${inst.length}</em> 项安排会被一起删掉，删除后不能恢复。</p>
+          <p class="mini" style="margin-top:8px">如果只是暂时不做、还想留着之前的记录，请选「取消」，然后点卡片上的「停用」。</p>
         </div>`, () => {
-        const mode = (document.querySelector('#modal input[name="delmode"]:checked') || {}).value || 'all';
         S.rules = S.rules.filter(x => x.id !== r.id);
-        let n = 0;
-        if (mode === 'all') {
-          n = inst.length;
-          S.tasks = S.tasks.filter(x => x.routineId !== r.id);
-        } else {
-          S.tasks.forEach(x => { if (x.routineId === r.id) x.detached = true; });
-        }
+        S.tasks = S.tasks.filter(x => x.routineId !== r.id);
         save(); closeModal(); render();
-        toast(mode === 'all' ? `规则已删除，同时清理 ${n} 条实例` : '规则已删除，实例保留');
+        toast(`已删除「${r.title}」，连同 ${inst.length} 项安排`);
       }, '删除');
-      break;
-    }
-    case 'rule-clear': {
-      const r = S.rules.find(x => x.id === id);
-      if (!r) break;
-      const inst = S.tasks.filter(x => x.routineId === r.id);
-      if (!inst.length) { toast('这条规则没有已生成的实例'); break; }
-      if (!confirm(`清空「${r.title}」已生成的 ${inst.length} 条实例？规则本身保留，之后仍按周期生成。`)) break;
-      S.tasks = S.tasks.filter(x => x.routineId !== r.id);
-      save(); render(); toast(`已清理 ${inst.length} 条实例`);
       break;
     }
     case 'task-del':

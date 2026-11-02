@@ -223,6 +223,7 @@ function maintain(ownerNos) {
 }
 
 function regenRule(rule) {
+  if (!rule.active) return;   /* 停用期间不重排、不补生成：已有安排原样保留 */
   const t = todayStr();
   const monthKey = t.slice(0, 7);
   const rows = db.prepare('SELECT * FROM task WHERE routine_id=?').all(rule.id);
@@ -379,7 +380,8 @@ function upsertRule(meNo, r) {
     .run(r.id, meNo, r.title, r.cycle, r.policy || 'prev', r.cat1 || null, r.cat2 || null,
       JSON.stringify(r.steps || []), r.active === false ? 0 : 1, nowStr());
   const w = routineWindow();
-  ensureInstances(db.prepare('SELECT * FROM rule WHERE id=?').get(r.id), w.from, w.to);
+  const fresh = db.prepare('SELECT * FROM rule WHERE id=?').get(r.id);
+  if (fresh.active) ensureInstances(fresh, w.from, w.to);
   return true;
 }
 

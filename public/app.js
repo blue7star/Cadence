@@ -1023,7 +1023,7 @@ function taskDetailHTML(t) {
     ? `<div class="card"><div class="card-h"><h2>本周期节点</h2><span class="hint">${t.status === 'done' ? '已完成' : '勾掉即完成'}</span></div>
         ${stages.length ? `<div class="stagelist">${stages.map((s, i) => `<div class="sitem">
           <div class="cb ${s.done ? 'on' : ''}" ${canEdit ? `data-act="toggle-step" data-id="${t.id}" data-idx="${i}"` : ''}>${s.done ? '✓' : ''}</div>
-          <div class="nm ${s.done ? 'done' : ''}" style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name || '执行')}
+          <div class="nm ${s.done ? 'done' : ''}"><span style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name || '执行')}</span>
             <small>${fmt(s.date)}${s.time ? ' · ' + s.time : ''}${s.plan && s.plan !== s.date ? ` · 计划 ${fmt(s.plan)}，节假日已调整` : ''}</small></div>
         </div>`).join('')}</div>` : '<div class="mini">这一天没有设节点</div>'}
         ${rule

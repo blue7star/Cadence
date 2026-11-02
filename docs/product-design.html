@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>初级管理者工作台 · 产品设计方案 v1.0（独立Web应用路线）</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233454D1'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+/* ============ 基础（375px 窄屏优先） ============ */
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:#F5F7FA;color:#1C2B3A;font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;font-size:15px;line-height:1.8;min-width:320px}
+img,svg{max-width:100%;vertical-align:middle}
+a{color:#3454D1;text-decoration:none}
+a:hover{text-decoration:underline}
+:root{
+  --paper:#F5F7FA;--card:#FFFFFF;--line:#E3E8F0;--line-2:#D3DCE8;
+  --ink:#1C2B3A;--ink2:#45566B;--ink3:#7B8A9D;
+  --primary:#3454D1;--primary-deep:#253B8F;--primary-soft:#EEF1FC;
+  --type-design:#3454D1;--type-regular:#0E8A7D;--type-special:#C2700A;--type-temp:#6A5AE0;
+  --st-pending:#8FA1B3;--st-progress:#3454D1;--st-done:#1F9D5B;--st-paused:#C2700A;
+  --alert:#D64545;--warn:#C2700A;--ok:#1F9D5B;
+}
+/* ============ 页头 ============ */
+.doc-header{background:linear-gradient(160deg,#172554 0%,#253B8F 55%,#3454D1 100%);color:#fff;padding:34px 18px 30px}
+.doc-header .hd-inner{max-width:1080px;margin:0 auto}
+.doc-kicker{font-size:12.5px;letter-spacing:.18em;color:#B8C6F5;margin-bottom:10px;font-weight:600}
+.doc-title{font-size:26px;line-height:1.35;font-weight:800;letter-spacing:.01em}
+.doc-sub{margin-top:10px;font-size:14px;color:#D7E0F9;max-width:72ch}
+.meta-row{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px}
+.meta-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 12px;font-size:12.5px;color:#EDF1FE}
+.meta-chip svg{width:13px;height:13px;flex:none}
+/* ============ 布局 ============ */
+.layout{max-width:1080px;margin:0 auto;padding:0 0 60px;display:block}
+.doc-main{padding:26px 14px 10px}
+/* 移动端目录开关 */
+.toc-toggle{position:sticky;top:0;z-index:40;background:var(--card);border:1px solid var(--line);border-radius:10px;margin:18px 12px 0;padding:10px 14px;font-size:14px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:8px;cursor:pointer;box-shadow:0 2px 8px rgba(28,43,58,.06)}
+.toc-toggle svg{width:16px;height:16px;flex:none}
+.toc-toggle::after{content:"▾";margin-left:auto;color:var(--ink3);font-size:12px}
+.toc-toggle.open::after{content:"▴"}
+/* 桌面目录（移动端隐藏，≥1024 显示） */
+aside.toc{display:none}
+.toc-mobile{display:none;margin:6px 12px 0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 6px}
+.toc-mobile.open{display:block}
+.toc-mobile a{display:block;padding:7px 12px;font-size:13.5px;color:var(--ink2);border-left:2px solid transparent}
+.toc-mobile a:hover{color:var(--primary);background:var(--primary-soft);border-left-color:var(--primary);text-decoration:none}
+/* ============ 章节 ============ */
+.sec{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 18px 30px;margin:18px 0}
+.sec-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
+.sec-num{flex:none;width:44px;height:44px;border-radius:12px;background:var(--primary-soft);color:var(--primary-deep);font-size:18px;font-weight:800;display:flex;align-items:center;justify-content:center;line-height:1}
+.sec-title{font-size:22px;font-weight:800;color:var(--ink);line-height:1.4;margin-top:3px}
+.sec-sub{font-size:13px;color:var(--ink3);margin:2px 0 16px}
+.lead{color:var(--ink2);margin:10px 0 6px}
+h3.sub{font-size:17px;font-weight:700;color:var(--ink);margin:26px 0 10px;padding-left:10px;border-left:4px solid var(--primary);line-height:1.4}
+h4.sub2{font-size:15px;font-weight:700;color:var(--ink);margin:18px 0 8px}
+p{margin:8px 0;color:var(--ink2)}
+ul,ol{margin:8px 0 8px 20px;color:var(--ink2)}
+li{margin:4px 0}
+strong{color:var(--ink);font-weight:700}
+b.acc{color:var(--primary-deep)}
+/* 表格 */
+.tbl-wrap{overflow-x:auto;margin:12px 0}
+table.spec{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13.5px;min-width:560px}
+table.spec th{background:var(--primary-soft);color:var(--primary-deep);font-weight:700;text-align:left;padding:8px 10px;border:1px solid var(--line-2)}
+table.spec td{padding:7px 10px;border:1px solid var(--line);color:var(--ink2);vertical-align:top;word-break:break-word}
+table.spec tr:nth-child(even) td{background:#FAFBFD}
+table.spec td.yes{color:var(--ok);font-weight:600}
+table.spec td.opt{color:var(--warn);font-weight:600}
+/* 徽标 */
+.chip{display:inline-block;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:600;line-height:1.9;white-space:nowrap}
+.chip-design{background:rgba(52,84,209,.12);color:#3454D1}
+.chip-regular{background:rgba(14,138,125,.12);color:#0E8A7D}
+.chip-special{background:rgba(194,112,10,.12);color:#C2700A}
+.chip-temp{background:rgba(106,90,224,.12);color:#6A5AE0}
+.chip-pending{background:rgba(143,161,179,.16);color:#5C7083}
+.chip-progress{background:rgba(52,84,209,.12);color:#3454D1}
+.chip-done{background:rgba(31,157,91,.13);color:#1F9D5B}
+.chip-paused{background:rgba(194,112,10,.13);color:#C2700A}
+/* 卡片组 */
+.grid2{display:grid;grid-template-columns:1fr;gap:10px;margin:12px 0}
+.grid3{display:grid;grid-template-columns:1fr;gap:10px;margin:12px 0}
+.card{background:#FBFCFE;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card h5{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.card p{font-size:13.5px;margin:2px 0}
+.card .tagline{font-size:12px;color:var(--ink3);margin-bottom:6px}
+/* 图示 */
+.fig{margin:16px 0 4px;border:1px solid var(--line);border-radius:12px;background:#FBFCFE;padding:14px 10px 10px;overflow-x:auto}
+.fig .inner{min-width:600px}
+.fig-cap{font-size:12.5px;color:var(--ink3);text-align:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+/* 流程图 */
+.flow{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.fstep{display:flex;gap:10px;align-items:flex-start;background:#FBFCFE;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.fstep .n{flex:none;width:24px;height:24px;border-radius:7px;background:var(--primary);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:2px}
+.fstep .t{font-size:13.5px;color:var(--ink2)}
+.fstep .t b{color:var(--ink);display:block;font-size:14px;margin-bottom:1px}
+.farr{text-align:center;color:var(--primary);font-size:15px;line-height:1;font-weight:700}
+/* 泳道 */
+.swim{display:flex;flex-direction:column;gap:0;margin:14px 0}
+.sw-col{flex:1}
+.sw-col h6{font-size:13px;font-weight:700;color:var(--primary-deep);background:var(--primary-soft);border:1px solid var(--line-2);border-radius:8px 8px 0 0;padding:6px 12px;text-align:center}
+.sw-items{display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:10px}
+.sw-item{font-size:13px;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:7px;padding:7px 10px;text-align:center}
+.sw-item b{color:var(--ink);display:block;font-size:13.5px}
+.sw-arrow{text-align:center;color:var(--primary);font-size:14px;font-weight:700;padding:2px 0}
+/* 四象限 */
+.quad{display:grid;grid-template-columns:1fr;gap:8px;margin:14px 0}
+.quad .q{background:#FBFCFE;border:1px solid var(--line);border-radius:10px;padding:10px 12px;position:relative}
+.quad .q h5{font-size:14px;font-weight:700;margin-bottom:2px}
+.quad .q p{font-size:12.5px;color:var(--ink3);margin:0}
+.quad .q.q1{border-top:3px solid #D64545}
+.quad .q.q2{border-top:3px solid #C2700A}
+.quad .q.q3{border-top:3px solid #C2700A}
+.quad .q.q4{border-top:3px solid #1F9D5B}
+/* 线框 */
+.wire{background:#fff;border:1px solid var(--line-2);border-radius:8px;padding:0;overflow:hidden;min-width:600px}
+.wire .w-top{display:flex;gap:6px;align-items:center;background:#F1F5F9;padding:7px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink3)}
+.wire .w-top .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.wire .w-body{display:flex;gap:8px;padding:8px;min-height:210px}
+.w-panel{border:1px dashed #B9C5D8;border-radius:6px;padding:8px;background:#FAFBFD;font-size:11.5px;color:var(--ink2);flex:1}
+.w-panel h6{font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px;border-bottom:1px solid #EDF0F5;padding-bottom:4px}
+.w-item{background:#fff;border:1px solid var(--line);border-radius:5px;padding:4px 7px;margin:5px 0;font-size:11.5px;display:flex;align-items:center;gap:5px;min-height:22px}
+.w-item .bar{width:7px;height:14px;border-radius:2px;flex:none}
+.w-legend{font-size:11px;color:var(--ink3);display:flex;flex-wrap:wrap;gap:8px;padding:7px 10px;border-top:1px solid var(--line)}
+.w-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+/* 时间轴 */
+.timeline{display:grid;grid-template-columns:78px 22px 1fr;gap:0;margin:16px 0 6px}
+.tl-item{display:contents}
+.tl-time{font-size:13px;color:var(--ink3);padding:6px 6px 6px 0;text-align:right;font-weight:600;line-height:1.5}
+.tl-axis{display:flex;justify-content:center;position:relative}
+.tl-axis::after{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;margin-left:-1px;background:var(--line-2)}
+.tl-dot{width:12px;height:12px;border-radius:50%;background:var(--primary);border:3px solid #fff;box-shadow:0 0 0 2px var(--primary);position:relative;z-index:1;margin-top:9px}
+.tl-card{background:#FBFCFE;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin:2px 0 8px}
+.tl-card h5{font-size:14px;font-weight:700;color:var(--ink)}
+.tl-card p{font-size:13px;color:var(--ink2);margin:2px 0 0}
+/* 提示框 */
+.callout{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:13.5px;border:1px solid}
+.callout .ct{font-weight:700;margin-bottom:2px;display:block}
+.co-ask{background:#FDF7EC;border-color:#F0DFC0;color:#7A5B16}
+.co-ask .ct{color:#9A6B12}
+.co-rec{background:#EEF1FC;border-color:#CDD6F2;color:#2B3F8F}
+.co-rec .ct{color:#3454D1}
+.co-info{background:#F4FBF8;border-color:#CBE8DB;color:#155E43}
+.co-info .ct{color:#1F9D5B}
+.co-warn{background:#FDF0F0;border-color:#F0C9C9;color:#8E2F2F}
+.co-warn .ct{color:#D64545}
+/* 页脚 */
+.doc-footer{max-width:1080px;margin:0 auto;padding:6px 16px 40px;font-size:12.5px;color:var(--ink3)}
+/* 回到顶部 */
+#toTop{position:fixed;right:16px;bottom:20px;z-index:50;width:42px;height:42px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:16px;cursor:pointer;box-shadow:0 4px 12px rgba(52,84,209,.35);display:none;align-items:center;justify-content:center}
+#toTop.show{display:flex}
+/* ============ 桌面端 ============ */
+@media (min-width:768px){
+  .grid2{grid-template-columns:repeat(2,1fr)}
+  .grid3{grid-template-columns:repeat(3,1fr)}
+  .quad{grid-template-columns:repeat(2,1fr)}
+}
+@media (min-width:1024px){
+  .doc-header{padding:46px 24px 40px}
+  .doc-title{font-size:32px}
+  .layout{display:grid;grid-template-columns:232px 1fr;gap:22px;padding:26px 20px 60px}
+  .toc-toggle{display:none}
+  .toc-mobile{display:none !important}
+  aside.toc{display:block;position:sticky;top:22px;align-self:start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 6px;max-height:calc(100vh - 44px);overflow-y:auto}
+  aside.toc h6{font-size:12px;letter-spacing:.14em;color:var(--ink3);padding:2px 12px 8px;font-weight:700}
+  aside.toc a{display:block;padding:7px 12px;font-size:13.5px;color:var(--ink2);border-left:2px solid transparent;line-height:1.4}
+  aside.toc a:hover{color:var(--primary);background:var(--primary-soft);border-left-color:var(--primary);text-decoration:none}
+  .doc-main{padding:26px 0 10px}
+  .sec{padding:34px 34px 38px;margin:22px 0}
+}
+/* ============ 打印 ============ */
+@media print{
+  body{background:#fff;font-size:12px}
+  .doc-header{background:#fff !important;color:#1C2B3A !important;border-bottom:2px solid var(--primary);-webkit-print-color-adjust:exact}
+  .doc-header .doc-kicker,.doc-header .doc-sub{color:#45566B}
+  .meta-chip{background:#EEF1FC;border-color:#CDD6F2;color:#253B8F}
+  .layout{display:block;padding:0}
+  .toc-toggle,aside.toc,#toTop{display:none !important}
+  .sec{break-inside:avoid-page;border:1px solid #D3DCE8;margin:14px 0;padding:20px}
+  .fig{break-inside:avoid-page}
+  .tl-item{break-inside:avoid-page}
+  table.spec th,table.spec td{background:#fff !important}
+}
+</style>
+</head>
+<body>
+
+<header class="doc-header">
+  <div class="hd-inner">
+    <div class="doc-kicker">产品设计方案 · PRD · v1.0（评审稿）</div>
+    <h1 class="doc-title">初级管理者工作台 · 产品设计方案</h1>
+    <p class="doc-sub">面向组织的线上任务发放、项目管理、待办管理与日历调度一体化工作台。一期聚焦「初级管理者」角色：向下可管、向内可管、向上可接。本方案按<b>独立 Web 应用</b>技术路线编写。</p>
+    <div class="meta-row">
+      <span class="meta-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>2026-10-30</span>
+      <span class="meta-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>状态：草稿待评审</span>
+      <span class="meta-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>一期范围：初级管理者版</span>
+      <span class="meta-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h20M12 2v20"/></svg>技术路线：独立 Web 应用</span>
+    </div>
+  </div>
+</header>
+
+<button class="toc-toggle" id="tocBtn" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>文档目录</button>
+<nav class="toc-mobile" id="tocMobile" aria-label="文档目录"></nav>
+
+<div class="layout">
+  <aside class="toc" id="tocSide" aria-label="文档目录">
+    <h6>目 录</h6>
+    <a href="#s1">1 产品概述</a>
+    <a href="#s2">2 用户角色与核心场景</a>
+    <a href="#s3">3 功能架构总览</a>
+    <a href="#s4">4 信息架构与页面结构</a>
+    <a href="#s5">5 数据模型设计</a>
+    <a href="#s6">6 业务规则设计</a>
+    <a href="#s7">7 核心流程设计</a>
+    <a href="#s8">8 技术选型建议</a>
+    <a href="#s9">9 分期路线与里程碑</a>
+    <a href="#s10">10 决策记录与遗留问题</a>
+  </aside>
+
+  <main class="doc-main">
+
+    <!-- ===== 正文：各章节以占位注释为锚点，分批填充 ===== -->
+
+    <!-- SEC1 -->
+    <section class="sec" id="s1">
+      <div class="sec-head"><div class="sec-num">1</div><div>
+        <div class="sec-title">产品概述</div>
+        <div class="sec-sub">背景 · 定位 · 目标 · 设计原则</div>
+      </div></div>
+
+      <h3 class="sub">1.1 背景与问题</h3>
+      <p>公司业务规模扩大后，任务分发长期依赖口头、IM 群聊与个人备忘录，缺乏统一的线上载体，带来四类典型问题：</p>
+      <div class="grid2">
+        <div class="card"><h5>任务下发无标准</h5><p>起止时间、达成标准凭口头约定，事后无据可查，责任边界模糊。</p></div>
+        <div class="card"><h5>进度不透明</h5><p>管理者无法实时掌握下属任务的推进状态与常规工作的完成情况，只能逐人追问。</p></div>
+        <div class="card"><h5>常规工作靠记忆</h5><p>每月 / 每周 / 每日固定节点的事项（例会、报表、巡检）极易遗漏，且无人提醒。</p></div>
+        <div class="card"><h5>承接链路断裂</h5><p>上级下派的任务到管理者手中后，缺少「接收 → 规划 → 拆分 → 转入执行」的规范通道。</p></div>
+      </div>
+
+      <h3 class="sub">1.2 产品定位</h3>
+      <p class="lead">面向组织的<b>任务协作工作台</b>：线上任务发放、项目管理、待办管理、日历调度的一体化平台。一期面向<b>初级管理者</b>，其角色同时具备三重能力：</p>
+      <div class="grid3">
+        <div class="card"><h5>向下可管</h5><p class="tagline">对下属</p><p>制定项目任务、划分阶段、设定达成标准，下发并跟踪进展；只读查看下属常规工作推进情况。</p></div>
+        <div class="card"><h5>向内可管</h5><p class="tagline">对自己</p><p>自建月 / 周 / 日常规工作；自建专项工作并拆分阶段计划；随手创建临时任务。</p></div>
+        <div class="card"><h5>向上可接</h5><p class="tagline">对上级</p><p>接收上级下派任务，规划拆分后移入专项或临时任务执行，进度回传上级。</p></div>
+      </div>
+
+      <h3 class="sub">1.3 建设目标</h3>
+      <div class="grid3">
+        <div class="card"><h5>便捷</h5><p>录入成本极低：常规工作自动实例化、临时任务 10 秒创建、任务拖拽改期。</p></div>
+        <div class="card"><h5>高效</h5><p>日历成为统一调度入口，四类任务自动汇入，自动识别工作日并避开法定节假日。</p></div>
+        <div class="card"><h5>可管理</h5><p>状态全程可查、闭环可追溯、下属进展一览；为后续员工版、中高层版复用底座。</p></div>
+      </div>
+
+      <h3 class="sub">1.4 设计原则</h3>
+      <ul>
+        <li><strong>任务单一实体、四类型统一建模：</strong>任务制定 / 常规 / 专项 / 临时共用一套任务模型与状态机，避免四套系统并行，为多角色版本复用预留基础。</li>
+        <li><strong>日历即调度入口：</strong>一切任务自动汇入日历与今日待办，任务与日历<b>双向即时同步</b>（同一实体、无副本），改任一侧全局生效。</li>
+        <li><strong>状态机统一、可扩展：</strong>以「待开展 / 进行中 / 已完成 / 暂缓」四状态为基座，逾期、待验收等以派生标签实现，不破坏主状态。</li>
+        <li><strong>先管理闭环、后报表分析：</strong>一期聚焦「发 → 接 → 做 → 报 → 查」全链路，统计报表与组织级看板留给中高层版。</li>
+        <li><strong>数据可迁移、权限可扩展：</strong>独立部署，组织架构可导入；RBAC 预留 admin / manager / employee 三级角色位。</li>
+      </ul>
+
+      <h3 class="sub">1.5 一期范围与边界（2026-10-30 评审确认）</h3>
+      <p>本节逐条锁定一期的「做 / 不做」，评审与验收以本节为准，防止范围漂移。未列入的动作一律视为不做。</p>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:16%"><col style="width:46%"><col style="width:38%"></colgroup>
+        <tr><th>范围项</th><th>一期做法</th><th>不做 / 后续</th></tr>
+        <tr><td><b>登录注册</b></td><td>工号 + 姓名，<b>免密码</b>，与后台花名册（工号唯一、姓名一致）匹配即通过。</td><td>不做密码、不做短信验证码、不做 SSO；二期视推广范围接企微扫码或 OA 单点。</td></tr>
+        <tr><td><b>通知与提醒</b></td><td><b>仅站内</b>：「打开即见」——首屏今日待办、导航徽标、临期 / 逾期标记。</td><td>不做邮件、不做企业微信、不做 App 推送；二期首项接企微工作通知。</td></tr>
+        <tr><td><b>汇报关系</b></td><td>用户自选，一个直属上级，<b>即选即生效</b>，可在设置里随时自查与修改。</td><td>不做审核、不做管理员纠偏、不做虚线上级、不做跨级下发。</td></tr>
+        <tr><td><b>任务验收</b></td><td>四状态（待开展 / 进行中 / 已完成 / 暂缓），执行人标记完成即完成。</td><td>不做「待验收 / 退回重做」，<b>不作为绩效考核依据</b>。</td></tr>
+        <tr><td><b>组织架构</b></td><td>管理员导入 Excel 花名册 + 用户自选上级，两者拼接成组织树。</td><td>不接 HR 主数据、不接企微通讯录、不做自动同步。</td></tr>
+        <tr><td><b>移动端</b></td><td>不单独适配；手机浏览器可打开查看。</td><td>不做移动端专属交互（日历拖拽在手机不可用）、不做小程序 / App。</td></tr>
+        <tr><td><b>报表与导出</b></td><td>仅页面内的完成率、阶段进度等即时统计。</td><td>不做组织级看板、不做 Excel / PDF 导出、不做数据接口。</td></tr>
+      </table></div>
+
+      <div class="callout co-warn"><span class="ct">免密登录可以被接受的前提</span>
+        免密意味着「知道同事工号与姓名就能登入」，所以它成立有三个硬条件，缺一条就要改方案：<br/>
+        <b>① 本期不含高敏数据</b>——只有任务、日程、常规节点，<b>没有薪资、身份证、合同</b>。这是能免密的最主要原因。<br/>
+        <b>② 有访问日志</b>——每次登录记录工号 / 时间 / IP / 设备，出现冒用可追溯、可一键停用。<br/>
+        <b>③ 试点人群可控</b>——一期只开通试点部门，不做全员开放；正式全员推广前必须补 SSO 或企微扫码。
+      </div>
+      <div class="callout co-ask"><span class="ct">没有推送，靠什么让人打开</span>
+        这是本产品最大的落地风险：待办类工具一旦没人主动打开，两周就死。一期的三条对策——<br/>
+        <b>① 首屏零点击</b>：登录后第一屏就是今日待办，手机上也是第一屏，不需要找入口；<br/>
+        <b>② 管理者驱动</b>：周会过进度就用这张表，下属为了不被问住会自己进来看，靠管理动作带使用；<br/>
+        <b>③ 视觉不靠推送</b>：待接收任务在导航上挂红点计数，逾期在列表与日历上标红，打开一眼能看到该干什么。<br/>
+        这三条能撑住试点，但<b>撑不住全员推广</b>——二期必须接企微推送。
+      </div>
+    </section>
+    <!-- SEC2 -->
+    <section class="sec" id="s2">
+      <div class="sec-head"><div class="sec-num">2</div><div>
+        <div class="sec-title">用户角色与核心场景</div>
+        <div class="sec-sub">一期角色边界 · 核心场景与功能映射</div>
+      </div></div>
+
+      <h3 class="sub">2.1 角色定义（一期）</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:20%"><col style="width:46%"><col style="width:34%"></colgroup>
+        <tr><th>角色</th><th>职责边界</th><th>权限要点</th></tr>
+        <tr><td><b>初级管理者</b>（本方案主角色）</td><td>双身份：对下属是<b>任务下发者 + 监督者</b>；对自己是<b>任务执行者</b>（承接上级任务 + 自身专项 + 常规工作）。</td><td>管理本人全部数据（增删改查）；只读查看<b>直接下属</b>的下发任务进展与常规工作推进情况；承接上级下派任务。</td></tr>
+        <tr><td><b>组员（普通员工）</b></td><td>一期以最小集存在：接收任务、更新进度、自建自身常规工作、创建临时任务。完整员工版在二期深化。</td><td>仅见本人任务与本人常规工作；对管理者下发任务可上报进度。</td></tr>
+        <tr><td><b>上级（中 / 高级管理者）</b></td><td>一期以「下派任务」的发起方存在：向初级管理者下派任务，查看其承接进度。</td><td>下派任务；查看被下派任务的执行状态（完整中高层版在二期深化）。</td></tr>
+      </table></div>
+
+      <h3 class="sub">2.2 核心场景与功能映射</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:34%"><col style="width:38%"><col style="width:28%"></colgroup>
+        <tr><th>核心场景</th><th>用户诉求</th><th>对应功能</th></tr>
+        <tr><td>月初制定项目任务，划分阶段，设定起止时间与达成标准，下发给组员</td><td>一次把任务说清楚、留痕可追踪</td><td><span class="chip chip-design">任务制定与管理</span></td></tr>
+        <tr><td>每月 5 号例会、每周一报表、每天 9:00 巡检等固定节点事项不遗漏</td><td>固定事项自动出现、自动避开节假日</td><td><span class="chip chip-regular">常规工作管理</span></td></tr>
+        <tr><td>上级下派一个大任务，需要自己拆解规划再执行</td><td>承接 → 规划 → 拆分 → 移入专项 / 临时</td><td><span class="chip chip-design">任务承接台</span></td></tr>
+        <tr><td>临时被安排一件事，先记下来别忘</td><td>10 秒内创建，默认出现在今日待办</td><td><span class="chip chip-temp">临时任务</span></td></tr>
+        <tr><td>在日历上看本周安排，把冲突的任务拖到别的日期</td><td>日历驱动、拖拽改期、双向同步</td><td><span class="chip chip-regular">日历待办</span></td></tr>
+        <tr><td>看看组员的任务做到哪一步了</td><td>一览直接下属的任务与常规进展</td><td><span class="chip chip-design">任务制定-跟踪</span></td></tr>
+      </table></div>
+
+      <div class="callout co-rec"><span class="ct">设计口径</span>一期角色互动的核心是「初级管理者」这一个角色位，但数据模型与权限骨架按三角色设计，确保二期「普通员工版」、三期「中高层版」可以直接在底座上扩展，不做推倒重来。</div>
+    </section>
+    <!-- SEC3 -->
+    <section class="sec" id="s3">
+      <div class="sec-head"><div class="sec-num">3</div><div>
+        <div class="sec-title">功能架构总览</div>
+        <div class="sec-sub">六大功能域 + 设置支撑域 · 功能架构图 · 模块 6 命名建议</div>
+      </div></div>
+
+      <h3 class="sub">3.1 模块 6 命名建议</h3>
+      <p>模块 6 负责「接收上级下派任务 → 规划 → 拆分 → 移入专项 / 临时任务执行」，是组织任务链路上行的关键一环。命名建议：</p>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:22%"><col style="width:52%"><col style="width:26%"></colgroup>
+        <tr><th>候选名</th><th>理由</th><th>评价</th></tr>
+        <tr><td><b>任务承接台</b></td><td>「承接」同时覆盖<b>接收</b>与<b>承担</b>两层含义，与「任务制定（下发）」构成下发 / 承接的对称关系，语义完整、职场通用。</td><td><span class="chip chip-done">推荐</span></td></tr>
+        <tr><td>任务受理台</td><td>偏「受理」语义，更接近客服工单语境，弱化了「自己还要承担执行」的意味。</td><td>备选</td></tr>
+        <tr><td>上派任务</td><td>直白但只描述了来源，未体现「规划拆分与转入执行」的动作。</td><td>备选</td></tr>
+        <tr><td>承接中心</td><td>同上，与「专项 / 常规」命名体系略不一致。</td><td>备选</td></tr>
+      </table></div>
+      <div class="callout co-ask"><span class="ct">待拍板</span>产品正式名称与模块 6 名称将在评审会确认，本方案统一暂用<b>「任务承接台」</b>。</div>
+
+      <h3 class="sub">3.2 功能架构图</h3>
+      <div class="fig"><div class="inner">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="text-align:center;background:#172554;color:#fff;border-radius:10px;padding:10px 12px;font-weight:800;font-size:15px;">初级管理者工作台（一级入口 × 7）</div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+            <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#253B8F;font-size:13.5px;margin-bottom:4px;">1 工作台首页</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">今日待办（四类任务汇入）· 新建临时任务入口 · 我的任务概览 · 待接收上派任务 · 即将到期提醒</div>
+            </div>
+            <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#253B8F;font-size:13.5px;margin-bottom:4px;">2 任务制定与管理</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">制定项目任务 · 阶段目标划分 · 任务下发 · 进度跟踪（列表 / 看板）· 下属常规工作查看</div>
+            </div>
+            <div style="background:rgba(14,138,125,.08);border:1px solid #BFE4DE;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#0E8A7D;font-size:13.5px;margin-bottom:4px;">3 常规工作管理</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">日 / 周 / 月常规规则 · 自动实例化 · 节假日自动向前排 · 完成打卡</div>
+            </div>
+            <div style="background:rgba(194,112,10,.08);border:1px solid #F0DCBF;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#C2700A;font-size:13.5px;margin-bottom:4px;">4 专项工作管理</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">自建专项 · 阶段 / 子任务拆分 · 阶段计划视图 · 起止时间管理</div>
+            </div>
+            <div style="background:rgba(106,90,224,.08);border:1px solid #D5D0F4;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#6A5AE0;font-size:13.5px;margin-bottom:4px;">5 任务承接台</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">上级下派任务接收 · 规划拆分 · 移入专项 / 临时 · 进度回传上级</div>
+            </div>
+            <div style="background:#F1F5F9;border:1px solid #D3DCE8;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#5C7083;font-size:13.5px;margin-bottom:4px;">6 日历待办</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">月 / 周 / 日视图 · 四类任务自动展示 · 拖拽改期 · 工作日识别与节假日标注</div>
+            </div>
+            <div style="background:#F1F5F9;border:1px solid #D3DCE8;border-radius:10px;padding:9px 11px;">
+              <div style="font-weight:700;color:#5C7083;font-size:13.5px;margin-bottom:4px;">7 设置（支撑域）</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">两级任务分类管理 · 优先级配置 · 组织与成员 · 提醒偏好</div>
+            </div>
+            <div style="background:#FDF7EC;border:1px dashed #F0DFC0;border-radius:10px;padding:9px 11px;display:flex;align-items:center;justify-content:center;font-size:12.5px;color:#7A5B16;">
+              注 六模块 + 设置域，均为独立一级入口，不嵌套
+            </div>
+          </div>
+        </div>
+        <div class="fig-cap">图 3-1 初级管理者工作台功能架构（一级入口与核心子功能）</div>
+      </div></div>
+
+      <h3 class="sub">3.3 功能域与需求映射表</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:16%"><col style="width:38%"><col style="width:46%"></colgroup>
+        <tr><th>功能域</th><th>需求要点（原文）</th><th>设计方案要点</th></tr>
+        <tr><td><b>1 任务制定与管理</b></td><td>制定项目任务、划定起止与达成标准、下发组员；可选阶段性目标；查看下发任务进展与下属常规工作推进情况。</td><td>任务 = 基本信息 + 达成标准 + 阶段列表；<b>阶段为可选</b>（阶段名 / 起止 / 达成标准 / 状态）；下发后进入组员待办；跟踪页提供列表 / 看板双视图；下属常规工作以只读汇总卡呈现。</td></tr>
+        <tr><td><b>2 常规工作管理</b></td><td>自定月常规、周常规、日常规；即固定时间 / 固定节点要做的事。</td><td>规则化建模（frequency + 节点 + 提醒时间），系统按周期<b>自动实例化</b>为待办任务；遇法定节假日<b>自动向前排</b>。</td></tr>
+        <tr><td><b>3 专项工作管理</b></td><td>管理者定义自身非常规工作规划，可自行拆分、做阶段计划、设起止时间。</td><td>专项 = 管理者自己的「迷你项目」：可拆<b>阶段 / 子任务</b>，每项独立起止与状态；阶段计划视图呈现推进。</td></tr>
+        <tr><td><b>4 临时任务</b></td><td>新建临时任务，可设起止时间；建议放在今日待办。</td><td>入口置于<b>今日待办</b>顶部「+ 新建」；默认当天起止、默认分类<b>「其他」</b>；创建即进日历。</td></tr>
+        <tr><td><b>5 日历待办</b></td><td>日历形式，支持任务待办管理、安排；常规 / 专项 / 临时任务自动出现，双方即时更新。</td><td>月视图为主（周 / 日可切）；四类任务按<b>类型着色</b>自动展示；任务与日历<b>同实体双向同步</b>；支持跨日拖拽改期；工作日 / 节假日标注。</td></tr>
+        <tr><td><b>6 任务承接台</b></td><td>接收上级下派任务并拆分规划；可移入专项 / 临时任务中工作。</td><td>待接收 / 已接收 / 已拆分三区；接收后可<b>规划拆分</b>成子任务；一键<b>移入专项</b>（复杂项目）或<b>转为临时任务</b>（单点事项）；执行状态回传上级。</td></tr>
+        <tr><td><b>7 设置（支撑）</b></td><td>任务分类两级、由管理者自行设置；优先级 / 重要度 / 紧急度可选填。</td><td>两级分类树管理；优先级 = 重要度 × 紧急度（1–3 级，可选，默认中 / 中）。</td></tr>
+      </table></div>
+    </section>
+    <!-- SEC4 -->
+    <section class="sec" id="s4">
+      <div class="sec-head"><div class="sec-num">4</div><div>
+        <div class="sec-title">信息架构与页面结构</div>
+        <div class="sec-sub">一级导航 · 页面结构要点 · 关键页面线框</div>
+      </div></div>
+
+      <h3 class="sub">4.1 一级导航结构</h3>
+      <div class="fig"><div class="inner">
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:13.5px;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="font-weight:800;color:#1C2B3A;">工作台</span>
+            <span style="color:#7B8A9D;font-size:12px;">7 个一级入口（左导航固定）</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <span class="chip chip-design">1 首页·今日待办</span><span class="chip chip-design">2 任务制定</span><span class="chip chip-regular">3 常规工作</span><span class="chip chip-special">4 专项工作</span><span class="chip chip-temp">5 任务承接台</span><span class="chip chip-pending">6 日历待办</span><span class="chip chip-pending">7 设置</span>
+          </div>
+        </div>
+        <div class="fig-cap">图 4-1 一级导航（移动端收敛为底部 Tab 或汉堡菜单，桌面端左侧固定）</div>
+      </div></div>
+
+      <h3 class="sub">4.2 关键页面线框</h3>
+      <p>以下为两个核心页面的信息结构线框（示意，非最终视觉稿）。</p>
+
+      <h4 class="sub2">4.2.1 首页 · 今日待办</h4>
+      <div class="fig"><div class="inner">
+        <div class="wire">
+          <div class="w-top"><span class="dot" style="background:#E25C5C"></span><span class="dot" style="background:#F2B64D"></span><span class="dot" style="background:#53B877"></span><span style="margin-left:6px">首页 · 今日待办</span></div>
+          <div class="w-body">
+            <div class="w-panel" style="flex:1.6">
+              <h6>今日待办（四类任务按优先级 / 时间排序）</h6>
+              <div class="w-item"><span class="bar" style="background:#3454D1"></span>9:00 · 常规 · 部门晨会组织（已完成）</div>
+              <div class="w-item"><span class="bar" style="background:#C2700A"></span>10:30 · 专项 · 季度数据看板-阶段一开发</div>
+              <div class="w-item"><span class="bar" style="background:#3454D1"></span>14:00 · 制定 · 需求评审会（组员汇报）</div>
+              <div class="w-item"><span class="bar" style="background:#6A5AE0"></span>16:00 · 临时 · 回复客户邮件（今天创建）</div>
+              <div style="margin-top:8px;border-top:1px dashed #B9C5D8;padding-top:6px;font-size:11.5px;color:#7B8A9D;">[ + 新建临时任务 ]　[ 完成率 1/4 ]</div>
+            </div>
+            <div class="w-panel" style="flex:1">
+              <h6>概览与提醒</h6>
+              <div class="w-item">待开展 3 · 进行中 5 · 已完成 12 · 暂缓 1</div>
+              <div class="w-item">待接收上派任务 2</div>
+              <div class="w-item">3 天内到期 4 项</div>
+              <div class="w-item">下属常规工作：5 人今日完成 3/5</div>
+              <div class="w-item" style="border-style:dashed">快捷入口：新建专项 / 常规 / 承接台</div>
+            </div>
+          </div>
+          <div class="w-legend"><span><i style="background:#3454D1"></i>任务制定</span><span><i style="background:#0E8A7D"></i>常规</span><span><i style="background:#C2700A"></i>专项</span><span><i style="background:#6A5AE0"></i>临时</span><span>← 类型色条全局统一</span></div>
+        </div>
+        <div class="fig-cap">图 4-2 首页今日待办线框（示意）——新建临时任务入口固定在待办列表顶部</div>
+      </div></div>
+
+      <h4 class="sub2">4.2.2 日历 · 月视图</h4>
+      <div class="fig"><div class="inner">
+        <div class="wire">
+          <div class="w-top"><span class="dot" style="background:#E25C5C"></span><span class="dot" style="background:#F2B64D"></span><span class="dot" style="background:#53B877"></span><span style="margin-left:6px">日历待办 · 月视图（可切周 / 日）</span></div>
+          <div class="w-body">
+            <div class="w-panel" style="flex:1.4">
+              <h6>2026-11 月视图</h6>
+              <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:10.5px;">
+                <div style="text-align:center;color:#7B8A9D;font-weight:600">一</div><div style="text-align:center;color:#7B8A9D;font-weight:600">二</div><div style="text-align:center;color:#7B8A9D;font-weight:600">三</div><div style="text-align:center;color:#7B8A9D;font-weight:600">四</div><div style="text-align:center;color:#7B8A9D;font-weight:600">五</div><div style="text-align:center;color:#D64545;font-weight:600">六</div><div style="text-align:center;color:#D64545;font-weight:600">日</div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px;color:#7B8A9D">…</div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">1</div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">2<span style="display:block;margin-top:2px;border-left:3px solid #3454D1;background:#EEF1FC;font-size:9.5px;padding:0 3px;border-radius:2px">需求评审</span></div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">3<span style="display:block;margin-top:2px;border-left:3px solid #0E8A7D;background:rgba(14,138,125,.08);font-size:9.5px;padding:0 3px;border-radius:2px">月度例会</span></div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">4</div>
+                <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:4px;padding:2px;min-height:46px;color:#C2700A">5 休<span style="display:block;margin-top:2px;color:#7A5B16;font-size:9.5px">法定假日</span></div>
+                <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:4px;padding:2px;min-height:46px;color:#C2700A">6 休</div>
+                <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:4px;padding:2px;min-height:46px;color:#3454D1">7 补班</div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">8<span style="display:block;margin-top:2px;border-left:3px solid #6A5AE0;background:rgba(106,90,224,.08);font-size:9.5px;padding:0 3px;border-radius:2px">临时：报价</span></div>
+                <div style="border:1px solid #EDF0F5;border-radius:4px;padding:2px;min-height:46px">9<span style="display:block;margin-top:2px;border-left:3px solid #C2700A;background:rgba(194,112,10,.08);font-size:9.5px;padding:0 3px;border-radius:2px">专项·阶段二</span></div>
+              </div>
+              <div style="font-size:10.5px;color:#7B8A9D;margin-top:4px">拖拽任务卡片至其他日期 → 自动更新任务起止；常规实例不可拖（由规则控制）</div>
+            </div>
+            <div class="w-panel" style="flex:0.9">
+              <h6>今日待办栏（拖拽源 / 快捷新建）</h6>
+              <div class="w-item"><span class="bar" style="background:#3454D1"></span>需求评审（制定）</div>
+              <div class="w-item"><span class="bar" style="background:#0E8A7D"></span>月度例会（常规）</div>
+              <div class="w-item" style="border-style:dashed">+ 新建临时任务</div>
+              <div style="margin-top:6px;font-size:11px;color:#7B8A9D">节假日规则：法定假日灰化 + 「休」标签；调休补班日正常显示 + 「补班」标签</div>
+            </div>
+          </div>
+          <div class="w-legend"><span><i style="background:#E8D9BE"></i>法定节假日</span><span><i style="background:#CDD6F2"></i>调休补班日</span><span>← 工作日自动识别</span></div>
+        </div>
+        <div class="fig-cap">图 4-3 日历月视图线框（示意）——四类任务着色展示、节假日 / 补班标注、待办栏联动</div>
+      </div></div>
+
+      <h3 class="sub">4.3 其余页面结构要点</h3>
+      <div class="grid2">
+        <div class="card"><h5>任务制定页</h5><p class="tagline">列表 / 看板双视图</p><p>列表：按分类 / 状态 / 负责人筛选；看板：按「待开展 / 进行中 / 已完成 / 暂缓」四列分列。任务详情抽屉：基本信息、阶段列表（可编辑）、达成标准、负责人、进展日志。</p></div>
+        <div class="card"><h5>常规工作页</h5><p class="tagline">日 / 周 / 月三 Tab</p><p>每条常规显示规则（频率 / 节点 / 提醒时间 / 节假日策略）与近 N 次实例完成情况；新建规则向导：选频率 → 定节点 → 定提醒 → 选节假日策略。</p></div>
+        <div class="card"><h5>专项工作页</h5><p class="tagline">卡片墙 + 阶段计划</p><p>专项卡片含进度条与起止；详情页纵向阶段计划（阶段名 / 起止 / 状态 / 达成标准），每阶段下挂子任务清单。</p></div>
+        <div class="card"><h5>任务承接台</h5><p class="tagline">三区布局</p><p>1 待接收：上级下派任务列表（可拒收并回理由）；2 已接收：规划拆分画布（拆出子任务、设阶段与起止）；3 已拆分：子任务去向（移入专项 / 转为临时），并同步回传上级。</p></div>
+        <div class="card"><h5>设置页</h5><p class="tagline">分类树 + 偏好</p><p>两级分类树管理（增删改、排序）；优先级说明；成员与组织（一期导入）；提醒偏好（提醒时间、通道开关）。</p></div>
+      </div>
+    </section>
+    <!-- SEC5 -->
+    <section class="sec" id="s5">
+      <div class="sec-head"><div class="sec-num">5</div><div>
+        <div class="sec-title">数据模型设计</div>
+        <div class="sec-sub">实体关系图 · 核心字段 · 常规工作建模 · 优先级 · 账号与汇报关系</div>
+      </div></div>
+
+      <h3 class="sub">5.1 实体关系图（ER）</h3>
+      <div class="fig"><div class="inner">
+        <svg viewBox="0 0 960 545" role="img" aria-label="任务工作台核心数据模型实体关系图" style="width:100%;height:auto;font-family:inherit;">
+          <defs>
+            <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#5C7083"/></marker>
+            <marker id="arwP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#3454D1"/></marker>
+          </defs>
+          <!-- 关系线 -->
+          <line x1="125" y1="88" x2="140" y2="160" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="52" y="126" font-size="11.5" fill="#45566B">1:N 所属部门</text>
+          <line x1="230" y1="205" x2="360" y2="218" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="252" y="196" font-size="11.5" fill="#45566B">1:N 负责人</text>
+          <line x1="230" y1="238" x2="360" y2="272" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="252" y="262" font-size="11.5" fill="#45566B">1:N 下发人</text>
+          <line x1="738" y1="124" x2="592" y2="252" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="618" y="176" font-size="11.5" fill="#45566B">N:1 分类（一 / 二级）</text>
+          <line x1="590" y1="272" x2="650" y2="220" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="596" y="252" font-size="11.5" fill="#45566B">1:N 阶段</text>
+          <line x1="475" y1="380" x2="475" y2="440" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="486" y="414" font-size="11.5" fill="#45566B">1:N 日志</text>
+          <line x1="750" y1="434" x2="750" y2="460" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="758" y="449" font-size="11.5" fill="#45566B">1:N 生成</text>
+          <line x1="640" y1="490" x2="585" y2="382" stroke="#5C7083" stroke-width="1.4" marker-end="url(#arw)"/>
+          <text x="598" y="452" font-size="11.5" fill="#45566B">1:1 对应任务</text>
+          <line x1="250" y1="420" x2="640" y2="420" stroke="#8FA1B3" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#arw)"/>
+          <text x="322" y="411" font-size="11.5" fill="#7B8A9D">节假日判断（字典引用）</text>
+          <!-- 承接自环虚线 -->
+          <path d="M475,150 C475,112 400,112 400,150" fill="none" stroke="#8FA1B3" stroke-width="1.3" stroke-dasharray="5,4"/>
+          <text x="437" y="104" font-size="11.5" fill="#7B8A9D" text-anchor="middle">parent_task_id 承接 / 父子自环</text>
+          <!-- department -->
+          <g><rect x="40" y="24" width="170" height="64" rx="8" fill="#FFFFFF" stroke="#B9C5D8" stroke-width="1.2"/>
+            <text x="56" y="44" font-size="13" font-weight="700" fill="#253B8F">department 部门</text>
+            <text x="56" y="62" font-size="11" fill="#45566B">id · name · parent_id</text>
+            <text x="56" y="77" font-size="11" fill="#45566B">（组织架构可导入）</text></g>
+          <!-- user -->
+          <g><rect x="50" y="160" width="180" height="116" rx="8" fill="#FFFFFF" stroke="#B9C5D8" stroke-width="1.2"/>
+            <text x="66" y="180" font-size="13" font-weight="700" fill="#253B8F">user 用户</text>
+            <text x="66" y="198" font-size="11" fill="#45566B">id · name · dept_id</text>
+            <text x="66" y="214" font-size="11" fill="#45566B">role（admin/manager/</text>
+            <text x="66" y="228" font-size="11" fill="#45566B">employee）· manager_id</text>
+            <text x="66" y="244" font-size="11" fill="#45566B">manager_id 直属上级自环</text>
+            <text x="66" y="266" font-size="11" fill="#7B8A9D">→ 支撑「下属可见性」</text></g>
+          <!-- holiday_calendar -->
+          <g><rect x="60" y="370" width="190" height="100" rx="8" fill="#FDF9EF" stroke="#E8D9BE" stroke-width="1.2"/>
+            <text x="76" y="390" font-size="13" font-weight="700" fill="#9A6B12">holiday_calendar</text>
+            <text x="76" y="408" font-size="11" fill="#45566B">date（主键）· is_holiday</text>
+            <text x="76" y="423" font-size="11" fill="#45566B">is_workday（补班）· name</text>
+            <text x="76" y="440" font-size="11" fill="#7B8A9D">来源：国务院放假安排</text>
+            <text x="76" y="455" font-size="11" fill="#7B8A9D">年度导入 + 管理维护</text></g>
+          <!-- task -->
+          <g><rect x="360" y="150" width="230" height="230" rx="10" fill="#EEF1FC" stroke="#3454D1" stroke-width="1.8"/>
+            <text x="378" y="172" font-size="14" font-weight="800" fill="#253B8F">task 任务（统一实体）</text>
+            <text x="378" y="191" font-size="11" fill="#45566B">id · title · description</text>
+            <text x="378" y="207" font-size="11" fill="#45566B">type：designated / regular /</text>
+            <text x="378" y="221" font-size="11" fill="#45566B">special / temp</text>
+            <text x="378" y="237" font-size="11" fill="#45566B">status：pending / in_progress /</text>
+            <text x="378" y="251" font-size="11" fill="#45566B">done / paused</text>
+            <text x="378" y="267" font-size="11" fill="#45566B">importance · urgency（1–3，可选）</text>
+            <text x="378" y="283" font-size="11" fill="#45566B">start_date · end_date · standard</text>
+            <text x="378" y="299" font-size="11" fill="#45566B">assignee_id · assigner_id</text>
+            <text x="378" y="315" font-size="11" fill="#45566B">parent_task_id（承接来源）</text>
+            <text x="378" y="331" font-size="11" fill="#45566B">category_id · category_sub_id</text>
+            <text x="378" y="347" font-size="11" fill="#45566B">progress（0–100，可选）· version</text>
+            <text x="378" y="366" font-size="11" fill="#7B8A9D">四类型共用，状态机统一</text></g>
+          <!-- category -->
+          <g><rect x="660" y="24" width="170" height="100" rx="8" fill="#FFFFFF" stroke="#B9C5D8" stroke-width="1.2"/>
+            <text x="676" y="44" font-size="13" font-weight="700" fill="#253B8F">category 任务分类</text>
+            <text x="676" y="62" font-size="11" fill="#45566B">id · parent_id（两级树）</text>
+            <text x="676" y="77" font-size="11" fill="#45566B">name · level（1 / 2）</text>
+            <text x="676" y="92" font-size="11" fill="#45566B">creator_id（管理者定义）</text>
+            <text x="676" y="109" font-size="11" fill="#7B8A9D">临时任务默认 →「其他」</text></g>
+          <!-- task_stage -->
+          <g><rect x="650" y="170" width="200" height="92" rx="8" fill="#FFFFFF" stroke="#B9C5D8" stroke-width="1.2"/>
+            <text x="666" y="190" font-size="13" font-weight="700" fill="#253B8F">task_stage 阶段 / 子任务</text>
+            <text x="666" y="208" font-size="11" fill="#45566B">id · task_id · name</text>
+            <text x="666" y="223" font-size="11" fill="#45566B">start_date · end_date</text>
+            <text x="666" y="238" font-size="11" fill="#45566B">status · standard · sort</text>
+            <text x="666" y="253" font-size="11" fill="#7B8A9D">任务制定阶段 + 专项拆分共用</text></g>
+          <!-- regular_rule -->
+          <g><rect x="640" y="330" width="220" height="104" rx="8" fill="#F4FBF8" stroke="#BFE4DE" stroke-width="1.2"/>
+            <text x="656" y="350" font-size="13" font-weight="700" fill="#0E8A7D">regular_rule 常规规则</text>
+            <text x="656" y="368" font-size="11" fill="#45566B">id · user_id · frequency</text>
+            <text x="656" y="383" font-size="11" fill="#45566B">（day / week / month）</text>
+            <text x="656" y="398" font-size="11" fill="#45566B">weekday · day_of_month</text>
+            <text x="656" y="413" font-size="11" fill="#45566B">notify_time · holiday_policy</text>
+            <text x="656" y="428" font-size="11" fill="#7B8A9D">holiday_policy 默认 forward（前移）</text></g>
+          <!-- regular_instance -->
+          <g><rect x="640" y="460" width="220" height="64" rx="8" fill="#F4FBF8" stroke="#BFE4DE" stroke-width="1.2"/>
+            <text x="656" y="480" font-size="13" font-weight="700" fill="#0E8A7D">regular_instance 实例</text>
+            <text x="656" y="498" font-size="11" fill="#45566B">id · rule_id · scheduled_date</text>
+            <text x="656" y="513" font-size="11" fill="#45566B">task_id · status</text></g>
+          <!-- task_log -->
+          <g><rect x="360" y="440" width="230" height="64" rx="8" fill="#FFFFFF" stroke="#B9C5D8" stroke-width="1.2"/>
+            <text x="376" y="460" font-size="13" font-weight="700" fill="#253B8F">task_log 进展日志 / 审计</text>
+            <text x="376" y="478" font-size="11" fill="#45566B">id · task_id · user_id · content</text>
+            <text x="376" y="493" font-size="11" fill="#45566B">progress · created_at</text></g>
+        </svg>
+        <div class="fig-cap">图 5-1 核心数据模型 ER（示意）——task 为统一实体，四类型共用；holiday_calendar 为节假日字典；实线为业务关系，虚线为引用 / 自环</div>
+      </div></div>
+
+      <h3 class="sub">5.2 核心实体字段设计（task 表）</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:16%"><col style="width:22%"><col style="width:8%"><col style="width:54%"></colgroup>
+        <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+        <tr><td>id</td><td>bigint PK</td><td class="yes">是</td><td>雪花 ID，全局唯一</td></tr>
+        <tr><td>title / description</td><td>varchar(200) / text</td><td class="yes">是 / 否</td><td>任务标题 / 详细描述</td></tr>
+        <tr><td>type</td><td>enum</td><td class="yes">是</td><td>designated（任务制定下发）/ regular（常规）/ special（专项）/ temp（临时）</td></tr>
+        <tr><td>category_id / category_sub_id</td><td>bigint FK</td><td class="yes">是 / 否</td><td>两级分类；临时任务创建时默认「其他」，可修改</td></tr>
+        <tr><td>status</td><td>enum</td><td class="yes">是</td><td>pending 待开展 / in_progress 进行中 / done 已完成 / paused 暂缓</td></tr>
+        <tr><td>importance / urgency</td><td>tinyint(1–3)</td><td class="opt">可选</td><td>重要度 / 紧急度，可选填，默认「中 / 中」，不强制</td></tr>
+        <tr><td>start_date / end_date</td><td>date</td><td class="yes">是</td><td>起止时间；临时任务默认当天</td></tr>
+        <tr><td>standard</td><td>text</td><td class="opt">建议</td><td>达成标准；任务制定下发时建议必填，其余类型可选</td></tr>
+        <tr><td>assignee_id / assigner_id</td><td>bigint FK</td><td class="opt">按类型</td><td>负责人 / 下发人；常规、专项为自己；制定任务必填负责人</td></tr>
+        <tr><td>parent_task_id</td><td>bigint FK</td><td class="opt">可选</td><td>上级 / 父任务：承接台接收的上派任务 → 拆分子任务（source_type 标记 upper / split）</td></tr>
+        <tr><td>progress</td><td>tinyint(0–100)</td><td class="opt">可选</td><td>进度百分比，由负责人更新，供列表 / 看板 / 回传使用</td></tr>
+        <tr><td>version</td><td>int</td><td class="yes">是</td><td>乐观锁版本号，防并发覆盖</td></tr>
+        <tr><td>created_at / updated_at</td><td>timestamptz</td><td class="yes">是</td><td>审计时间戳</td></tr>
+      </table></div>
+
+      <h3 class="sub">5.3 常规工作建模：规则 → 实例</h3>
+      <div class="grid2">
+        <div class="card"><h5>regular_rule（规则模板）</h5><p>frequency（day / week / month）+ 节点（weekday 1–7 或 day_of_month 1–31）+ notify_time + holiday_policy（默认 forward 前移）。一条规则可只含<b>一个节点</b>（如「每月 5 号部门例会」），也可含<b>一组节点</b>（如「月度薪酬工作」= 本月 28 日发核薪邮件 / 次月 1 日交工资初稿 / 次月 10 日做绩效分析 / 次月 15 日发工资）；每个节点独立配置<b>月份（本月 / 次月）</b>、日期、时间与节假日策略（2026-10-30 增补跨月）。</p></div>
+        <div class="card"><h5>regular_instance（实例）</h5><p>按周期<b>自动生成</b>（每日定时任务扫描）：生成未来 N 天实例并挂接 task_id（即成为一条常规类型任务，自动汇入今日待办与日历）。多节点规则的实例是一个「周期容器」，各节点带自己的日期与完成状态，日历上按节点日期分别落位；节点全部完成则实例完成。<b>跨月周期</b>：节点声明 <code>month_offset</code>（0 = 本月，1 = 次月），周期锚点取<b>起始节点所在月</b>，因此一个周期可以横跨两个月（如 10-28 → 11-13），实例的 start / end 自然跨月。完成 / 改期后不再重复生成；实例状态独立于规则。</p></div>
+      </div>
+      <div class="callout co-info"><span class="ct">设计要点</span>常规实例<b>本身是 task</b>（type=regular），因此「待办、日历、状态机」完全复用主任务链路；同时通过 rule_id 反查规则，实现「改规则 → 仅重排今天以后未开始的实例」，历史实例保留；实例与节点可拖拽，但只改「本次」，规则本身不变（可一键恢复）。</div>
+
+      <div class="callout co-info"><span class="ct">改规则时，重排范围怎么定（2026-10-30 修正）</span>
+        早期版本按「今天以后尚未开始的实例」重排，遇到跨月规则会出错：本周期可能从 10-28 就开始，改动后 start 已过，旧排期不会被清掉，而新排期又因周期 ID 已被占用而生成不出来——用户看到的是「改了规则，日历没变」。据此改为按<b>周期归属月</b>判断：<br/>
+        <b>① 重排范围</b>——<b>本月及以后</b>的所有周期实例，无论是否已完成，一律删除重建。理由是规则一改，周期边界本身就可能变（5 日起 vs 28 日起），旧排期不再成立。<br/>
+        <b>② 历史保留</b>——<b>本月之前</b>的周期实例原样保留，作为历史记录，不会被改写。<br/>
+        <b>③ 勾选恢复</b>——重排前记录已勾选的节点名称，重建后按名称恢复，但<b>只恢复日期已过（≤ 今天）的节点</b>，避免把新排期里还没到的节点误标成已完成。<br/>
+        <b>④ 跨月实例的 key</b>——实例 ID 仍为 <code>ri_&lt;rule&gt;_&lt;周期月&gt;</code>，一个周期只有一条实例，避免同一周期出现两条重复记录。
+      </div>
+
+      <div class="callout co-warn"><span class="ct">规则停用 / 删除时，已生成的实例怎么处理（2026-10-30 补充）</span>
+        实例是规则的投影，规则一改口径，实例的处理必须显式说清，否则用户会看到「规则删了、日历里还在」的怪象：<br/>
+        <b>① 停用</b>——不再生成新实例，<b>已排的实例保留</b>；卡片上标注「已停用，共 N 条实例仍在日历中」，并给出「清空实例」按钮作为出口。<br/>
+        <b>② 删除（默认）</b>——<b>连同该规则生成的全部实例一起删除</b>，日历与今日待办立即干净；删除前弹窗明示「已生成 N 条实例，其中 M 条未完成」。<br/>
+        <b>③ 删除（可选）</b>——用户也可以选「只删规则，保留 N 条实例」：实例<b>脱钩</b>为独立记录（不再关联规则、不再生成新的），详情页注明「所属规则已删除」，可单条删除。<br/>
+        <b>④ 数据自愈</b>——若历史数据里存在「规则已不存在但实例还挂着」的脏数据，登录时自动清理并提示清理条数；用户主动选择保留的实例打「脱钩」标记，不参与自愈清理。
+      </div>
+
+      <h3 class="sub">5.4 优先级设计（重要度 × 紧急度）</h3>
+      <p>优先级为<b>可选填</b>字段，不强制；未填写时按「中 / 中」处理。排序规则：先按重要度、再按紧急度；展示为四象限定位。</p>
+      <div class="quad">
+        <div class="q q1"><h5>重要 · 紧急</h5><p>立即执行，今日优先；典型：上级急派、上线阻塞项。</p></div>
+        <div class="q q2"><h5>重要 · 不紧急</h5><p>规划执行；典型：专项阶段、重点项目任务。</p></div>
+        <div class="q q3"><h5>不重要 · 紧急</h5><p>快速处理或委派；典型：临时事务、催办。</p></div>
+        <div class="q q4"><h5>不重要 · 不紧急</h5><p>碎片时间处理；典型：资料整理、例行归档。</p></div>
+      </div>
+
+      <h3 class="sub">5.5 账号、身份与汇报关系（2026-10-30 评审确认）</h3>
+      <p>一期不接 SSO / OA 单点，采用<b>工号 + 姓名</b>作为登录凭据；汇报关系由用户<b>首次登录时自选</b>，用来点亮「下属可见性」与「任务承接」两条链路。本节定的是模型与口径，不涉及具体实现。</p>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:20%"><col style="width:80%"></colgroup>
+        <tr><th>项目</th><th>规则</th></tr>
+        <tr><td>登录凭据</td><td>工号 + 姓名，需与后台<b>花名册</b>（工号唯一、姓名一致）匹配方可通过；不匹配直接拒绝并提示「请与管理员核对工号姓名」。<b>一期确认免密</b>（2026-10-30 评审），成立前提与风险缓解见 1.5；免密仅限试点范围，全员推广前须补 SSO / 企微扫码。</td></tr>
+        <tr><td>首次登录</td><td>进入「选择直属上级」引导页，可按工号 / 姓名搜索；<b>允许跳过</b>。跳过者可正常使用「对自己」的功能（今日待办、常规、专项、临时、日历），但<b>下发任务与任务承接台不可用</b>，顶部常驻提示「未设置上级，承接链路未开启，点此设置」。</td></tr>
+        <tr><td>汇报关系模型</td><td><b>一个直属上级</b>（user.manager_id 单值自环）。不是多个，理由见下方说明。</td></tr>
+        <tr><td>防环校验</td><td>不能选自己；不能选自己的任意层级下属（A→B→A 的环直接拒绝并提示原因）；一人只有一个上级，试点期<b>被选者无需确认</b>（二期改为需上级确认，避免「单方面认领领导」）。</td></tr>
+        <tr><td>花名册维护</td><td>一期由 HR 指定 1 名管理员，用 Excel 导入并<b>每月更新一次</b>；离职当天停用账号（停用后其下发任务保留 90 天可查），调岗由管理员改部门字段。不做自动同步。</td></tr>
+        <tr><td>变更与留痕</td><td>可在「设置 → 我的汇报关系」修改，变更写入 org_change_log（操作人、时间、原上级、新上级）。<b>已发生的下发任务保留原上级可见</b>，新增任务只对新上级可见。</td></tr>
+        <tr><td>可见范围</td><td>以「自己」为根向下遍历组织树，一期<b>只到直接下属（1 层）</b>，不递归到孙级；跨部门、跨层级一律不可见。这条同时约束「下发任务进展」与「下属常规工作」两类数据。</td></tr>
+      </table></div>
+
+      <div class="callout co-info"><span class="ct">为什么是「一个上级」而不是多个</span>
+        <b>1. 责任唯一</b>——下发任务必须有唯一的验收人，多上级最容易出现「都以为对方在跟」的扯皮；<br/>
+        <b>2. 可见范围可算</b>——权限按组织树层级收敛，多父节点会让可见集变成并集而膨胀。一个初级管理者若能自选 5 个上级，等于拿到半个公司的可见权；<br/>
+        <b>3. 自选可控</b>——MVP 的上级是用户自己选的，单上级把「自主扩权」的口子缩到最小；<br/>
+        <b>4. 可扩展</b>——真实的矩阵汇报（多头汇报、项目线汇报）用<b>虚线上级</b>承载：二期加 user_dotted_manager（0..n），只授予<b>只读查看</b>，不参与任务下发与验收。数据模型留了位置，不阻断一期上线。
+      </div>
+      <div class="callout co-rec"><span class="ct">一期明确不做</span>
+        汇报关系<b>审核与管理员纠偏</b>（自选即生效，选错由本人自查改正）、跨级下发（给下属的下属直接派活）、虚线上级（多上级）、组织架构自动同步（HR 主数据 / 企微通讯录）。一期组织树由「管理员导入 Excel 花名册 + 用户自选上级」拼接而成；二期再接 HR 主数据，届时自选上级自动降级为异常兜底。
+      </div>
+    </section>
+    <!-- SEC6 -->
+    <section class="sec" id="s6">
+      <div class="sec-head"><div class="sec-num">6</div><div>
+        <div class="sec-title">业务规则设计</div>
+        <div class="sec-sub">状态机 · 常规工作与节假日规则 · 双向同步与拖拽 · 分类 · 权限与可见性 · 提醒</div>
+      </div></div>
+
+      <h3 class="sub">6.1 任务状态机</h3>
+      <div class="fig"><div class="inner">
+        <svg viewBox="0 0 760 330" role="img" aria-label="任务四状态状态机" style="width:100%;height:auto;font-family:inherit;">
+          <defs>
+            <marker id="stArw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#5C7083"/></marker>
+          </defs>
+          <!-- 逾期派生标签 -->
+          <rect x="230" y="18" width="300" height="44" rx="8" fill="#FDF0F0" stroke="#F0C9C9" stroke-dasharray="5,4"/>
+          <text x="380" y="36" font-size="12.5" fill="#8E2F2F" text-anchor="middle" font-weight="700">派生标签「已逾期」</text>
+          <text x="380" y="53" font-size="11" fill="#8E2F2F" text-anchor="middle">截止日已过且状态非已完成 → 自动标记（不改主状态，仅视觉警示）</text>
+          <!-- 待开展 -->
+          <rect x="80" y="110" width="170" height="62" rx="10" fill="#F1F5F9" stroke="#8FA1B3" stroke-width="1.6"/>
+          <text x="165" y="136" font-size="14" font-weight="800" fill="#5C7083" text-anchor="middle">待开展</text>
+          <text x="165" y="156" font-size="11" fill="#7B8A9D" text-anchor="middle">pending</text>
+          <!-- 进行中 -->
+          <rect x="380" y="110" width="170" height="62" rx="10" fill="#EEF1FC" stroke="#3454D1" stroke-width="1.6"/>
+          <text x="465" y="136" font-size="14" font-weight="800" fill="#253B8F" text-anchor="middle">进行中</text>
+          <text x="465" y="156" font-size="11" fill="#7B8A9D" text-anchor="middle">in_progress</text>
+          <!-- 已完成 -->
+          <rect x="580" y="230" width="170" height="62" rx="10" fill="#F4FBF8" stroke="#1F9D5B" stroke-width="1.6"/>
+          <text x="665" y="256" font-size="14" font-weight="800" fill="#155E43" text-anchor="middle">已完成（终态）</text>
+          <text x="665" y="276" font-size="11" fill="#7B8A9D" text-anchor="middle">done · 回退需权限</text>
+          <!-- 暂缓 -->
+          <rect x="130" y="240" width="170" height="62" rx="10" fill="#FDF9EF" stroke="#C2700A" stroke-width="1.6"/>
+          <text x="215" y="266" font-size="14" font-weight="800" fill="#9A6B12" text-anchor="middle">暂缓</text>
+          <text x="215" y="286" font-size="11" fill="#7B8A9D" text-anchor="middle">paused · 原因必填</text>
+          <!-- 迁移 -->
+          <line x1="250" y1="141" x2="380" y2="141" stroke="#5C7083" stroke-width="1.6" marker-end="url(#stArw)"/>
+          <text x="315" y="131" font-size="11.5" fill="#45566B" text-anchor="middle">开始（负责人）</text>
+          <path d="M540,150 C570,170 590,190 620,225" fill="none" stroke="#5C7083" stroke-width="1.6" marker-end="url(#stArw)"/>
+          <text x="610" y="178" font-size="11.5" fill="#45566B" text-anchor="middle">完成</text>
+          <text x="610" y="192" font-size="10.5" fill="#7B8A9D" text-anchor="middle">（制定类需下发人验收）</text>
+          <path d="M470,172 C450,200 380,220 310,240" fill="none" stroke="#5C7083" stroke-width="1.6" marker-end="url(#stArw)"/>
+          <text x="400" y="216" font-size="11.5" fill="#45566B" text-anchor="middle">暂缓（原因必填）</text>
+          <path d="M230,240 C270,210 330,185 410,172" fill="none" stroke="#5C7083" stroke-width="1.6" marker-end="url(#stArw)"/>
+          <text x="300" y="196" font-size="11.5" fill="#45566B" text-anchor="middle">恢复</text>
+          <path d="M130,172 C110,200 130,220 160,238" fill="none" stroke="#8FA1B3" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#stArw)"/>
+          <text x="78" y="210" font-size="11" fill="#7B8A9D">待开展→暂缓（可选）</text>
+        </svg>
+        <div class="fig-cap">图 6-1 任务状态机（示意）——四主状态 + 一个派生标签；逾期不改变主状态，验收为制定类任务的完成前置</div>
+      </div></div>
+      <div class="callout co-ask"><span class="ct">待确认</span>「已完成」是否需要拆出「待验收」子状态：推荐<b>制定类任务由下发人确认验收后才算完成</b>（二期员工版落地），一期可先由负责人标记完成。</div>
+
+      <h3 class="sub">6.2 常规工作周期与节假日规则</h3>
+      <p><b>示例：</b>「每月 5 号部门例会」，当月 3–7 日为法定节假日（示意），规则自动前移。虚线方格为演示用示意月份，非真实日历。</p>
+      <div class="fig"><div class="inner">
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:11.5px;min-width:640px;">
+          <div style="text-align:center;color:#7B8A9D;font-weight:600">一</div><div style="text-align:center;color:#7B8A9D;font-weight:600">二</div><div style="text-align:center;color:#7B8A9D;font-weight:600">三</div><div style="text-align:center;color:#7B8A9D;font-weight:600">四</div><div style="text-align:center;color:#7B8A9D;font-weight:600">五</div><div style="text-align:center;color:#D64545;font-weight:600">六</div><div style="text-align:center;color:#D64545;font-weight:600">日</div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px;color:#7B8A9D">1</div>
+          <div style="border:2px solid #1F9D5B;border-radius:6px;padding:6px;min-height:52px;background:#F4FBF8"><b>2</b><span style="display:block;margin-top:2px;font-size:10px;color:#155E43">（前移至 2 号）</span></div>
+          <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:6px;padding:6px;min-height:52px;color:#C2700A">3<span style="display:block;font-size:10px;color:#9A6B12">休</span></div>
+          <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:6px;padding:6px;min-height:52px;color:#C2700A">4<span style="display:block;font-size:10px;color:#9A6B12">休</span></div>
+          <div style="background:#FDF0F0;border:1px solid #F0C9C9;border-radius:6px;padding:6px;min-height:52px;color:#8E2F2F"><b>5</b><span style="display:block;font-size:10px;color:#8E2F2F">原节点·休</span></div>
+          <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:6px;padding:6px;min-height:52px;color:#C2700A">6<span style="display:block;font-size:10px;color:#9A6B12">休</span></div>
+          <div style="background:#F5F0E6;border:1px solid #E8D9BE;border-radius:6px;padding:6px;min-height:52px;color:#C2700A">7<span style="display:block;font-size:10px;color:#9A6B12">休</span></div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">8</div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">9</div>
+          <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:6px;padding:6px;min-height:52px;color:#3454D1">10<span style="display:block;font-size:10px;color:#3454D1">补班</span></div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">11</div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">12</div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">13</div>
+          <div style="border:1px solid #EDF0F5;border-radius:6px;padding:6px;min-height:52px">14</div>
+        </div>
+        <div class="fig-cap">图 6-2 常规工作节假日前移规则（示意月份）——「每月 5 号」落在假期段 → 前移至 2 号（假前最近工作日）</div>
+      </div></div>
+      <div class="grid3">
+        <div class="card"><h5>工作日识别</h5><p>法定节假日（含调休休假日）= 非工作日；<b>调休补班日 = 工作日</b>；普通周六日 = 非工作日。由 holiday_calendar 字典驱动，前端日历与后端规则引擎共用。</p></div>
+        <div class="card"><h5>节点前移规则</h5><p>月 / 周常规的节点落在法定节假日 → <b>前移至该假期段前最近的工作日</b>（如每月 5 号遇假 → 2 号）；落在普通周末 → 默认前移（周五），可在规则中配置前移 / 顺延 / 跳过。</p></div>
+        <div class="card"><h5>数据维护</h5><p>每年按国务院办公厅放假通知<b>结构化入库</b>；holiday_calendar 表 + 维护页支持补录与调休修正；规则引擎单元测试覆盖假期段 / 补班 / 跨月场景。</p></div>
+      </div>
+
+      <h3 class="sub">6.3 双向同步与日历拖拽规则</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:26%"><col style="width:74%"></colgroup>
+        <tr><th>规则</th><th>说明</th></tr>
+        <tr><td><b>同一实体、无副本</b></td><td>任务在「列表 / 日历 / 今日待办」三处展示的是同一个 task 记录：改日历 = 改任务起止；改任务状态 = 日历即时变色。天然满足「双方即时更新」。</td></tr>
+        <tr><td><b>拖拽范围</b></td><td>制定 / 专项 / 临时任务支持跨日拖动；<b>常规实例与多节点规则的单个节点也可拖</b>，但只改「本次」（规则不变，卡片标「日期已调整」，可在详情一键恢复）。</td></tr>
+        <tr><td><b>拖拽校验</b></td><td>跨日移动时：目标日期早于今天且未开始 → 提示；拖过原截止日 → 提示并可选「同时顺延截止日」；与已有任务冲突 → 仅提示不拦截（多任务并行为常态）。</td></tr>
+        <tr><td><b>拖拽落库</b></td><td>整体平移起止（跨日任务保持时长）；写 task_log 审计（谁在何时把任务从 X 日拖到 Y 日）；走事务 + 乐观锁。</td></tr>
+        <tr><td><b>待办栏 ↔ 日历</b></td><td>今日待办栏中的任务可直接拖入日历未来日期（相当于改期）；日历中的任务可拖回待办栏（回到今天）。</td></tr>
+      </table></div>
+
+      <h3 class="sub">6.4 任务分类规则</h3>
+      <ul>
+        <li>分类为<b>两级树</b>（一级如：产品 / 研发 / 运营 / 市场 / 管理…；二级如：产品 › 需求 / 设计 / 评审…），由管理者在设置中自定义（增删改、排序）。</li>
+        <li>系统<b>预置默认分类树</b>，落地后各管理者可按团队习惯调整；删分类时已有任务迁移到父级或「其他」。</li>
+        <li><b>临时任务创建时默认分类 =「其他」</b>（不可为空，可再修改）；任务制定下发时分类必选。</li>
+      </ul>
+
+      <h3 class="sub">6.5 权限与可见性（一期）</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:34%"><col style="width:66%"></colgroup>
+        <tr><th>数据对象</th><th>权限规则</th></tr>
+        <tr><td>本人全部数据</td><td>初级管理者可完整管理自己的任务、常规规则、专项与临时任务（增删改查）。</td></tr>
+        <tr><td>下发任务</td><td>对<b>直接下属</b>下发任务的进展、状态、阶段进度<b>只读可见</b>（按组织树层级收敛，跨部门不可见）。</td></tr>
+        <tr><td>下发任务在本人日历 / 待办的呈现</td><td>下发任务的<b>执行人</b>是下属，因此<b>不进入管理者的日历与今日待办</b>，避免占用管理者日程；管理者只在「任务制定」中以列表 + 阶段进度跟踪（2026-10-30 评审确认）。</td></tr>
+        <tr><td>下属常规工作（默认态）</td><td>只读查看直接下属的常规工作<b>推进情况</b>；看板<b>默认折叠</b>为一行汇总（今日完成率 / 本周达成率 / 最近完成时间），不展开节点明细，避免管理者被细节淹没。</td></tr>
+        <tr><td>下属常规工作（关注后）</td><td>管理者可对某成员下的某条常规工作点「<b>关注</b>」，该条在看板上<b>展开</b>：多节点规则（如月度薪酬工作）直接显示<b>当前所处节点</b>——节点名 / 计划日期 / 完成状态 / 是否因节假日改期；单节点规则展开后显示该节点的日期与完成状态、以及最近一次完成时间。<b>关注是管理者本人的视图偏好</b>，不通知下属、不改下属任何数据。</td></tr>
+        <tr><td>下属常规工作（编辑权）</td><td>规则与节点的<b>编辑权永远不下放</b>：管理者只能看执行状态，不能改下属的规则、节点日期或完成标记。</td></tr>
+        <tr><td>汇报关系与可见范围</td><td>一人一个直属上级（user.manager_id），可见范围按组织树<b>向下 1 层</b>收敛；未经设置上级的账号不可下发与承接（详见 5.5）。</td></tr>
+        <tr><td>承接链路</td><td>上级下派任务仅「本人 + 上级」可见；拆分子任务归属本人管理。</td></tr>
+        <tr><td>角色位</td><td>RBAC 三段：admin / manager / employee。一期启用 manager + employee 最小集，admin 由系统管理员。</td></tr>
+      </table></div>
+
+      <h3 class="sub">6.6 提醒设计（一期仅站内，2026-10-30 确认）</h3>
+      <p>一期<b>不做任何外部推送</b>：无邮件、无企业微信、无 App 通知。提醒以「打开即见」为原则落在界面上，不依赖推送通道。</p>
+      <div class="grid3">
+        <div class="card"><h5>今日待办（首屏）</h5><p>登录后第一屏即今日待办，零点击可见：今日到期任务、今日常规节点、待接收的上级任务。</p></div>
+        <div class="card"><h5>导航徽标与红点</h5><p>「任务承接台」显示待接收数量角标；逾期任务在列表与日历上标红，打开一眼能看到该干什么。</p></div>
+        <div class="card"><h5>临期标记</h5><p>剩余 ≤3 天标「剩 N 天」，已过期标「逾期 N 天」；仅做视觉提示，不打断操作、不弹窗。</p></div>
+      </div>
+      <div class="callout co-warn"><span class="ct">这条的代价必须写进预期</span>
+        不做推送，<b>打开率完全依赖人的习惯</b>。试点期靠两件事撑住：管理者在周会上用这张表过进度（下属为了不被问住会主动打开），以及首屏零点击的今日待办。但<b>推广到全员时必须先接企微推送</b>，否则使用率会断崖式下跌——这是二期第一优先级。
+      </div>
+    </section>
+    <!-- SEC7 -->
+    <section class="sec" id="s7">
+      <div class="sec-head"><div class="sec-num">7</div><div>
+        <div class="sec-title">核心流程设计</div>
+        <div class="sec-sub">任务下发闭环 · 上级任务承接闭环 · 常规实例化 · 拖拽改期</div>
+      </div></div>
+
+      <h3 class="sub">7.1 任务制定与下发闭环</h3>
+      <div class="fig"><div class="inner">
+        <div class="swim">
+          <div class="sw-col">
+            <h6>初级管理者</h6>
+            <div class="sw-items">
+              <div class="sw-item"><b>1 制定任务</b>标题 / 描述 / 起止 / 达成标准</div>
+              <div class="sw-item"><b>2 划分阶段（可选）</b>阶段名 · 起止 · 达成标准</div>
+              <div class="sw-item"><b>3 选定负责人并下发</b>（可批量下发多人）</div>
+              <div class="sw-item"><b>6 跟踪查看</b>看板 / 列表 · 下属常规汇总</div>
+              <div class="sw-item"><b>8 验收确认</b>（制定类，二期强化）</div>
+            </div>
+          </div>
+          <div class="sw-arrow">▼</div>
+          <div class="sw-col">
+            <h6>系统</h6>
+            <div class="sw-items">
+              <div class="sw-item"><b>4 生成待办 + 提醒</b>进入负责人今日待办与日历；截止前预警</div>
+              <div class="sw-item"><b>5 记录与同步</b>状态、进度、阶段即时更新，写审计日志</div>
+              <div class="sw-item"><b>7 回传汇总</b>进度与完成情况同步到管理者的跟踪视图</div>
+            </div>
+          </div>
+          <div class="sw-arrow">▼</div>
+          <div class="sw-col">
+            <h6>组员（负责人）</h6>
+            <div class="sw-items">
+              <div class="sw-item"><b>接收任务</b>进入本人待办（可确认 / 提疑）</div>
+              <div class="sw-item"><b>执行并更新进度</b>状态流转 · progress · 阶段完成</div>
+              <div class="sw-item"><b>完成</b>标记已完成，附完成说明</div>
+            </div>
+          </div>
+        </div>
+        <div class="fig-cap">图 7-1 任务制定与下发闭环（泳道）——发 → 接 → 做 → 报 → 查全链路留痕</div>
+      </div></div>
+
+      <h3 class="sub">7.2 上级任务承接闭环</h3>
+      <div class="flow">
+        <div class="fstep"><div class="n">1</div><div class="t"><b>上级下派任务</b>上级在工作台（或承接台入口）向初级管理者下派任务，指定起止与期望标准。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">2</div><div class="t"><b>出现在「任务承接台 · 待接收」</b>附带来源上级、起止、标准；可「接收」或「拒收（附理由，回传上级）」。首页概览同步出现「待接收 N」提醒。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">3</div><div class="t"><b>规划拆分</b>在承接台画布上将任务拆为若干子任务 / 阶段，各自设定起止与达成标准（挂 parent_task_id，保留来源链路）。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">4</div><div class="t"><b>移入执行</b>复杂项目整体移入<b>专项工作</b>继续深化管理；单点事项转为<b>临时任务</b>；也可保留在承接台直接执行。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">5</div><div class="t"><b>执行与回传</b>执行过程状态 / 进度自动汇总回传给上级（上级只读查看承接任务的进展，不需要人工汇报）。</div></div>
+      </div>
+
+      <h3 class="sub">7.3 常规工作实例化流程</h3>
+      <div class="flow">
+        <div class="fstep"><div class="n">1</div><div class="t"><b>配置规则</b>选频率（日 / 周 / 月）→ 定节点（每周几 / 每月几号）→ 提醒时间 → 节假日策略（默认前移）。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">2</div><div class="t"><b>每日定时扫描</b>后台任务按规则计算下一次应生效日期（向前滚动，生成未来 N 天实例）。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">3</div><div class="t"><b>节假日判断</b>命中法定节假日 → 按策略前移至假前最近工作日（如「每月 5 号 → 2 号」）；补班日正常执行；幂等防重复生成。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">4</div><div class="t"><b>生成实例（task）</b>实例即任务（type=regular），自动汇入当日待办与日历，触发当天提醒。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">5</div><div class="t"><b>完成归档</b>打卡完成后实例归档；规则持续滚动生成下一周期。</div></div>
+      </div>
+
+      <h3 class="sub">7.4 日历拖拽改期流程</h3>
+      <div class="flow">
+        <div class="fstep"><div class="n">1</div><div class="t"><b>拖动任务卡片</b>从源日期拖至目标日期（仅制定 / 专项 / 临时；常规实例触发提示改规则）。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">2</div><div class="t"><b>前端校验</b>目标日期合法性、跨截止日提醒、早于今天提示。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">3</div><div class="t"><b>事务落库</b>更新 start_date / end_date（整体平移）→ 写 task_log → 乐观锁防并发冲突。</div></div>
+        <div class="farr">↓</div>
+        <div class="fstep"><div class="n">4</div><div class="t"><b>全局即时生效</b>列表 / 待办 / 提醒按新日期刷新，无需任何手动同步。</div></div>
+      </div>
+    </section>
+    <!-- SEC8 -->
+    <section class="sec" id="s8">
+      <div class="sec-head"><div class="sec-num">8</div><div>
+        <div class="sec-title">技术选型建议（独立 Web 应用）</div>
+        <div class="sec-sub">总体架构 · 选型表 · 工业级健壮性要求</div>
+      </div></div>
+
+      <h3 class="sub">8.1 总体架构</h3>
+      <div class="fig"><div class="inner">
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:640px;">
+          <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:10px;padding:10px 14px;">
+            <div style="font-weight:700;color:#253B8F;font-size:13.5px;">浏览器前端</div>
+            <div style="font-size:12px;color:#45566B;line-height:1.7;">React 18 + TypeScript + Ant Design 5 · 日历组件（FullCalendar 改造 / 自研月视图，支持拖拽与节假日事件）· 任务卡片组件 · 看板视图</div>
+          </div>
+          <div style="text-align:center;color:#3454D1;font-weight:700;font-size:13px;">HTTPS / RESTful API（JWT 鉴权）</div>
+          <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:10px;padding:10px 14px;">
+            <div style="font-weight:700;color:#253B8F;font-size:13.5px;">Nginx 网关</div>
+            <div style="font-size:12px;color:#45566B;line-height:1.7;">静态资源 · 反向代理 · 限流与基础防护 · HTTPS 终止</div>
+          </div>
+          <div style="text-align:center;color:#3454D1;font-weight:700;font-size:13px;">▼</div>
+          <div style="background:#EEF1FC;border:1px solid #CDD6F2;border-radius:10px;padding:10px 14px;">
+            <div style="font-weight:700;color:#253B8F;font-size:13.5px;">后端服务（Python FastAPI）</div>
+            <div style="font-size:12px;color:#45566B;line-height:1.7;">任务 / 常规 / 专项 / 承接 / 分类 / 权限（RBAC + 行级可见性）· 节假日规则引擎 · 通知服务 · 定时任务（实例生成、提醒、节假日刷新）· SQLAlchemy 2.0 + Alembic 迁移</div>
+          </div>
+          <div style="text-align:center;color:#3454D1;font-weight:700;font-size:13px;">▼</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="background:#F4FBF8;border:1px solid #BFE4DE;border-radius:10px;padding:10px 14px;">
+              <div style="font-weight:700;color:#0E8A7D;font-size:13.5px;">PostgreSQL 15+</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">主数据（task / user / category / holiday_calendar 等）· 事务与索引 · JSONB 扩展 · 每日备份</div>
+            </div>
+            <div style="background:#F4FBF8;border:1px solid #BFE4DE;border-radius:10px;padding:10px 14px;">
+              <div style="font-weight:700;color:#0E8A7D;font-size:13.5px;">Redis 7</div>
+              <div style="font-size:12px;color:#45566B;line-height:1.7;">缓存 · 提醒队列（去重）· 定时任务锁（防重复实例化）· 分布式会话</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="background:#FDF9EF;border:1px solid #F0DFC0;border-radius:10px;padding:9px 12px;font-size:12px;color:#7A5B16;">外部：SMTP 邮件服务（提醒 / 通知）</div>
+            <div style="background:#FDF9EF;border:1px solid #F0DFC0;border-radius:10px;padding:9px 12px;font-size:12px;color:#7A5B16;">外部：节假日数据源（国务院放假安排，年度导入入库）</div>
+          </div>
+        </div>
+        <div class="fig-cap">图 8-1 独立 Web 应用总体架构（前后端分离 + 私有化部署）</div>
+      </div></div>
+
+      <h3 class="sub">8.2 技术选型表</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:16%"><col style="width:36%"><col style="width:48%"></colgroup>
+        <tr><th>层级</th><th>选型</th><th>理由</th></tr>
+        <tr><td>前端</td><td>React 18 + TypeScript + Ant Design 5</td><td>后台工作台类系统生态最成熟；TS 保证任务模型 / 状态流转的类型安全；AntD 表格、抽屉、表单开箱即用。</td></tr>
+        <tr><td>日历组件</td><td>FullCalendar（改造）或自研月视图</td><td>FullCalendar 原生支持事件拖拽、跨日移动、日期渲染，按节假日字典定制渲染；如要求完全可控可自研（拖拽用原生 DnD / 指针事件）。</td></tr>
+        <tr><td>后端</td><td>Python FastAPI + SQLAlchemy 2.0 + Alembic</td><td>团队 Python 能力直接复用；异步性能好；Alembic 迁移保证节假日 / 分类等字典变更可控。</td></tr>
+        <tr><td>数据库</td><td>PostgreSQL 15+</td><td>事务与多索引支撑任务高频读写；行级可见性可用视图 / 策略扩展；JSONB 用于阶段等半结构化数据。</td></tr>
+        <tr><td>缓存 / 队列</td><td>Redis 7</td><td>提醒队列去重、常规实例化分布式锁、热数据缓存。</td></tr>
+        <tr><td>认证 / 权限</td><td>JWT + RBAC（角色 × 部门树）</td><td>角色三段预留；组织树导入（一期 CSV / 后续 OA 接口）；后端行级校验为准。</td></tr>
+        <tr><td>节假日</td><td>holiday_calendar 表 + 年度导入</td><td>以国务院放假安排为源，入库后前端 / 规则引擎共用；离线可用、可维护。</td></tr>
+        <tr><td>部署</td><td>Docker Compose（前端 Nginx + 后端 + PG + Redis）</td><td>私有化交付轻量；数据卷持久化；备份脚本随发布。</td></tr>
+      </table></div>
+
+      <h3 class="sub">8.3 工业级健壮性要求</h3>
+      <div class="grid2">
+        <div class="card"><h5>并发与一致性</h5><p>task.version 乐观锁防多人同时编辑覆盖；状态流转接口幂等；拖拽改期走事务；常规实例化按「规则 + 日期」唯一约束幂等。</p></div>
+        <div class="card"><h5>权限安全</h5><p>后端行级校验（责任人 / 下发人 / 直属上级），前端隐藏仅是体验、后端拦截才是底线；越权访问一律 403；防注入 / 防 XSS / 防 CSRF。</p></div>
+        <div class="card"><h5>审计留痕</h5><p>task_log 记录关键操作：创建 / 下发 / 状态变更 / 拖拽改期 / 分类调整；可追溯「谁在何时改了什么」。</p></div>
+        <div class="card"><h5>数据可靠</h5><p>每日自动备份 + 保留策略（本地 + 异地）；迁移脚本先演练后上线；节假日表变更走版本化数据迁移。</p></div>
+        <div class="card"><h5>规则引擎测试</h5><p>节假日前移、补班识别、跨月滚动、提醒去重等规则用单元测试覆盖（fixture 用例），不依赖人工抽查。</p></div>
+        <div class="card"><h5>性能预算</h5><p>单月视图任务渲染控制在 500 条内分页 / 懒加载；今日待办接口 &lt; 200ms；日历拖拽交互本地乐观更新 + 后台确认。</p></div>
+      </div>
+    </section>
+    <!-- SEC9 -->
+    <section class="sec" id="s9">
+      <div class="sec-head"><div class="sec-num">9</div><div>
+        <div class="sec-title">分期路线与里程碑</div>
+        <div class="sec-sub">一期初级管理者版 → 二期普通员工版 → 三期中高层版</div>
+      </div></div>
+
+      <div class="timeline">
+        <div class="tl-item">
+          <div class="tl-time">一期<br>约 4–6 周</div>
+          <div class="tl-axis"><span class="tl-dot"></span></div>
+          <div class="tl-card"><h5>初级管理者版（本方案范围）</h5><p>工号 + 姓名免密登录与自选直属上级、任务制定与下发（含阶段目标）、常规工作（日 / 周 / 月 + 多节点 + 节假日自动前移）、专项工作（阶段拆分）、临时任务、日历待办（拖拽 + 工作日识别）、任务承接台、下属常规工作折叠与关注、两级分类、优先级、<b>站内提醒（不做邮件 / 企微 / 推送）</b>、Excel 花名册导入。</p></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">二期<br>约 4 周</div>
+          <div class="tl-axis"><span class="tl-dot"></span></div>
+          <div class="tl-card"><h5>普通员工版</h5><p><b>第一优先级：接企业微信工作通知与待办卡片</b>（不解决推送，全员推广会失败）；组员接任务、报进度、自建自身常规工作与临时任务；下发任务的验收确认流；免密升级为 SSO / 企微扫码；统计口径完善。</p></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">三期</div>
+          <div class="tl-axis"><span class="tl-dot"></span></div>
+          <div class="tl-card"><h5>中 / 高级管理者版</h5><p>组织级看板与报表（完成率、逾期率、人效）、跨部门任务协调、审批流、移动端适配强化。基于一期底座扩展，不做重构。</p></div>
+        </div>
+      </div>
+      <div class="callout co-rec"><span class="ct">建议</span>一期建议按「数据模型与权限骨架 → 核心闭环（制定 / 常规 / 临时）→ 日历与拖拽 → 承接台」的顺序推进，每两周一次可演示增量，先跑通单团队试点再推广。</div>
+    </section>
+    <!-- SEC10 -->
+    <section class="sec" id="s10">
+      <div class="sec-head"><div class="sec-num">10</div><div>
+        <div class="sec-title">决策记录与遗留问题</div>
+        <div class="sec-sub">2026-10-30 评审已拍板 12 项；剩余 3 项待定</div>
+      </div></div>
+
+      <h3 class="sub">10.1 已确认（评审结论）</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:5%"><col style="width:30%"><col style="width:65%"></colgroup>
+        <tr><th>#</th><th>决策项</th><th>结论</th></tr>
+        <tr><td>1</td><td>模块 6 命名</td><td><b>采用「任务承接台」</b>（与「任务制定」语义对称）。</td></tr>
+        <tr><td>2</td><td>常规工作遇普通周末</td><td>与法定节假日一致<b>前移</b>；规则内可按节点配前移 / 顺延 / 跳过。</td></tr>
+        <tr><td>3</td><td>账号与组织架构来源</td><td><b>工号 + 姓名免密登录</b>；Excel 花名册导入 + 用户自选直属上级；不接 HR 主数据 / 企微通讯录。</td></tr>
+        <tr><td>4</td><td>达成标准的验收流程</td><td><b>一期不做验收</b>：执行人标记完成即完成，不作为绩效考核依据；验收流放二期。</td></tr>
+        <tr><td>5</td><td>提醒通道</td><td><b>一期仅站内</b>：无邮件、无企业微信、无 App 推送；打开即见（首屏 / 徽标 / 临期标记）。</td></tr>
+        <tr><td>6</td><td>日历是否对接公司日历</td><td>一期独立日历；对接单独评估。</td></tr>
+        <tr><td>7</td><td>「向前排」口径</td><td>节点落在假期段<b>中间</b>时，前移至<b>假期段前最近工作日</b>（每月 5 号，假期 3–7 号 → 2 号）。</td></tr>
+        <tr><td>8</td><td>优先级是否必填</td><td><b>可选填</b>，默认「中 / 中」；不填不影响使用。</td></tr>
+        <tr><td>9</td><td>下属常规工作可见粒度</td><td>默认<b>折叠为汇总</b>；可对单条「关注」展开；多节点规则显示<b>当前节点</b>。只读，编辑权不下放。</td></tr>
+        <tr><td>10</td><td>汇报关系数量</td><td><b>一个直属上级</b>（manager_id 单值），不做虚线上级。</td></tr>
+        <tr><td>11</td><td>自选上级是否审核</td><td><b>不审核、不纠偏</b>：即选即生效，本人可在设置里自查修改。</td></tr>
+        <tr><td>12</td><td>是否允许跨级下发</td><td><b>不允许</b>：只能给直接下属派活。</td></tr>
+      </table></div>
+
+      <h3 class="sub">10.2 仍待定（不阻塞开发）</h3>
+      <div class="tbl-wrap"><table class="spec">
+        <colgroup><col style="width:5%"><col style="width:30%"><col style="width:65%"></colgroup>
+        <tr><th>#</th><th>待定项</th><th>需要的信息 / 影响</th></tr>
+        <tr><td>1</td><td>产品整体名称</td><td>需与公司既有系统命名避开；影响登录页、浏览器标签、推广物料。</td></tr>
+        <tr><td>2</td><td>试点范围与时间</td><td>哪个部门 / 多少人 / 什么时候开第一期；决定花名册导入范围与培训安排。</td></tr>
+        <tr><td>3</td><td>部署方式</td><td>内网服务器还是云主机；决定免密登录的暴露面（见 1.5 的三条前提）。</td></tr>
+      </table></div>
+      <div class="callout co-warn"><span class="ct">一期边界再次强调</span>中高层组织级统计报表、跨部门任务协作、审批流、移动端深度适配、与 OA / HR / IM 的集成、任务验收与绩效联动，均不在本期范围。其中<b>「接企微推送」是二期第一优先级</b>——一期不做推送，使用率只能靠管理动作撑住，不能直接推全员。
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="doc-footer">本文档为「初级管理者工作台」产品设计方案评审稿，配套功能架构、数据模型、业务规则与技术选型建议。所有示例数据均为示意用途，正式上线以评审确认后的口径为准。</footer>
+
+<button id="toTop" aria-label="回到顶部">↑</button>
+
+<script>
+(function(){
+  "use strict";
+  var tocLinks=["产品概述","用户角色与核心场景","功能架构总览","信息架构与页面结构","数据模型设计","业务规则设计","核心流程设计","技术选型建议","分期路线与里程碑","决策记录与遗留问题"];
+  var ids=["s1","s2","s3","s4","s5","s6","s7","s8","s9","s10"];
+  var html="";
+  for(var i=0;i<ids.length;i++){html+='<a href="#'+ids[i]+'">'+(i+1)+'&nbsp;'+tocLinks[i]+'</a>';}
+  var mob=document.getElementById("tocMobile");
+  if(mob){mob.innerHTML=html;}
+  var btn=document.getElementById("tocBtn");
+  if(btn){btn.addEventListener("click",function(){var open=mob.classList.toggle("open");btn.classList.toggle("open",open);btn.setAttribute("aria-expanded",open?"true":"false");});}
+  var topBtn=document.getElementById("toTop");
+  if(topBtn){window.addEventListener("scroll",function(){if(window.scrollY>600){topBtn.classList.add("show");}else{topBtn.classList.remove("show");}},{passive:true});
+    topBtn.addEventListener("click",function(){window.scrollTo({top:0,behavior:"smooth"});});}
+})();
+</script>
+</body>
+</html>

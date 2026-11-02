@@ -1,0 +1,2168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>初级管理者工作台 · 交互原型</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8; --panel:#fff; --line:#e6e8ee; --line2:#eef0f4;
+  --ink:#1b2230; --ink2:#5b6475; --ink3:#8b93a3; --accent:#2563eb;
+  --assign:#2563eb; --routine:#0f9d8c; --special:#7c3aed; --temp:#d97706;
+  --ok:#0f9d8c; --warn:#b45309;
+}
+html,body{margin:0;padding:0}
+body{
+  font-family:"Microsoft YaHei","PingFang SC",-apple-system,"Segoe UI",Roboto,sans-serif;
+  background:var(--bg); color:var(--ink); font-size:13.5px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit}
+.layout{display:flex;min-height:100vh}
+
+/* ---------- sidebar ---------- */
+.sidebar{width:218px;flex:0 0 218px;background:#fff;border-right:1px solid var(--line);
+  padding:16px 12px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.logo{display:flex;gap:9px;align-items:center;padding:2px 6px 14px}
+.logo .mark{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#2563eb,#4f8bf7);
+  color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px}
+.logo b{display:block;font-size:14px;letter-spacing:.3px}
+.logo small{display:block;color:var(--ink3);font-size:11px;margin-top:1px}
+.nav-group{color:var(--ink3);font-size:11px;padding:12px 10px 6px;letter-spacing:.6px}
+.nav-item{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;
+  color:var(--ink2);cursor:pointer;margin-bottom:2px;user-select:none;transition:background .12s}
+.nav-item:hover{background:#f4f6fa}
+.nav-item.active{background:#eef4ff;color:#1d4ed8;font-weight:600}
+.nav-item .ic{width:16px;text-align:center;font-size:13px;opacity:.85}
+.nav-item .badge{margin-left:auto;background:#ef4444;color:#fff;border-radius:9px;font-size:10.5px;
+  padding:0 5px;height:16px;line-height:16px;font-weight:600}
+.side-foot{margin-top:auto;border-top:1px solid var(--line2);padding:12px 6px 2px}
+.user{display:flex;gap:9px;align-items:center}
+.ava{width:30px;height:30px;border-radius:50%;background:#e8efff;color:#2563eb;display:grid;place-items:center;font-weight:700;font-size:12.5px}
+.user b{display:block;font-size:12.5px}
+.user small{display:block;color:var(--ink3);font-size:11px}
+
+/* ---------- main ---------- */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{height:58px;background:rgba(255,255,255,.92);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;padding:0 22px;position:sticky;top:0;z-index:30;backdrop-filter:blur(8px)}
+.topbar h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
+.topbar .sub{color:var(--ink3);font-size:12px;margin-left:2px}
+.spacer{flex:1}
+.content{padding:18px 22px 70px;max-width:1320px;width:100%}
+
+.pill{font-size:11.5px;border-radius:20px;padding:3px 10px;background:#f1f5f9;color:var(--ink2);border:1px solid var(--line)}
+.pill.green{background:#e8f7f4;color:#0b7a6d;border-color:#cfeee7}
+.pill.warn{background:#fff7e8;color:#a16207;border-color:#f6e3bb}
+
+.btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:8px;padding:6px 12px;
+  font-size:12.5px;cursor:pointer;transition:.12s;white-space:nowrap}
+.btn:hover{border-color:#cfd6e2;background:#fafbfd}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.primary:hover{background:#1d4ed8}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink2)}
+.btn.ghost:hover{background:#f1f4f9}
+.btn.sm{padding:3px 8px;font-size:11.5px;border-radius:6px}
+.btn.link{border:0;background:none;color:var(--accent);padding:0;font-size:12px}
+.btn.danger{color:#dc2626;border-color:#f3d0d0}
+.btn.danger:hover{background:#fef2f2}
+
+/* ---------- cards / layout ---------- */
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+.card + .card{margin-top:14px}
+.card-h{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.card-h h2{font-size:13.5px;margin:0;font-weight:600}
+.card-h .hint{color:var(--ink3);font-size:11.5px;font-weight:400}
+.card-h .spacer{flex:1}
+.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,.85fr);gap:14px;align-items:start}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:1180px){.grid-2{grid-template-columns:1fr}.grid-4{grid-template-columns:repeat(2,1fr)}}
+.stack{display:flex;flex-direction:column;gap:10px}
+
+/* ---------- stats ---------- */
+.stat{background:#fff;border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+.stat .lbl{color:var(--ink3);font-size:11.5px}
+.stat .val{font-size:21px;font-weight:700;letter-spacing:.5px;margin-top:2px}
+.stat .val small{font-size:11.5px;font-weight:400;color:var(--ink3);margin-left:4px}
+.stat.todo .val{color:#64748b}.stat.doing .val{color:#2563eb}
+.stat.done .val{color:#0f9d8c}.stat.paused .val{color:#b45309}
+
+/* ---------- chips & tags ---------- */
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:5px;padding:1px 6px;
+  border:1px solid transparent;white-space:nowrap}
+.chip.assign{background:#eef4ff;color:#1d4ed8;border-color:#dbe6ff}
+.chip.routine{background:#e8f7f4;color:#0b7a6d;border-color:#cfeee7}
+.chip.special{background:#f3edff;color:#6d28d9;border-color:#e6d9ff}
+.chip.temp{background:#fff4e3;color:#b45309;border-color:#f7e1bf}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:5px;padding:1px 7px;white-space:nowrap;
+  background:#f1f5f9;color:#475569;border:1px solid #e7ebf1}
+.tag.todo{background:#f1f5f9;color:#64748b;border-color:#e7ebf1}
+.tag.doing{background:#eef4ff;color:#1d4ed8;border-color:#dbe6ff}
+.tag.done{background:#e8f7f4;color:#0b7a6d;border-color:#cfeee7}
+.tag.paused{background:#fef3c7;color:#b45309;border-color:#f8e3b3}
+.tag.red{background:#fef2f2;color:#dc2626;border-color:#fbdcdc}
+.tag.warn{background:#fff7ed;color:#c2410c;border-color:#fed7aa}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+
+/* ---------- task rows ---------- */
+.tlist{display:flex;flex-direction:column}
+.trow{display:flex;gap:10px;align-items:flex-start;padding:10px 6px;border-bottom:1px dashed var(--line2);position:relative}
+.trow:last-child{border-bottom:0}
+.trow .bar{position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px}
+.trow .bar.assign{background:var(--assign)}.trow .bar.routine{background:var(--routine)}
+.trow .bar.special{background:var(--special)}.trow .bar.temp{background:var(--temp)}
+.trow .body{flex:1;min-width:0;padding-left:6px}
+.trow .t{font-size:13.5px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.trow .t b{font-weight:600}
+.trow.done .t b{color:var(--ink3);text-decoration:line-through}
+.trow .meta{color:var(--ink3);font-size:11.5px;display:flex;gap:10px;flex-wrap:wrap;margin-top:3px}
+.trow .right{display:flex;gap:6px;align-items:center}
+.cb{width:16px;height:16px;border:1.5px solid #cfd6e2;border-radius:5px;cursor:pointer;flex:0 0 16px;margin-top:2px;
+  display:grid;place-items:center;color:#fff;font-size:10px;transition:.12s}
+.cb:hover{border-color:var(--accent)}
+.cb.on{background:var(--ok);border-color:var(--ok)}
+
+/* ---------- table ---------- */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:500;color:var(--ink3);font-size:11.5px;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px;border-bottom:1px solid var(--line2);font-size:12.5px;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:#fafbfd}
+.prog{height:5px;border-radius:3px;background:#eef0f4;overflow:hidden;min-width:60px}
+.prog i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.prog i.g{background:var(--ok)}
+
+/* ---------- calendar ---------- */
+.cal-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.cal-head .m{font-size:15px;font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+.seg button{border:0;background:#fff;padding:5px 12px;font-size:12px;color:var(--ink2);cursor:pointer}
+.seg button.on{background:#eef4ff;color:#1d4ed8;font-weight:600}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cal .dow{background:#fafbfd;text-align:center;font-size:11.5px;color:var(--ink3);padding:7px 0}
+.cell{background:#fff;min-height:112px;padding:5px 6px;display:flex;flex-direction:column;gap:3px;position:relative;transition:background .12s}
+.cell.out{background:#fbfcfd}
+.cell.out .num{color:#c3c9d4}
+.cell.weekend{background:#fcfcfd}
+.cell.holiday{background:#f7f8fa}
+.cell.today{box-shadow:inset 0 0 0 2px #bfd3ff}
+.cell.drop-hot{background:#eef4ff}
+.cell .dhead{display:flex;align-items:center;gap:5px}
+.cell .num{font-size:12.5px;font-weight:600;color:var(--ink)}
+.cell.out .num{font-weight:400}
+.cell .num.sun{color:#c0392b}
+.cell .hol{font-size:10px;background:#fde8e8;color:#c0392b;border-radius:4px;padding:0 4px}
+.cell .mk{font-size:10px;background:#e8f7f4;color:#0b7a6d;border-radius:4px;padding:0 4px}
+.cell .todayb{font-size:10px;background:#2563eb;color:#fff;border-radius:4px;padding:0 4px}
+.cell .more{font-size:10.5px;color:var(--ink3)}
+.chip.cal{cursor:grab;max-width:100%;overflow:hidden;text-overflow:ellipsis;display:block}
+.chip.cal.adjusted{outline:1px dashed #b45309}
+.chip.dragging{opacity:.4}
+.chip.cal.donechip{opacity:.5;text-decoration:line-through}
+.cal-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--ink3);font-size:11.5px;align-items:center}
+.cal-legend span{display:inline-flex;align-items:center;gap:5px}
+
+/* ---------- drawer / modal ---------- */
+.overlay{position:fixed;inset:0;background:rgba(16,24,40,.34);opacity:0;pointer-events:none;transition:.18s;z-index:50}
+.overlay.show{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:460px;max-width:92vw;background:#fff;z-index:60;
+  transform:translateX(102%);transition:transform .2s ease;overflow:auto;box-shadow:-8px 0 30px rgba(16,24,40,.12)}
+.drawer.show{transform:none}
+.drawer .dh{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.drawer .db{padding:16px 18px 30px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:11.5px;color:var(--ink3);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;
+  font-size:12.5px;font-family:inherit;color:var(--ink);background:#fff;outline:none}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
+.field textarea{resize:vertical;min-height:64px}
+.field .row{display:flex;gap:8px}
+.modal-wrap{position:fixed;inset:0;display:none;place-items:center;z-index:70;background:rgba(16,24,40,.34);padding:20px}
+.modal-wrap.show{display:grid}
+.modal{background:#fff;border-radius:14px;width:560px;max-width:100%;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(16,24,40,.2)}
+.modal .mh{padding:16px 18px;border-bottom:1px solid var(--line);font-weight:600}
+.modal .mb{padding:16px 18px}
+.modal .mf{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#fff}
+.stage{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line2)}
+.stage .n{width:20px;height:20px;border-radius:50%;background:#eef0f4;color:var(--ink2);font-size:10.5px;display:grid;place-items:center;flex:0 0 20px}
+.stage.on .n{background:var(--ok);color:#fff}
+.stage .t{flex:1;min-width:0;font-size:12.5px}
+.stage .t small{display:block;color:var(--ink3);font-size:11px}
+.mrow{border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px;background:#fff}
+.mrow .sname{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;margin-bottom:6px;font-family:inherit;outline:none}
+.mrow .sname:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
+.mrow .row2{display:flex;gap:6px;align-items:center}
+.mrow .row2 .del{flex:0 0 20px}
+.mrow .row2 input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit;outline:none}
+.mrow .del{border:0;background:none;color:#b6bcc8;cursor:pointer;font-size:14px;padding:0 2px;line-height:1}
+.mrow .del:hover{color:#dc2626}
+.stage.done .t s{color:var(--ink3)}
+
+.toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,20px);background:#1b2230;color:#fff;
+  padding:9px 16px;border-radius:9px;font-size:12.5px;opacity:0;pointer-events:none;transition:.2s;z-index:90}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+.empty{color:var(--ink3);font-size:12.5px;padding:18px 4px;text-align:center}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px dashed var(--line2)}
+.kv:last-child{border-bottom:0}
+.kv span{color:var(--ink3);white-space:nowrap}
+.note{background:#f8fafc;border:1px dashed var(--line);border-radius:9px;padding:10px 12px;color:var(--ink2);font-size:11.5px;line-height:1.7}
+.rule-card{border:1px solid var(--line);border-radius:11px;padding:13px 14px;background:#fff}
+.rule-card + .rule-card{margin-top:10px}
+.mini{font-size:11.5px;color:var(--ink3)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.tabs button{border:0;background:none;padding:8px 12px;font-size:12.5px;color:var(--ink2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button.on{color:#1d4ed8;border-bottom-color:var(--accent);font-weight:600}
+.split{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+/* ---------- 宽弹窗 / 表单行 ---------- */
+.modal.wide{width:900px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.form-grid .span2{grid-column:1 / -1}
+.sec-title{font-size:12px;font-weight:600;color:var(--ink);margin:2px 0 10px;display:flex;align-items:center;gap:8px}
+.sec-title::after{content:"";flex:1;height:1px;background:var(--line2)}
+.form-col{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:#fcfdff}
+.srow{display:grid;grid-template-columns:1fr 96px 96px 88px 26px;gap:6px;align-items:center;margin-bottom:6px}
+.srow.s2{grid-template-columns:1fr 1fr 26px}
+.srow.noday{grid-template-columns:1fr 96px 88px 26px}
+.srow.smonth{grid-template-columns:1fr 74px 78px 92px 84px 26px}
+.step-lbl.smonth{grid-template-columns:1fr 74px 78px 92px 84px 26px;font-size:11px;color:var(--ink3);display:grid;gap:6px;margin-bottom:6px}
+.srow input,.srow select{border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;background:#fff;width:100%;outline:none;min-width:0}
+.srow input:focus,.srow select:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
+.srow .del{border:0;background:none;color:#b6bcc8;cursor:pointer;font-size:14px;line-height:1;padding:0}
+.srow .del:hover{color:#dc2626}
+.step-lbl{font-size:11px;color:var(--ink3);display:grid;grid-template-columns:1fr 96px 96px 88px 26px;gap:6px;margin-bottom:6px}
+.step-lbl.s2{grid-template-columns:1fr 1fr 26px}
+.node{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed var(--line2);font-size:12px}
+.node:last-child{border-bottom:0}
+.node .nd{width:82px;flex:0 0 82px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.node .nn{flex:1;min-width:0}
+.node .nn b{font-weight:600}
+.node .chg{color:#b45309;font-size:11px}
+.stagelist .sitem{display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:8px;background:#fff}
+.stagelist .sitem .nm{flex:1;min-width:0;font-size:12.5px}
+.stagelist .sitem .nm small{display:block;color:var(--ink3);font-size:11px}
+
+/* ---------- 登录 / 首次引导 ---------- */
+#auth{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;padding:26px;
+  background:radial-gradient(1100px 620px at 18% 8%,#eaf1ff 0%,#f8fafd 46%,#f5f8f5 100%)}
+#auth.show{display:flex}
+.auth-card{width:100%;max-width:900px;background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;
+  display:grid;grid-template-columns:1fr 1.06fr;box-shadow:0 30px 80px -38px rgba(23,43,77,.42)}
+.auth-left{padding:34px 32px;background:linear-gradient(165deg,#f4f7ff,#eef3fb);border-right:1px solid var(--line)}
+.auth-left .mark{width:34px;height:34px;border-radius:10px;background:#1d4ed8;color:#fff;display:flex;align-items:center;
+  justify-content:center;font-weight:700;font-size:15px;margin-bottom:16px}
+.auth-left h2{font-size:19px;color:var(--ink1);margin:0 0 6px;letter-spacing:.2px}
+.auth-left p.lead{font-size:12.5px;color:var(--ink3);line-height:1.75;margin:0 0 20px}
+.auth-left .pt{display:flex;gap:9px;font-size:12px;color:#41526a;margin-bottom:11px;line-height:1.6}
+.auth-left .pt i{flex:0 0 18px;height:18px;border-radius:5px;background:#dfe8fb;color:#1d4ed8;font-style:normal;font-size:10.5px;
+  display:flex;align-items:center;justify-content:center;font-weight:700;margin-top:1px}
+.auth-left .foot{font-size:11px;color:#93a1b5;margin-top:22px;padding-top:14px;border-top:1px dashed #dbe3f0;line-height:1.7}
+.auth-right{padding:34px 32px;display:flex;flex-direction:column}
+.auth-right .step{font-size:11px;color:#95a2b6;letter-spacing:.6px;margin-bottom:6px}
+.auth-right h3{font-size:15.5px;margin:0 0 4px;color:var(--ink1)}
+.auth-right .desc{font-size:12px;color:var(--ink3);margin:0 0 18px;line-height:1.7}
+.auth-field{margin-bottom:13px}
+.auth-field label{display:block;font-size:11.5px;color:#6b7a8f;margin-bottom:5px}
+.auth-field input{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit;outline:none;background:#fff}
+.auth-field input:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
+.auth-err{font-size:11.5px;color:#b91c1c;margin:-4px 0 10px;min-height:16px}
+.auth-right .actions{margin-top:auto;display:flex;gap:9px;align-items:center;padding-top:16px}
+.auth-right .actions .btn{flex:1;justify-content:center}
+.auth-right .actions .btn.ghost{border:1px solid var(--line);background:#fff}
+.auth-right .actions .btn.ghost:hover{border-color:#c9d8f5;background:#f7faff}
+.auth-hint{font-size:11px;color:#98a5b8;margin-top:12px;line-height:1.7}
+.mgr-list{max-height:246px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
+.mgr-item{display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid #f1f4f9;cursor:pointer}
+.mgr-item:last-child{border-bottom:0}
+.mgr-item:hover{background:#f7faff}
+.mgr-item.on{background:#eef4ff}
+.mgr-item .ava2{width:26px;height:26px;border-radius:8px;background:#e4ebf8;color:#3b5bab;font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:600;flex:0 0 26px}
+.mgr-item .who{flex:1;min-width:0}
+.mgr-item .who b{font-size:12.5px;display:block;color:var(--ink1)}
+.mgr-item .who small{font-size:11px;color:var(--ink3)}
+.mgr-item .pick{font-size:11px;color:#1d4ed8;opacity:0}
+
+/* ---------- 身份卡 / 关注折叠 ---------- */
+.user{display:flex;align-items:center;gap:9px;cursor:pointer}
+.user:hover .ava{background:#dbe7fb}
+.user .env{font-size:10.5px;color:#93a1b5;margin-top:1px}
+.tag-watch{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;border-radius:5px;padding:1px 6px;
+  background:#fff7ed;color:#b45309;border:1px solid #f4ddc0;cursor:pointer;user-select:none}
+.tag-watch.off{background:#f5f7fa;color:#8a99ad;border-color:#e7ebf1}
+.tag-watch:hover{filter:brightness(.97)}
+.rline{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;
+  background:#fff;margin-bottom:6px}
+.rline.open{border-color:#cddcf7;background:#fbfdff}
+.rline .rnm{flex:1;min-width:0;font-size:12.5px;color:var(--ink1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rline .rmeta{font-size:11px;color:var(--ink3);white-space:nowrap}
+.mnode{padding:2px 0 8px 34px}
+.mnode .nl{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#5c7083;padding:3px 0}
+.mnode .nl .dot{width:5px;height:5px;border-radius:50%;background:#cbd5e1;flex:0 0 5px}
+.mnode .nl.done{color:#9aa7b8;text-decoration:line-through}
+.mnode .nl.cur{color:#1d4ed8;font-weight:600}
+.mnode .nl.cur .dot{background:#1d4ed8;box-shadow:0 0 0 3px #e4edff}
+.curnode{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;background:#eef4ff;color:#1d4ed8;
+  border:1px solid #d8e5ff;border-radius:6px;padding:1px 7px;white-space:nowrap}
+.curnode.warn{background:#fff7ed;color:#b45309;border-color:#f4ddc0}
+.memrow{display:flex;align-items:center;gap:9px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#fff;margin-bottom:8px;cursor:pointer}
+.memrow:hover{border-color:#cfdcf2}
+.memrow.open{border-color:#cddcf7;background:#fbfdff}
+.memrow .ava3{width:28px;height:28px;border-radius:9px;background:#eef2fa;color:#3b5bab;font-weight:600;font-size:12px;display:flex;align-items:center;justify-content:center;flex:0 0 28px}
+.memrow .mwho{flex:1;min-width:0}
+.memrow .mwho b{font-size:12.5px}
+.mem-slot{padding-left:38px;margin-bottom:12px}
+.authkv{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin-top:2px}
+.authkv>div{display:flex;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line2);font-size:12.5px;align-items:baseline}
+.authkv>div:nth-last-child(-n+2){border-bottom:0}
+.authkv span{color:var(--ink3);flex:0 0 74px}
+.authkv b{color:var(--ink1);font-weight:600;min-width:0}
+.delbox p{margin:0 0 10px;font-size:13px;color:var(--ink1)}
+.delbox p b{color:var(--ink1);font-weight:600}
+.delbox em{font-style:normal;color:#dc2626;font-weight:700;font-size:14px}
+.rdopt{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:.15s}
+.rdopt:hover{border-color:#c9d8f5;background:#f8fbff}
+.rdopt input{margin-top:2px;accent-color:#2b6cf6}
+.rdopt span{display:flex;flex-direction:column;gap:3px;font-size:12.5px;line-height:1.45}
+.rdopt i{font-style:normal;color:var(--ink3);font-size:11.5px}
+.noauth-bar{display:flex;align-items:center;gap:8px;font-size:12px;background:#fff7ed;border:1px solid #f4ddc0;
+  color:#9a5b12;border-radius:9px;padding:8px 11px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div id="auth">
+  <div class="auth-card">
+    <div class="auth-left">
+      <div class="mark">台</div>
+      <h2>工作台 · 初级管理者</h2>
+      <p class="lead">把下发任务、常规节点、专项拆解和日历待办放在同一个界面，不再靠追问和周会同步进度。</p>
+      <div class="pt"><i>1</i><div><b>你的今日待办</b>：上级派的、自己的、常规该做的，都在一处</div></div>
+      <div class="pt"><i>2</i><div><b>你下发的任务</b>：只进组员的日历，不占用你的日程</div></div>
+      <div class="pt"><i>3</i><div><b>下属的常规工作</b>：默认只看汇总，想看细节再「关注」</div></div>
+      <div class="pt"><i>4</i><div><b>承接上级任务</b>：接收 → 拆分 → 转专项或临时</div></div>
+      <div class="foot">一期使用<b>工号 + 姓名</b>登录（免密码），工号需与花名册一致。<br/>汇报关系由本人首次登录时选择，一个直属上级。</div>
+    </div>
+    <div class="auth-right" id="authBody"></div>
+  </div>
+</div>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="mark">台</div>
+      <div><b>工作台</b><small>初级管理者 · 原型 v0.9</small></div>
+    </div>
+    <nav id="nav">
+      <div class="nav-group">我的工作</div>
+      <div class="nav-item" data-view="today"><span class="ic">◉</span>今日待办</div>
+      <div class="nav-item" data-view="assign"><span class="ic">▤</span>任务制定</div>
+      <div class="nav-item" data-view="routine"><span class="ic">↻</span>常规工作</div>
+      <div class="nav-item" data-view="special"><span class="ic">◆</span>专项工作</div>
+      <div class="nav-group">协同与计划</div>
+      <div class="nav-item" data-view="intake"><span class="ic">⌥</span>任务承接台<span class="badge" id="intakeBadge" style="display:none"></span></div>
+      <div class="nav-item" data-view="calendar"><span class="ic">▦</span>日历待办</div>
+      <div class="nav-group">配置</div>
+      <div class="nav-item" data-view="settings"><span class="ic">⚙</span>设置</div>
+    </nav>
+    <div class="side-foot">
+      <div class="user" data-act="switch-user" title="切换账号（演示）">
+        <div class="ava" id="meAva">磊</div>
+        <div><b id="meName">王磊</b><small id="meMeta">产品部 · 产品组组长</small>
+          <div class="env" id="meMgr">上级：张启明</div></div>
+      </div>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="split">
+        <h1 id="pageTitle">今日待办</h1>
+        <span class="sub" id="pageSub"></span>
+      </div>
+      <div class="spacer"></div>
+      <span class="pill" id="workdayPill"></span>
+      <button class="btn ghost" data-act="reset">重置演示数据</button>
+      <button class="btn primary" data-act="quick-new">+ 新建任务</button>
+    </header>
+    <div class="content" id="view"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer"></aside>
+<div class="modal-wrap" id="modalWrap"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ 基础工具 ============ */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const pad = n => String(n).padStart(2, '0');
+const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parse = s => { const [a, b, c] = s.split('-').map(Number); return new Date(a, b - 1, c); };
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 86400000);
+const dow = s => parse(s).getDay();
+const DOW_CN = ['日', '一', '二', '三', '四', '五', '六'];
+const fmt = s => { const d = parse(s); return `${d.getMonth() + 1}月${d.getDate()}日`; };
+const fmtFull = s => { const d = parse(s); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 周${DOW_CN[d.getDay()]}`; };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
+const uid = p => p + Math.random().toString(36).slice(2, 8);
+const monthStart = s => { const d = parse(s); return iso(new Date(d.getFullYear(), d.getMonth(), 1)); };
+const monthEnd = s => { const d = parse(s); return iso(new Date(d.getFullYear(), d.getMonth() + 1, 0)); };
+
+const TODAY = iso(new Date());
+
+/* ============ 节假日（2026 示例配置，正式版由后台维护 / 对接国家放假安排） ============ */
+const HOL_CFG = [
+  { name: '元旦', from: '2026-01-01', to: '2026-01-03' },
+  { name: '春节', from: '2026-02-15', to: '2026-02-21' },
+  { name: '清明', from: '2026-04-04', to: '2026-04-06' },
+  { name: '劳动节', from: '2026-05-01', to: '2026-05-05' },
+  { name: '端午', from: '2026-06-19', to: '2026-06-21' },
+  { name: '中秋', from: '2026-09-25', to: '2026-09-27' },
+  { name: '国庆', from: '2026-10-01', to: '2026-10-07' }
+];
+const MAKEUP = ['2026-02-14', '2026-02-28', '2026-04-26', '2026-05-09', '2026-09-28', '2026-10-10'];
+const HOL = {}; // date -> holiday name
+HOL_CFG.forEach(h => { let d = h.from; let i = 0; while (d <= h.to && i < 40) { HOL[d] = h.name; d = addDays(d, 1); i++; } });
+const MK = {}; MAKEUP.forEach(d => MK[d] = '补班');
+
+const isHoliday = s => !!HOL[s];
+const isMakeup = s => !!MK[s];
+const isWorkday = s => isMakeup(s) ? true : (isHoliday(s) ? false : (dow(s) !== 0 && dow(s) !== 6));
+function shiftDay(s, policy) {
+  if (policy === 'none') return s;
+  if (isWorkday(s)) return s;
+  let d = s, i = 0;
+  const step = policy === 'next' ? 1 : -1;
+  while (!isWorkday(d) && i < 15) { d = addDays(d, step); i++; }
+  return d;
+}
+
+/* ============ 常量 ============ */
+const TYPES = {
+  assign: { name: '任务制定', cls: 'assign' },
+  routine: { name: '常规任务', cls: 'routine' },
+  special: { name: '专项任务', cls: 'special' },
+  temp: { name: '临时任务', cls: 'temp' }
+};
+const ST = {
+  todo: { name: '待开展', cls: 'todo' },
+  doing: { name: '进行中', cls: 'doing' },
+  done: { name: '已完成', cls: 'done' },
+  paused: { name: '暂缓', cls: 'paused' }
+};
+const LV = { 3: '高', 2: '中', 1: '低' };
+const TITLES = {
+  today: '今日待办', assign: '任务制定', routine: '常规工作', special: '专项工作',
+  intake: '任务承接台', calendar: '日历待办', settings: '设置'
+};
+
+/* ============ 状态 ============ */
+const KEY = 'wb_pm_proto_v2';
+
+/* ============ 账号与汇报关系（一期口径：工号 + 姓名登录；一个直属上级） ============ */
+const ROSTER = [
+  { no: '1012', name: '王磊', role: '产品组组长', dept: '产品部' },
+  { no: '1001', name: '张启明', role: '部门经理', dept: '产品部' },
+  { no: '1002', name: '李明', role: '产品经理', dept: '产品部' },
+  { no: '1003', name: '陈静', role: '数据分析', dept: '产品部' },
+  { no: '1004', name: '王浩', role: '研发工程师', dept: '产品部' },
+  { no: '1005', name: '赵敏', role: '运营', dept: '产品部' },
+  { no: '1101', name: '吴敏', role: '人力资源总监', dept: '人力资源部' },
+  { no: '1102', name: '陈国栋', role: '运营总监', dept: '运营中心' }
+];
+let authStep = 'login', authPick = null, authKw = '';
+
+function mgrListHTML(kw) {
+  const me = S.me || {};
+  const list = ROSTER.filter(p => p.no !== me.no && (!kw || p.name.indexOf(kw) >= 0 || p.no.indexOf(kw) >= 0));
+  if (!list.length) return '<div class="empty" style="padding:20px">没有匹配的人，换个关键字</div>';
+  return list.map(p => `<div class="mgr-item ${authPick && authPick.no === p.no ? 'on' : ''}" data-act="pick-mgr" data-no="${p.no}">
+    <div class="ava2">${esc(p.name.slice(-1))}</div>
+    <div class="who"><b>${esc(p.name)}</b><small>${esc(p.dept)} · ${esc(p.role)} · ${esc(p.no)}</small></div>
+    <span class="pick" style="opacity:${authPick && authPick.no === p.no ? 1 : 0}">已选</span>
+  </div>`).join('');
+}
+function authRender(msg) {
+  $('#auth').classList.add('show');
+  const body = $('#authBody');
+  if (authStep === 'login') {
+    body.innerHTML = `
+      <div class="step">STEP 1 / 2 · 身份校验</div>
+      <h3>登录</h3>
+      <p class="desc">填写工号与姓名，两者需与花名册一致。一期不设密码，仅用于试点期。</p>
+      <div class="auth-field"><label>工号</label><input id="a_no" placeholder="例如 1012" value="1012"/></div>
+      <div class="auth-field"><label>姓名</label><input id="a_name" placeholder="与花名册一致" value="王磊"/></div>
+      <div class="auth-err" id="a_err">${msg || ''}</div>
+      <div class="actions"><button class="btn primary" data-act="do-login">进入工作台</button></div>
+      <div class="auth-hint">花名册演示数据：1012 王磊 · 1001 张启明 · 1101 吴敏。改成不存在的工号，可看到校验拦截。<br/>
+        一期仅站内使用：不做邮件、不做企业微信、不做手机推送。</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="step">STEP 2 / 2 · 汇报关系</div>
+    <h3>选择你的直属上级</h3>
+    <p class="desc">一个账号只有一个直属上级，用于下发任务、承接上级任务与可见范围。可搜索工号或姓名。</p>
+    <div class="auth-field" style="margin-bottom:9px"><input id="a_kw" placeholder="搜索工号 / 姓名" value="${esc(authKw)}"/></div>
+    <div class="mgr-list" id="mgrList">${mgrListHTML(authKw)}</div>
+    <div class="auth-err" id="a_err">${msg || ''}</div>
+    <div class="actions">
+      <button class="btn ghost" data-act="skip-mgr">暂时跳过</button>
+      <button class="btn primary" data-act="confirm-mgr">确定</button>
+    </div>
+    <div class="auth-hint">暂不设置也能用：今日待办、常规、专项、临时任务、日历都正常；只是「下发任务」和「任务承接台」会锁住。
+      ${S.me ? `<br/><span style="color:#7b8a9d">当前身份：${esc(S.me.name)} · ${esc(S.me.no)}</span>
+      <span class="btn link" data-act="close-auth" style="margin-left:6px">返回工作台</span>` : ''}</div>`;
+}
+function doLogin() {
+  const no = ($('#a_no').value || '').trim();
+  const name = ($('#a_name').value || '').trim();
+  if (!no || !name) return authRender('工号和姓名都要填');
+  const hit = ROSTER.find(p => p.no === no);
+  if (!hit) return authRender(`花名册里没有工号「${no}」，请与管理员核对`);
+  if (hit.name !== name) return authRender(`工号「${no}」对应的姓名不是「${name}」，请核对后再登录`);
+  if (!S.me || S.me.no !== no) S.me = { no, name: hit.name, role: hit.role, dept: hit.dept, mgr: null };
+  save();
+  authStep = 'mgr'; authPick = null; authKw = '';
+  authRender();
+}
+function finishAuth(tip) {
+  save();
+  $('#auth').classList.remove('show');
+  render();
+  if (tip) toast(tip);
+}
+function renderMe() {
+  const me = S.me;
+  if (!me) return;
+  $('#meAva').textContent = me.name.slice(-1);
+  $('#meName').textContent = me.name;
+  $('#meMeta').textContent = `${me.dept} · ${me.role} · ${me.no}`;
+  const m = $('#meMgr');
+  m.textContent = me.mgr ? '上级：' + me.mgr.name : '上级：未设置 · 点此设置';
+  m.style.color = me.mgr ? '' : '#b45309';
+}
+/* 未设置上级时的锁定提示条 */
+function noMgrBar(what) {
+  if (S.me && S.me.mgr) return '';
+  return `<div class="noauth-bar">⚠ 你还没有设置直属上级，「${what}」暂不可用。
+    <span class="btn link" data-act="open-mgr">去设置</span></div>`;
+}
+
+let S = null, view = 'today', calCursor = monthStart(TODAY), calMode = 'month', selDay = TODAY;
+let routineTab = 'month';
+
+function load() {
+  try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch (e) { }
+  return null;
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { } }
+
+function seed() {
+  const d = n => addDays(TODAY, n);
+  return {
+    me: null,
+    watch: {},
+    cats: [
+      { id: 'c1', name: '部门管理', children: [{ id: 'c11', name: '例会与汇报' }, { id: 'c12', name: '人员与考勤' }, { id: 'c13', name: '团队建设' }] },
+      { id: 'c2', name: '业务交付', children: [{ id: 'c21', name: '需求与评审' }, { id: 'c22', name: '数据与报表' }, { id: 'c23', name: '客户与商机' }] },
+      { id: 'c3', name: '其他', children: [{ id: 'c31', name: '临时事项' }] }
+    ],
+    members: [
+      {
+        id: 'm1', name: '李明', role: '产品经理', todayDone: 2, todayTotal: 3, weekRate: 82, alert: '本周周报未提交',
+        routines: [
+          { id: 'mr11', title: '每日站会记录', cycle: 'day', weekDone: 5, weekTotal: 5, lastDone: d(0), nodes: [{ name: '记录并同步', date: d(0), done: true }] },
+          { id: 'mr12', title: '周报汇总与提交', cycle: 'week', weekDone: 0, weekTotal: 1, lastDone: d(-7), nodes: [{ name: '汇总并提交上级', date: d(-2), done: false }] }
+        ]
+      },
+      {
+        id: 'm2', name: '陈静', role: '数据分析', todayDone: 3, todayTotal: 3, weekRate: 95, alert: '',
+        routines: [
+          { id: 'mr21', title: '数据日报', cycle: 'day', weekDone: 5, weekTotal: 5, lastDone: d(0), nodes: [{ name: '出日报并推送', date: d(0), done: true }] },
+          { id: 'mr22', title: '月度经营分析', cycle: 'month', weekDone: 2, weekTotal: 4, lastDone: d(-4), nodes: [
+            { name: '取数与口径确认', date: d(-9), done: true },
+            { name: '分析初稿撰写', date: d(-4), done: true },
+            { name: '经营会评审', date: d(2), done: false },
+            { name: '归档与复盘', date: d(6), done: false }
+          ] }
+        ]
+      },
+      {
+        id: 'm3', name: '王浩', role: '研发', todayDone: 1, todayTotal: 2, weekRate: 64, alert: '专项阶段二延期 2 天',
+        routines: [
+          { id: 'mr31', title: '每日构建巡检', cycle: 'day', weekDone: 4, weekTotal: 5, lastDone: d(-1), nodes: [{ name: '巡检并记录', date: d(0), done: false }] },
+          { id: 'mr32', title: '迭代评审会', cycle: 'week', weekDone: 1, weekTotal: 1, lastDone: d(-3), nodes: [{ name: '组织评审', date: d(-3), done: true }] }
+        ]
+      },
+      {
+        id: 'm4', name: '赵敏', role: '运营', todayDone: 0, todayTotal: 2, weekRate: 48, alert: '连续 2 日常规未确认',
+        routines: [
+          { id: 'mr41', title: '运营日报', cycle: 'day', weekDone: 2, weekTotal: 5, lastDone: d(-2), nodes: [{ name: '出日报', date: d(0), done: false }] },
+          { id: 'mr42', title: '月度活动复盘', cycle: 'month', weekDone: 1, weekTotal: 3, lastDone: d(-12), nodes: [
+            { name: '活动数据汇总', date: d(-12), done: true },
+            { name: '效果分析', date: d(-6), done: false },
+            { name: '复盘会与改进项', date: d(1), done: false }
+          ] }
+        ]
+      }
+    ],
+    rules: [
+      { id: 'r1', title: '部门晨会', cycle: 'day', policy: 'none', cat1: 'c1', cat2: 'c11', active: true, steps: [{ name: '', time: '09:00' }] },
+      { id: 'r2', title: '部门周会', cycle: 'week', policy: 'prev', cat1: 'c1', cat2: 'c11', active: true, steps: [{ name: '', weekday: 1, time: '10:00' }] },
+      { id: 'r3', title: '周报汇总与提交', cycle: 'week', policy: 'prev', cat1: 'c1', cat2: 'c11', active: true, steps: [{ name: '', weekday: 5, time: '16:30' }] },
+      { id: 'r4', title: '月度考勤核对', cycle: 'month', policy: 'prev', cat1: 'c1', cat2: 'c12', active: true, steps: [{ name: '', day: 5, time: '09:30' }] },
+      { id: 'r5', title: '月度绩效预评', cycle: 'month', policy: 'next', cat1: 'c1', cat2: 'c12', active: true, steps: [{ name: '', day: 25, time: '14:00' }] },
+      {
+        id: 'r6', title: '月度薪酬工作', cycle: 'month', policy: 'prev', cat1: 'c1', cat2: 'c12', active: true,
+        steps: [
+          { name: '核薪邮件发送', day: 28, mo: 0, time: '10:00', policy: 'prev' },
+          { name: '工资初稿提交', day: 1, mo: 1, time: '17:00', policy: 'prev' },
+          { name: '绩效分析会', day: 10, mo: 1, time: '14:00', policy: 'next' },
+          { name: '工资发放确认', day: 15, mo: 1, time: '10:00', policy: 'prev' }
+        ]
+      }
+    ],
+    tasks: [
+      {
+        id: 't1', type: 'assign', title: '季度经营分析报告', owner: '我', assignee: '陈静',
+        start: d(-6), end: d(4), std: '输出 30 页分析报告并通过经营会评审', status: 'doing',
+        cat1: 'c2', cat2: 'c22', imp: 3, urg: 3,
+        stages: [
+          { name: '数据口径确认与取数', start: d(-6), end: d(-2), done: true },
+          { name: '报告初稿撰写', start: d(-1), end: d(2), done: false },
+          { name: '经营会评审与修订', start: d(3), end: d(4), done: false }
+        ]
+      },
+      {
+        id: 't2', type: 'assign', title: 'Top10 客户续约拜访计划', owner: '我', assignee: '李明',
+        start: d(-3), end: d(7), std: '覆盖 Top10 客户，输出拜访排期与风险清单', status: 'doing',
+        cat1: 'c2', cat2: 'c23', imp: 3, urg: 2,
+        stages: [{ name: '客户清单与优先级', start: d(-3), end: d(-1), done: true }, { name: '拜访排期确认', start: TODAY, end: d(3), done: false }, { name: '风险清单输出', start: d(4), end: d(7), done: false }]
+      },
+      {
+        id: 't3', type: 'assign', title: '新人 30 天带教计划落地', owner: '我', assignee: '赵敏',
+        start: d(-10), end: d(20), std: '新人独立承接 1 个模块需求并通过转正评估', status: 'todo',
+        cat1: 'c1', cat2: 'c13', imp: 2, urg: 1, stages: []
+      },
+      {
+        id: 't4', type: 'assign', title: 'Q3 团队复盘会', owner: '我', assignee: '王浩',
+        start: d(-22), end: d(-12), std: '产出 3 条可执行改进项并落到 Q4 计划', status: 'done',
+        cat1: 'c1', cat2: 'c11', imp: 2, urg: 2, stages: []
+      },
+      {
+        id: 't5', type: 'special', title: '部门数据看板建设', owner: '我', assignee: '我',
+        start: d(-15), end: d(15), std: '看板覆盖 6 个核心指标，日更可用', status: 'doing',
+        cat1: 'c2', cat2: 'c22', imp: 3, urg: 2,
+        stages: [
+          { name: '需求梳理与指标定义', start: d(-15), end: d(-9), done: true },
+          { name: '数据源接入', start: d(-8), end: d(-2), done: true },
+          { name: '看板搭建与试运行', start: d(-1), end: d(8), done: false },
+          { name: '验收与推广', start: d(9), end: d(15), done: false }
+        ]
+      },
+      {
+        id: 't6', type: 'special', title: '部门制度修订（考核细则）', owner: '我', assignee: '我',
+        start: d(2), end: d(25), std: '形成修订稿并通过部门会签', status: 'todo',
+        cat1: 'c1', cat2: 'c12', imp: 2, urg: 1,
+        stages: [{ name: '问题清单收集', start: d(2), end: d(9), done: false }, { name: '细则起草', start: d(10), end: d(18), done: false }, { name: '会签与发布', start: d(19), end: d(25), done: false }]
+      },
+      {
+        id: 't7', type: 'temp', title: '回复客户续约邮件', owner: '我', assignee: '我',
+        start: TODAY, end: TODAY, time: '16:00', std: '', status: 'todo',
+        cat1: 'c3', cat2: 'c31', imp: null, urg: 3
+      },
+      {
+        id: 't8', type: 'temp', title: '采购团建物资', owner: '我', assignee: '我',
+        start: d(1), end: d(1), std: '', status: 'todo', cat1: 'c3', cat2: 'c31'
+      }
+    ],
+    intake: [
+      { id: 'i1', title: 'Q4 客户续约专项', from: '张总（事业部总监）', due: d(5), std: '完成 Top20 客户续约方案并提交', note: '需拆到人到周，每周五同步进展', status: 'pending' },
+      { id: 'i2', title: '年度预算初稿编制', from: '张总（事业部总监）', due: d(12), std: '提交部门预算初稿（含人力与项目投入）', note: '与财务模板对齐口径', status: 'pending' },
+      { id: 'i3', title: '组织架构调整沟通', from: '人力资源部', due: d(8), std: '完成组内 1v1 沟通并反馈纪要', note: '', status: 'pending' }
+    ]
+  };
+}
+
+/* ============ 常规工作 → 周期实例 ============ */
+/* 规则 = 一个周期内的一组节点；单节点规则退化为「一次性事件」样式 */
+function ruleSteps(r) {
+  if (r.steps && r.steps.length) return r.steps;
+  return [{ name: '', day: r.day, weekday: r.weekday, time: r.time }];
+}
+const ruleDefaultPolicy = r => r.policy || 'prev';
+
+/* 把一个时间区间切成周期：日 / 周（周一起）/ 月 */
+function cyclesBetween(r, a, b) {
+  const out = [];
+  if (r.cycle === 'day') {
+    let d = a, guard = 0;
+    while (d <= b && guard < 500) { out.push({ key: d, from: d, to: d, anchor: d }); d = addDays(d, 1); guard++; }
+    return out;
+  }
+  if (r.cycle === 'week') {
+    let mon = addDays(a, -((dow(a) + 6) % 7)), guard = 0;
+    while (mon <= b && guard < 200) {
+      out.push({ key: mon, from: mon, to: addDays(mon, 6), anchor: mon });
+      mon = addDays(mon, 7); guard++;
+    }
+    return out;
+  }
+  let m = monthStart(a), guard = 0;
+  while (m <= b && guard < 60) {
+    out.push({ key: m.slice(0, 7), from: m, to: monthEnd(m), anchor: m });
+    const y = parse(m).getFullYear(), mm = parse(m).getMonth() + 1;
+    m = iso(new Date(y, mm, 1)); guard++;
+  }
+  return out;
+}
+
+/* 计算某周期里某个节点的「计划日 → 实际日」 */
+function stepPlanDate(r, s, c) {
+  if (r.cycle === 'day') return c.anchor;
+  if (r.cycle === 'week') {
+    const wd = Number(s.weekday != null ? s.weekday : 1);
+    const offset = (wd + 6) % 7;
+    return addDays(c.from, offset);
+  }
+  const d = parse(c.from);
+  const mo = Number(s.mo || 0);            /* 0 = 本月，1 = 次月：支持跨月周期 */
+  const base = new Date(d.getFullYear(), d.getMonth() + mo, 1);
+  const dim = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  const day = Math.min(Number(s.day || 1), dim);
+  return iso(new Date(base.getFullYear(), base.getMonth(), day));
+}
+
+function ensureRoutines(a, b) {
+  S.rules.filter(r => r.active).forEach(r => {
+    const steps = ruleSteps(r);
+    cyclesBetween(r, a, b).forEach(c => {
+      const id = 'ri_' + r.id + '_' + c.key;
+      if (S.tasks.some(t => t.id === id)) return;
+      const built = [];
+      steps.forEach(s => {
+        const plan = stepPlanDate(r, s, c);
+        const pol = s.policy || ruleDefaultPolicy(r);
+        if (!isWorkday(plan) && pol === 'none') return;
+        const actual = r.cycle === 'day' ? plan : shiftDay(plan, pol);
+        built.push({ name: s.name || '', plan, date: actual, time: s.time || '', done: false, mo: Number(s.mo || 0) });
+      });
+      if (!built.length) return;
+      built.sort((x, y) => x.plan < y.plan ? -1 : 1);
+      const dates = built.map(x => x.date).sort();
+      S.tasks.push({
+        id, type: 'routine', routineId: r.id, title: r.title, owner: '我', assignee: '我',
+        start: dates[0], end: dates[dates.length - 1], planDate: built[0].plan,
+        time: built.length === 1 ? built[0].time : '', status: 'todo',
+        cat1: r.cat1, cat2: r.cat2, auto: true,
+        steps: built.length > 1 ? built : []
+      });
+    });
+  });
+}
+
+/* 某规则生成的全部实例（含历史） */
+function ruleInstanceCount(ruleId) {
+  const list = S.tasks.filter(t => t.routineId === ruleId);
+  return { total: list.length, open: list.filter(t => t.status !== 'done').length };
+}
+/* 清空某规则生成的全部实例，返回删除条数 */
+function clearRuleInstances(ruleId) {
+  const n = S.tasks.filter(t => t.routineId === ruleId).length;
+  S.tasks = S.tasks.filter(t => t.routineId !== ruleId);
+  return n;
+}
+/* 数据自愈：规则已被删除，但它生成的实例还在（旧版本删规则不联动造成） */
+function pruneOrphanRoutines() {
+  const ids = new Set(S.rules.map(r => r.id));
+  const before = S.tasks.length;
+  S.tasks = S.tasks.filter(t => !(t.type === 'routine' && t.routineId && !t.detached && !ids.has(t.routineId)));
+  return before - S.tasks.length;
+}
+
+/* 规则改了：本月及以后、未完成的实例重建；历史与已完成保留；已勾选的节点按名称恢复 */
+function regenRule(ruleId) {
+  const thisMonth = TODAY.slice(0, 7);
+  const doneNames = new Set();
+  S.tasks.forEach(t => {
+    if (t.routineId !== ruleId || t.status === 'done') return;
+    (t.steps || []).forEach(st => { if (st.done) doneNames.add(st.name || ''); });
+  });
+  S.tasks = S.tasks.filter(t => {
+    if (t.routineId !== ruleId) return true;
+    /* 本月及以后一律重排：周期边界可能被规则改动（如 5 日起变成 28 日起），旧排期不再成立 */
+    return (t.planDate || t.start || '').slice(0, 7) < thisMonth;
+  });
+  ensureRoutines(monthStart(addDays(TODAY, -3)), addDays(TODAY, 80));
+  if (doneNames.size) {
+    S.tasks.forEach(t => {
+      if (t.routineId !== ruleId || !t.steps || !t.steps.length) return;
+      /* 只恢复「已经过去」的节点，避免新排期里的未来节点被误标成已完成 */
+      t.steps.forEach(st => {
+        if (!st.done && st.date <= TODAY && doneNames.has(st.name || '')) st.done = true;
+      });
+      t.status = t.steps.every(x => x.done) ? 'done' : 'doing';
+    });
+  }
+}
+
+/* ============ 数据查询 ============ */
+const catName = (c1, c2) => {
+  const p = S.cats.find(c => c.id === c1);
+  const k = p && (p.children || []).find(x => x.id === c2);
+  return [p ? p.name : '未分类', k ? k.name : ''].filter(Boolean).join(' / ');
+};
+const cat1Name = id => (S.cats.find(c => c.id === id) || {}).name || '未分类';
+const prioScore = t => {
+  const a = t.imp || 0, b = t.urg || 0;
+  return a + b;
+};
+const prioLabel = t => {
+  const s = prioScore(t);
+  if (!t.imp && !t.urg) return null;
+  return s >= 5 ? 'P0' : s >= 4 ? 'P1' : s >= 3 ? 'P2' : 'P3';
+};
+/* 下属执行的下发任务不进管理者的待办与日历，只在「任务制定」里看进展 */
+const isMineTask = t => !(t.type === 'assign' && t.assignee && t.assignee !== '我');
+
+/* 某一天真正要做的「发生项」：多节点常规工作按节点拆开 */
+function occOn(date, mode) {
+  const out = [];
+  S.tasks.forEach(t => {
+    if (!isMineTask(t)) return;
+    if (t.type === 'routine' && t.steps && t.steps.length) {
+      t.steps.forEach((s, i) => { if (s.date === date) out.push({ t, step: s, si: i }); });
+      return;
+    }
+    if (t.start <= date && t.end >= date) {
+      /* 日历格子里，多日任务只标首尾两天，中间不重复刷屏 */
+      if (mode === 'ends' && t.type !== 'routine' && t.start !== t.end && date !== t.start && date !== t.end) return;
+      out.push({ t, step: null, si: -1 });
+    }
+  });
+  return out;
+}
+function sortOcc(list) {
+  return [...list].sort((a, b) => {
+    const pa = prioScore(a.t), pb = prioScore(b.t);
+    if (pb !== pa) return pb - pa;
+    const ta = (a.step && a.step.time) || a.t.time || '99';
+    const tb = (b.step && b.step.time) || b.t.time || '99';
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    return a.t.start < b.t.start ? -1 : 1;
+  });
+}
+const todayTasks = () => sortOcc(occOn(TODAY, 'all'));
+
+function sortTasks(list) {
+  return [...list].sort((a, b) => {
+    const pa = prioScore(a), pb = prioScore(b);
+    if (pb !== pa) return pb - pa;
+    if ((a.time || '99') !== (b.time || '99')) return (a.time || '99') < (b.time || '99') ? -1 : 1;
+    return a.start < b.start ? -1 : 1;
+  });
+}
+const taskProg = t => {
+  if (t.type === 'routine') return t.status === 'done' ? 100 : 0;
+  if (t.stages && t.stages.length) {
+    const n = t.stages.filter(s => s.done).length;
+    return Math.round(n / t.stages.length * 100);
+  }
+  return t.status === 'done' ? 100 : t.status === 'doing' ? 50 : 0;
+};
+const overdue = t => t.status !== 'done' && t.end < TODAY;
+/* ============ 通用组件 ============ */
+function typeChip(t) { return `<span class="chip ${t.type}">${TYPES[t.type].name}</span>`; }
+function stTag(status) { return `<span class="tag ${ST[status].cls}">${ST[status].name}</span>`; }
+function prioBadge(t) {
+  const p = prioLabel(t);
+  if (!p) return '';
+  return `<span class="tag ${p === 'P0' ? 'red' : ''}">${p}</span>`;
+}
+function taskRow(t, step, si) {
+  const done = step ? step.done : t.status === 'done';
+  const delay = !step && t.auto && t.planDate && t.planDate !== t.start;
+  const time = (step && step.time) || t.time;
+  const title = step && step.name ? `${t.title} · ${step.name}` : t.title;
+  const late = step ? (!step.done && step.date < TODAY) : overdue(t);
+  return `<div class="trow ${done ? 'done' : ''}">
+    <span class="bar ${t.type}"></span>
+    <div class="cb ${done ? 'on' : ''}" data-act="${step ? 'toggle-step' : 'toggle'}" data-id="${t.id}"${step ? ` data-idx="${si}"` : ''}>${done ? '✓' : ''}</div>
+    <div class="body">
+      <div class="t"><b>${esc(title)}</b>${typeChip(t)}
+        ${step ? (si + 1) + '/' + t.steps.length + ' 节点' : ST[t.status].name}
+        ${prioBadge(t)}
+        ${delay ? '<span class="tag" title="按规则调整过日期">日期已调整</span>' : ''}
+        ${late ? '<span class="tag red">已逾期</span>' : ''}</div>
+      <div class="meta">
+        <span>${time ? time + ' · ' : ''}${t.start === t.end ? fmt(t.start) : fmt(t.start) + ' → ' + fmt(t.end)}</span>
+        ${t.assignee && t.assignee !== '我' ? `<span>承接：${esc(t.assignee)}</span>` : ''}
+        <span>${catName(t.cat1, t.cat2)}</span>
+      </div>
+    </div>
+    <div class="right"><button class="btn sm ghost" data-act="open" data-id="${t.id}">详情</button></div>
+  </div>`;
+}
+function statCard(cls, label, n, extra) {
+  return `<div class="stat ${cls}"><div class="lbl">${label}</div><div class="val">${n}${extra ? `<small>${extra}</small>` : ''}</div></div>`;
+}
+
+/* ============ 视图：今日待办 ============ */
+function viewToday() {
+  const mine = S.tasks.filter(t => isMineTask(t) && t.end >= addDays(TODAY, -30));
+  const list = todayTasks();
+  const doneN = list.filter(o => o.step ? o.step.done : o.t.status === 'done').length;
+  const cnt = { todo: 0, doing: 0, done: 0, paused: 0 };
+  mine.filter(t => t.type !== 'routine').forEach(t => cnt[t.status]++);
+  const soon = sortTasks(mine.filter(t => t.type !== 'routine' && t.status !== 'done' && t.end >= TODAY && diffDays(t.end, TODAY) <= 3));
+  const pending = S.intake.filter(i => i.status === 'pending');
+  const pendingDone = S.members.reduce((a, m) => a + m.todayDone, 0);
+  const pendingTotal = S.members.reduce((a, m) => a + m.todayTotal, 0);
+
+  return `<div class="grid-2">
+    <div>
+      <div class="card">
+        <div class="card-h">
+          <h2>${fmtFull(TODAY)}</h2>
+          <span class="hint">${isWorkday(TODAY) ? '工作日' : '非工作日'} · 今日待办 ${doneN}/${list.length}</span>
+          <div class="spacer"></div>
+          <span class="mini">按优先级与时间排序</span>
+        </div>
+        <form class="split" id="quickForm" style="margin-bottom:10px">
+          <input id="qTitle" placeholder="新建临时任务，回车即创建…" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none"/>
+          <input type="time" id="qTime" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
+          <button class="btn primary" type="submit">+ 临时任务</button>
+        </form>
+        <div class="tlist">
+          ${list.length ? list.map(o => taskRow(o.t, o.step, o.si)).join('') : '<div class="empty">今天还没有安排，先加一条临时任务？</div>'}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h2>下属常规工作推进</h2><span class="hint">今日完成 ${pendingDone}/${pendingTotal}</span>
+          <div class="spacer"></div><button class="btn sm ghost" data-act="go" data-view="assign">查看全部</button></div>
+        <table>
+          <thead><tr><th>成员</th><th>今日完成</th><th>本周达成率</th><th>异常提醒</th></tr></thead>
+          <tbody>
+            ${S.members.map(m => `<tr>
+              <td><b>${esc(m.name)}</b> <span class="mini">${esc(m.role)}</span></td>
+              <td>${m.todayDone}/${m.todayTotal} <span class="mini">${m.todayDone === m.todayTotal ? '已清' : '待推进'}</span></td>
+              <td><div style="display:flex;align-items:center;gap:8px"><div class="prog" style="width:70px"><i class="${m.weekRate >= 80 ? 'g' : ''}" style="width:${m.weekRate}%"></i></div><span class="mini">${m.weekRate}%</span></div></td>
+              <td>${m.alert ? `<span class="tag ${m.alert.indexOf('延期') >= 0 || m.alert.indexOf('未') >= 0 ? 'warn' : ''}">${esc(m.alert)}</span>` : '<span class="mini">—</span>'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <div class="grid-2" style="grid-template-columns:1fr 1fr;gap:10px">
+        ${statCard('todo', '待开展', cnt.todo)}
+        ${statCard('doing', '进行中', cnt.doing)}
+        ${statCard('done', '已完成', cnt.done)}
+        ${statCard('paused', '暂缓', cnt.paused)}
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-h"><h2>待接收上级任务</h2><div class="spacer"></div>
+          <span class="pill warn">${pending.length} 项</span></div>
+        ${pending.length ? pending.map(i => `<div class="kv"><span>${esc(i.title)}</span><b>${fmt(i.due)} 前</b></div>`).join('')
+      : '<div class="empty">暂无待接收任务</div>'}
+        <button class="btn sm" style="margin-top:10px;width:100%" data-act="go" data-view="intake">进入任务承接台</button>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>3 天内到期</h2><span class="hint">${soon.length} 项</span></div>
+        ${soon.length ? soon.slice(0, 5).map(t => `<div class="kv"><span>${cut(t.title, 12)}</span><b class="${diffDays(t.end, TODAY) <= 1 ? '' : 'mini'}">${fmt(t.end)}</b></div>`).join('')
+      : '<div class="empty">暂无临期任务</div>'}
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>快捷入口</h2></div>
+        <div class="stack">
+          <button class="btn" data-act="new" data-type="assign">下发新任务给组员</button>
+          <button class="btn" data-act="new" data-type="special">新建专项（含阶段计划）</button>
+          <button class="btn" data-act="new-rule">新建常规工作规则</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============ 视图：任务制定 ============ */
+function viewAssign() {
+  const list = S.tasks.filter(t => t.type === 'assign');
+  const doing = list.filter(t => t.status === 'doing').length;
+  const late = list.filter(overdue).length;
+  return `
+  ${noMgrBar('下发任务')}
+  <div class="grid-4">
+    ${statCard('', '已下发任务', list.length)}
+    ${statCard('doing', '进行中', doing)}
+    ${statCard('done', '已完成', list.filter(t => t.status === 'done').length)}
+    ${statCard('paused', '逾期未完成', late)}
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-h"><h2>我下发的任务</h2><span class="hint">执行人是组员，因此不进你的日历；在这里看阶段进度与达成标准</span>
+      <div class="spacer"></div>
+      <button class="btn primary sm" data-act="new" data-type="assign">+ 新建下发任务</button></div>
+    <table>
+      <thead><tr><th style="width:30%">任务</th><th>承接人</th><th>起止</th><th>阶段进度</th><th>达成标准</th><th>状态</th><th></th></tr></thead>
+      <tbody>
+      ${list.map(t => {
+        const p = taskProg(t);
+        return `<tr>
+          <td style="max-width:250px"><b>${esc(t.title)}</b><div class="mini">${catName(t.cat1, t.cat2)} ${prioLabel(t) ? '· ' + prioLabel(t) : ''}</div></td>
+          <td style="white-space:nowrap">${esc(t.assignee)}</td>
+          <td class="mini" style="white-space:nowrap">${fmt(t.start)} → ${fmt(t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
+          <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>
+          <td class="mini" style="max-width:200px;min-width:140px">${esc(cut(t.std || '未填写', 26))}</td>
+          <td>${stTag(t.status)}</td>
+          <td><button class="btn sm ghost" data-act="open" data-id="${t.id}">管理</button></td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>下属常规工作推进情况</h2>
+      <span class="hint">默认折叠为一行汇总，点成员展开；「关注」某一条后，能看到它的完整节点</span>
+      <div class="spacer"></div><span class="mini">已关注 ${Object.keys(S.watch || {}).filter(k => S.watch[k]).length} 条</span></div>
+    <div>${S.members.map(memberBlock).join('')}</div>
+    <div class="note" style="margin-top:2px">关注只是你本人的视图偏好：不通知下属、不改他们的任何数据。规则与节点的编辑权始终在本人手里，你只能看状态。</div>
+  </div>`;
+}
+
+/* ============ 下属常规工作：折叠 / 关注 / 当前节点 ============ */
+let openMembers = {};
+function isWatched(mid, rid) { return !!(S.watch && S.watch[mid + ':' + rid]); }
+function curNodeOf(r) { return (r.nodes || []).find(n => !n.done) || null; }
+function cycleCN(r) { return r.cycle === 'day' ? '每天' : r.cycle === 'week' ? '每周' : '每月'; }
+function routineLineHTML(m, r) {
+  const w = isWatched(m.id, r.id);
+  const nodes = r.nodes || [];
+  const multi = nodes.length > 1;
+  const cur = curNodeOf(r);
+  const late = cur && cur.date < TODAY;
+  const curChip = multi
+    ? `<span class="curnode ${late ? 'warn' : ''}">${cur
+      ? (late ? '卡在：' : '当前：') + esc(cur.name || '节点') + ' · ' + fmt(cur.date) + (late ? ' 逾期' + Math.abs(diffDays(cur.date, TODAY)) + '天' : '')
+      : '本轮全部完成'}</span>`
+    : `<span class="rmeta">最近完成 ${r.lastDone ? fmt(r.lastDone) : '—'}</span>`;
+  return `<div class="rline ${w ? 'open' : ''}">
+    <span class="rnm">${esc(r.title)}${multi ? ` <span class="mini">${nodes.length} 节点</span>` : ''}</span>
+    <span class="rmeta">${cycleCN(r)} · 本周 ${r.weekDone}/${r.weekTotal}</span>
+    ${curChip}
+    <span class="tag-watch ${w ? '' : 'off'}" data-act="watch" data-m="${m.id}" data-r="${r.id}"
+      title="${w ? '取消关注，折叠该条' : '关注后展开节点明细'}">${w ? '★ 已关注' : '☆ 关注'}</span>
+  </div>` + (w && nodes.length ? `<div class="mnode">${nodes.map(n =>
+    `<div class="nl ${n.done ? 'done' : ''} ${n === cur ? 'cur' : ''}"><span class="dot"></span>
+      ${esc(n.name || '执行')} · ${fmt(n.date)} · ${n.done ? '已完成' : (n === cur ? '进行中' : '未开始')}</div>`).join('')}</div>` : '');
+}
+function memberBlock(m) {
+  const open = !!openMembers[m.id];
+  const wc = (m.routines || []).filter(r => isWatched(m.id, r.id)).length;
+  return `<div class="memrow ${open ? 'open' : ''}" data-act="memrow" data-id="${m.id}">
+    <div class="ava3">${esc(m.name.slice(-1))}</div>
+    <div class="mwho"><b>${esc(m.name)}</b> <span class="mini">${esc(m.role)}</span></div>
+    <span class="rmeta">今日 ${m.todayDone}/${m.todayTotal}</span>
+    <div class="prog" style="width:62px"><i class="${m.weekRate >= 80 ? 'g' : ''}" style="width:${m.weekRate}%"></i></div>
+    <span class="mini">${m.weekRate}%</span>
+    ${m.alert ? `<span class="tag warn">${esc(m.alert)}</span>` : '<span class="mini">正常</span>'}
+    ${wc ? `<span class="tag-watch">★ ${wc}</span>` : ''}
+    <span class="mini" style="white-space:nowrap">${open ? '收起 ▴' : '展开 ▾'}</span>
+  </div>` + (open ? `<div class="mem-slot">${(m.routines || []).map(r => routineLineHTML(m, r)).join('')}</div>` : '');
+}
+
+/* ============ 视图：常规工作 ============ */
+function policyText(p) {
+  return p === 'prev' ? '提前至前一工作日' : p === 'next' ? '顺延至后一工作日' : '非工作日跳过';
+}
+function nodeDayText(r, s) {
+  if (r.cycle === 'day') return '每天';
+  if (r.cycle === 'week') return '周' + DOW_CN[Number(s.weekday != null ? s.weekday : 1)];
+  return (Number(s.mo) ? '次月' : '') + Number(s.day || 1) + '日';
+}
+/* 节点跨到次月：周期区间跨两个月 */
+function isCrossMonth(r) {
+  if (r.cycle !== 'month') return false;
+  return ruleSteps(r).some(s => Number(s.mo || 0) > 0);
+}
+function cycleLabel(r) {
+  return r.cycle === 'day' ? '每天' : r.cycle === 'week' ? '每周' : '每月';
+}
+function viewRoutine() {
+  const rules = S.rules.filter(r => r.cycle === routineTab);
+  const mS = monthStart(TODAY), mE = monthEnd(TODAY);
+  return `
+  <div class="card">
+    <div class="card-h"><h2>常规工作规则</h2><span class="hint">一个周期可以只有一个节点，也可以是一组节点（如每月薪酬工作）</span>
+      <div class="spacer"></div><button class="btn primary sm" data-act="new-rule">+ 新建常规工作</button></div>
+    <div class="tabs">
+      <button class="${routineTab === 'day' ? 'on' : ''}" data-act="rtab" data-tab="day">日常规</button>
+      <button class="${routineTab === 'week' ? 'on' : ''}" data-act="rtab" data-tab="week">周常规</button>
+      <button class="${routineTab === 'month' ? 'on' : ''}" data-act="rtab" data-tab="month">月常规</button>
+    </div>
+    ${rules.length ? rules.map(r => {
+      const steps = ruleSteps(r);
+      const inst = S.tasks.filter(t => t.routineId === r.id && t.planDate >= mS && t.planDate <= mE);
+      const liveN = S.tasks.filter(t => t.routineId === r.id).length;
+      const doneSteps = inst.reduce((a, t) => a + (t.steps || []).filter(s => s.done).length + (!t.steps || !t.steps.length ? (t.status === 'done' ? 1 : 0) : 0), 0);
+      const sortedInst = inst.slice().sort((a, b) => a.start < b.start ? -1 : 1);
+      const liveInst = sortedInst.filter(t => t.status !== 'done' && t.end >= TODAY)[0] || sortedInst[sortedInst.length - 1];
+      const liveRange = liveInst ? { start: liveInst.start, end: liveInst.end } : null;
+      /* 多节点月常规：直接展示「当前这一期」的真实节点日期，跨月时不会和规则日对不上 */
+      let nodes = [];
+      if (r.cycle === 'month') {
+        if (liveInst && liveInst.steps && liveInst.steps.length) {
+          nodes = liveInst.steps.map(st => {
+            const rs = steps.find(x => (x.name || '') === (st.name || '')) || null;
+            return {
+              s: { name: st.name, time: st.time, day: rs ? rs.day : null, mo: rs ? rs.mo : st.mo },
+              plan: st.plan || st.date, actual: st.date, skip: false,
+              label: rs ? nodeDayText(r, rs) : fmt(st.date)
+            };
+          });
+        } else {
+          nodes = steps.map(s => {
+            const plan = stepPlanDate(r, s, { from: mS, anchor: mS });
+            const pol = s.policy || ruleDefaultPolicy(r);
+            const skip = !isWorkday(plan) && pol === 'none';
+            return { s, plan, actual: skip ? null : shiftDay(plan, pol), skip, label: nodeDayText(r, s) };
+          });
+        }
+      }
+      return `<div class="rule-card">
+        <div class="card-h" style="margin-bottom:6px">
+          <h2>${esc(r.title)}</h2>
+          <span class="chip routine">${cycleLabel(r)}${steps.length > 1 ? ` · ${steps.length} 个节点` : ''}</span>
+          ${isCrossMonth(r) ? `<span class="tag warn" title="节点跨到次月，周期区间为「本月 28 日 → 次月 15 日」这类">跨月</span>` : ''}
+          ${steps.length === 1 ? `<span class="tag">${policyText(ruleDefaultPolicy(r))}</span>` : ''}
+          <div class="spacer"></div>
+          <span class="mini">${catName(r.cat1, r.cat2)}</span>
+          <button class="btn sm ghost" data-act="rule-edit" data-id="${r.id}">编辑</button>
+          <button class="btn sm ghost" data-act="rule-toggle" data-id="${r.id}">${r.active ? '停用' : '启用'}</button>
+          ${!r.active && liveN ? `<button class="btn sm ghost" data-act="rule-clear" data-id="${r.id}">清空实例</button>` : ''}
+          <button class="btn sm ghost" data-act="rule-del" data-id="${r.id}">删除</button>
+        </div>
+        ${nodes.length ? `<div style="margin:6px 0 4px">
+          ${nodes.map(n => `<div class="node">
+            <div class="nd">${n.label || nodeDayText(r, n.s)} ${n.s.time || ''}</div>
+            <div class="nn"><b>${esc(n.s.name || '执行')}</b>
+              <span class="mini">· ${n.skip ? '本次遇节假日，跳过' : `${fmt(n.plan)}${n.actual !== n.plan ? `<span class="chg"> → ${fmt(n.actual)}</span>` : ''}`}</span>
+            </div>
+          </div>`).join('')}
+        </div>` : `<div class="split" style="margin:6px 0">
+          ${inst.slice(0, 10).sort((a, b) => a.planDate < b.planDate ? -1 : 1).map(t => `<span class="tag ${t.status === 'done' ? 'done' : ''}" data-act="open" data-id="${t.id}" style="cursor:pointer">
+            ${t.steps && t.steps.length ? t.steps.map(s => fmt(s.date)).join(' / ') : fmt(t.planDate)}${t.planDate !== t.start && !(t.steps || []).length ? `<span style="color:#b45309"> → ${fmt(t.start)}</span>` : ''}${t.status === 'done' ? ' ✓' : ''}
+          </span>`).join('') || '<span class="mini">本月无实例</span>'}
+        </div>`}
+        ${liveRange ? `<div class="mini" style="color:var(--ink2)">本周期：<b>${fmt(liveRange.start)} → ${fmt(liveRange.end)}</b>${isCrossMonth(r) ? ' <span class="tag warn">跨月</span>' : ''}</div>` : ''}
+        <div class="mini">本月：${inst.length} 个周期实例 · ${doneSteps} 个节点已完成${!r.active ? ` · <span style="color:#b45309">已停用，共 ${liveN} 条实例仍在日历中</span>` : ''}</div>
+      </div>`;
+    }).join('') : '<div class="empty">这一类还没有常规工作，点右上角新建</div>'}
+  </div>
+  <div class="card">
+    <div class="card-h"><h2>规则说明</h2></div>
+    <div class="note">
+      · 常规工作是「规则」不是任务：设定周期和节点后，系统按周期生成实例，进入日历与今日待办。<br/>
+      · 一个周期可以挂多个节点：例如「月度薪酬工作」= 本月 28 日发核薪邮件 / 次月 1 日交工资初稿 / 次月 10 日做绩效分析 / 次月 15 日发工资。每个节点可单独设月份（本月 / 次月）、日期、时间与节假日策略，日历上按节点日期分别落位。<br/>
+      · 跨月周期：节点可以落到次月，一个周期就横跨两个月（上例 10/28 → 11/13），卡片上标「跨月」并显示本周期区间。<br/>
+      · 节假日：逢法定假日或周末，按节点策略「提前至前一工作日」或「顺延至后一工作日」，也可选择跳过；上例中 11 月 1 日是周日，工资初稿自动提前到 10 月 30 日。<br/>
+      · 节点可以落在「本月」或「次月」，一个周期就能跨月（如 28 日发核薪邮件 → 次月 1 日交初稿 → 次月 15 日发工资），卡片上会标「跨月」。<br/>
+      · 规则可以编辑：保存后重排<b>本月及以后、尚未完成的周期</b>，历史周期与已完成的不动；已勾选的节点会按名称保留。日历里拖动节点只改「本次」，规则本身不变。
+    </div>
+  </div>`;
+}
+
+/* ============ 视图：专项工作 ============ */
+function viewSpecial() {
+  const list = S.tasks.filter(t => t.type === 'special');
+  return `
+  <div class="card">
+    <div class="card-h"><h2>我的专项工作</h2><span class="hint">非常规、可拆分阶段，自己定开始与结束</span>
+      <div class="spacer"></div><button class="btn primary sm" data-act="new" data-type="special">+ 新建专项</button></div>
+    <div class="grid-2" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+      ${list.map(t => {
+        const p = taskProg(t);
+        const left = diffDays(t.end, TODAY);
+        return `<div class="rule-card">
+          <div class="card-h" style="margin-bottom:6px">
+            <h2>${esc(t.title)}</h2>${stTag(t.status)}${prioBadge(t)}
+            ${t.status !== 'done' && left < 0 ? '<span class="tag red">逾期 ' + Math.abs(left) + ' 天</span>' : t.status !== 'done' && left <= 3 ? '<span class="tag warn">剩 ' + left + ' 天</span>' : ''}
+            <div class="spacer"></div><button class="btn sm ghost" data-act="open" data-id="${t.id}">管理</button>
+          </div>
+          <div class="mini" style="margin-bottom:8px">${fmt(t.start)} → ${fmt(t.end)} · ${catName(t.cat1, t.cat2)}${t.stages && t.stages.length ? ' · ' + t.stages.length + ' 个阶段' : ''}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <div class="prog" style="flex:1"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div>
+            <span class="mini">${p}%</span>
+          </div>
+          ${t.stages && t.stages.length ? t.stages.map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
+            <div class="n">${s.done ? '✓' : i + 1}</div>
+            <div class="t ${s.done ? 'done' : ''}">${esc(s.name)}<small>${fmt(s.start)} → ${fmt(s.end)}</small></div>
+          </div>`).join('') : '<div class="mini">还没有阶段，进入详情可拆分阶段计划</div>'}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+/* ============ 视图：任务承接台 ============ */
+function viewIntake() {
+  const pending = S.intake.filter(i => i.status === 'pending');
+  const accepted = S.intake.filter(i => i.status === 'accepted');
+  const linked = id => S.tasks.filter(t => t.sourceId === id);
+  return `
+  ${noMgrBar('任务承接台')}
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-h"><h2>待接收的上级任务</h2><span class="hint">接收 → 规划 → 拆分 → 移入专项 / 临时</span>
+        <div class="spacer"></div><span class="pill warn">${pending.length} 项待处理</span></div>
+      ${pending.length ? pending.map(i => `<div class="rule-card">
+        <div class="card-h" style="margin-bottom:6px"><h2>${esc(i.title)}</h2>
+          <span class="tag">${esc(i.from)}</span><div class="spacer"></div><span class="tag red">${fmt(i.due)} 前</span></div>
+        <div class="mini" style="margin-bottom:4px">达成标准：${esc(i.std || '未填写')}</div>
+        ${i.note ? `<div class="mini" style="margin-bottom:8px">上级备注：${esc(i.note)}</div>` : ''}
+        <div class="split"><button class="btn primary sm" data-act="intake-plan" data-id="${i.id}">规划并承接</button>
+          <button class="btn sm" data-act="go" data-view="special">先看看我的专项</button></div>
+      </div>`).join('') : '<div class="empty">没有待接收任务，去干自己的事吧</div>'}
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-h"><h2>已承接</h2><span class="hint">${accepted.length} 项</span></div>
+        ${accepted.length ? accepted.map(i => `<div style="padding:8px 0;border-bottom:1px dashed var(--line2)">
+          <div class="split"><b style="font-size:12.5px">${esc(i.title)}</b><span class="tag done">已承接</span></div>
+          <div class="mini" style="margin-top:4px">${linked(i.id).map(t => `${TYPES[t.type].name}：${esc(t.title)}（${fmt(t.start)} → ${fmt(t.end)}）`).join('<br/>') || '尚未拆分'}</div>
+        </div>`).join('') : '<div class="empty">还没有承接记录</div>'}
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>为什么要有这一页</h2></div>
+        <div class="note">
+          上级下派的任务不直接变成待办，先落到承接台做一次「规划动作」：<br/>
+          · 判断这件事是我的专项（长期、要自己推进），还是临时任务（一次性、当天处理）；<br/>
+          · 需要组员参与时，直接转成下发任务并指定承接人；<br/>
+          · 承接后保留与上级任务的关联，进展可回溯，不用在群里反复问。
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============ 视图：日历 ============ */
+function calCells() {
+  if (calMode === 'week') {
+    const start = addDays(selDay, -((dow(selDay) + 6) % 7));
+    return Array.from({ length: 7 }, (_, i) => ({ d: addDays(start, i), in: true }));
+  }
+  const first = calCursor, lead = (dow(first) + 6) % 7;
+  const start = addDays(first, -lead);
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = addDays(start, i);
+    return { d, in: d.slice(0, 7) === calCursor.slice(0, 7) };
+  });
+}
+function cellHTML(c) {
+  const d = c.d, items = sortOcc(occOn(d, 'ends'));
+  const cls = ['cell'];
+  if (!c.in) cls.push('out');
+  if (d === TODAY) cls.push('today');
+  if (isHoliday(d)) cls.push('holiday');
+  else if (!isWorkday(d)) cls.push('weekend');
+  const chips = items.slice(0, 4).map(o => {
+    const t = o.t, st = o.step;
+    const label = st && st.name ? st.name : t.title;
+    const drag = JSON.stringify({ id: t.id, s: o.si });
+    const adjusted = st ? false : (t.auto && t.planDate !== t.start);
+    return `<span class="chip cal ${t.type} ${adjusted ? 'adjusted' : ''} ${st && st.done ? 'donechip' : ''}"
+      draggable="true" data-drag='${drag}' data-act="open" data-id="${t.id}" title="${esc(t.title + (st && st.name ? ' · ' + st.name : ''))}">${esc(cut(label, 9))}</span>`;
+  }).join('');
+  return `<div class="${cls.join(' ')}" data-date="${d}">
+    <div class="dhead">
+      <span class="num ${dow(d) === 0 ? 'sun' : ''}">${parse(d).getDate()}</span>
+      ${d === TODAY ? '<span class="todayb">今天</span>' : ''}
+      ${isHoliday(d) ? `<span class="hol">休·${HOL[d]}</span>` : isMakeup(d) ? '<span class="mk">补班</span>' : ''}
+    </div>
+    ${chips}
+    ${items.length > 4 ? `<span class="more">+${items.length - 4}</span>` : ''}
+  </div>`;
+}
+function viewCalendar() {
+  const cells = calCells();
+  const head = calMode === 'month'
+    ? `${parse(calCursor).getFullYear()} 年 ${parse(calCursor).getMonth() + 1} 月`
+    : `本周 · ${fmt(cells[0].d)} - ${fmt(cells[6].d)}`;
+  const dayItems = sortOcc(occOn(selDay, 'all'));
+  return `
+  <div class="grid-2">
+    <div class="card">
+      <div class="cal-head">
+        <span class="m">${head}</span>
+        <div class="seg">
+          <button data-act="cal-mode" data-mode="month" class="${calMode === 'month' ? 'on' : ''}">月</button>
+          <button data-act="cal-mode" data-mode="week" class="${calMode === 'week' ? 'on' : ''}">周</button>
+        </div>
+        <button class="btn sm" data-act="cal-nav" data-step="-1">‹</button>
+        <button class="btn sm" data-act="cal-nav" data-step="1">›</button>
+        <button class="btn sm ghost" data-act="cal-today">回到今天</button>
+        <div class="spacer"></div>
+        <span class="mini">拖动卡片到别的日期即可改期</span>
+      </div>
+      <div class="cal">
+        ${['一', '二', '三', '四', '五', '六', '日'].map(x => `<div class="dow">周${x}</div>`).join('')}
+        ${cells.map(cellHTML).join('')}
+      </div>
+      <div class="cal-legend">
+        <span><i class="dot" style="background:var(--assign)"></i>任务制定</span>
+        <span><i class="dot" style="background:var(--routine)"></i>常规任务</span>
+        <span><i class="dot" style="background:var(--special)"></i>专项任务</span>
+        <span><i class="dot" style="background:var(--temp)"></i>临时任务</span>
+        <span><span class="hol" style="font-size:10px;background:#fde8e8;color:#c0392b;border-radius:4px;padding:0 4px">休</span> 法定节假日</span>
+        <span><span class="mk" style="font-size:10px;background:#e8f7f4;color:#0b7a6d;border-radius:4px;padding:0 4px">补班</span> 调休上班</span>
+        <span>虚线框 = 常规实例本次改期</span>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-h"><h2>${fmtFull(selDay)}</h2>
+          <div class="spacer"></div>
+          ${isHoliday(selDay) ? '<span class="pill warn">法定假日</span>' : isMakeup(selDay) ? '<span class="pill green">补班</span>' : isWorkday(selDay) ? '<span class="pill">工作日</span>' : '<span class="pill">周末</span>'}
+        </div>
+        <div class="tlist">
+          ${dayItems.length ? dayItems.map(o => taskRow(o.t, o.step, o.si)).join('') : '<div class="empty">这一天还没有安排</div>'}
+        </div>
+        <button class="btn sm" style="margin-top:10px;width:100%" data-act="new-day">+ 在这一天加临时任务</button>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>今日待办（可拖到日历）</h2></div>
+        <div class="stack">
+          ${todayTasks().map(o => `<span class="chip cal ${o.t.type}" draggable="true" data-drag='${JSON.stringify({ id: o.t.id, s: o.si })}' data-act="open" data-id="${o.t.id}">${esc(cut(o.step && o.step.name ? o.t.title + ' · ' + o.step.name : o.t.title, 18))}</span>`).join('') || '<span class="mini">今天没有待办</span>'}
+        </div>
+        <div class="note" style="margin-top:12px">拖到某一天：普通任务整体平移起止日期；常规实例只调整本次，规则不变。</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============ 视图：设置 ============ */
+function viewSettings() {
+  return `
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-h"><h2>账号与汇报关系</h2><span class="hint">一期：工号 + 姓名登录，免密码；一个直属上级</span>
+      <div class="spacer"></div><button class="btn sm" data-act="switch-user">修改上级</button></div>
+    <div class="authkv">
+      <div><span>登录账号</span><b>${S.me ? esc(S.me.name) + ' · ' + esc(S.me.no) : '未登录'}</b></div>
+      <div><span>部门 / 岗位</span><b>${S.me ? esc(S.me.dept) + ' · ' + esc(S.me.role) : '—'}</b></div>
+      <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置，下发与承接不可用</span>'}</b></div>
+      <div><span>可见范围</span><b>直接下属 ${S.members.length} 人（向下 1 层）</b></div>
+    </div>
+    <div class="note" style="margin-top:10px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下发的任务仍保留原上级可见，新增任务只对新上级可见。</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-h"><h2>任务分类（两级，管理者自行维护）</h2>
+        <div class="spacer"></div><button class="btn sm" data-act="cat-add1">+ 一级分类</button></div>
+      ${S.cats.map(c => `<div style="padding:10px 0;border-bottom:1px dashed var(--line2)">
+        <div class="split" style="margin-bottom:6px">
+          <b>${esc(c.name)}</b><span class="mini">${(c.children || []).length} 个二级</span>
+          <div class="spacer"></div>
+          <button class="btn sm ghost" data-act="cat-add2" data-id="${c.id}">+ 二级</button>
+          <button class="btn sm ghost" data-act="cat-del" data-id="${c.id}">删除</button>
+        </div>
+        <div class="split">${(c.children || []).map(k => `<span class="tag">${esc(k.name)}
+          <span style="cursor:pointer;color:#b6bcc8" data-act="cat-del2" data-id="${c.id}" data-cid="${k.id}">×</span></span>`).join('') || '<span class="mini">暂无二级分类</span>'}</div>
+      </div>`).join('')}
+      <div class="note" style="margin-top:10px">临时任务创建时默认归入「其他 / 临时事项」，可手动改。</div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-h"><h2>节假日配置</h2><span class="hint">2026 年示例数据</span></div>
+        ${HOL_CFG.map(h => `<div class="kv"><span>${h.name}</span><b>${fmt(h.from)} - ${fmt(h.to)}</b></div>`).join('')}
+        <div class="kv"><span>调休补班</span><b>${MAKEUP.map(m => fmt(m)).join('、')}</b></div>
+        <div class="note" style="margin-top:10px">正式版由后台统一维护，或对接国家放假安排数据；前端只负责按表判断工作日。</div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>一期边界（已确认）</h2><span class="hint">评审以这张表为准</span></div>
+        <div class="kv"><span>登录</span><b>工号 + 姓名，免密码</b></div>
+        <div class="kv"><span>通知</span><b>仅站内，无邮件 / 企微 / 推送</b></div>
+        <div class="kv"><span>汇报关系</span><b>自选即生效，不审核</b></div>
+        <div class="kv"><span>验收</span><b>不做，不能当绩效依据</b></div>
+        <div class="kv"><span>移动端</span><b>不单独适配</b></div>
+        <div class="note" style="margin-top:10px">不做推送的代价：使用率靠「管理者周会过进度 + 首屏即今日待办」撑住；全员推广前必须先接企微推送。</div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>数据与演示</h2></div>
+        <div class="note">当前为<b>可点击原型</b>：你的操作真实生效，并保存在本机浏览器（localStorage），刷新、关掉重开都还在。<br/>
+          但它<b>没有后端数据库、没有多人同步</b>——你这里改了，别人看不到；换台电脑也是空数据。清空后恢复演示数据。</div>
+        <button class="btn danger" style="margin-top:10px" data-act="reset">重置演示数据</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============ 渲染 ============ */
+function render() {
+  renderMe();
+  $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+  const map = { today: viewToday, assign: viewAssign, routine: viewRoutine, special: viewSpecial, intake: viewIntake, calendar: viewCalendar, settings: viewSettings };
+  $('#view').innerHTML = map[view]();
+  $('#pageTitle').textContent = TITLES[view];
+  $('#pageSub').textContent = view === 'today' ? '' : (view === 'calendar' ? '任务与待办统一在日历上安排' : '');
+  const wd = isWorkday(TODAY);
+  $('#workdayPill').textContent = `${fmtFull(TODAY)} · ${wd ? '工作日' : '非工作日'}`;
+  $('#workdayPill').className = 'pill ' + (wd ? 'green' : 'warn');
+  const n = S.intake.filter(i => i.status === 'pending').length;
+  const badge = $('#intakeBadge');
+  badge.style.display = n ? 'inline-block' : 'none';
+  badge.textContent = n;
+}
+
+/* ============ 详情抽屉 ============ */
+let drawerId = null;
+function openDrawer(id) {
+  const t = S.tasks.find(x => x.id === id);
+  if (!t) return;
+  drawerId = id;
+  $('#drawer').innerHTML = drawerHTML(t);
+  $('#drawer').classList.add('show');
+  $('#overlay').classList.add('show');
+}
+function closeDrawer() {
+  $('#drawer').classList.remove('show');
+  $('#overlay').classList.remove('show');
+  drawerId = null;
+}
+function drawerHTML(t) {
+  const isRoutine = t.type === 'routine';
+  const rule = S.rules.find(r => r.id === t.routineId) || null;
+  const stOpts = Object.keys(ST).map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${ST[k].name}</option>`).join('');
+  const lvOpts = (v) => `<option value="">未设置</option>` + [3, 2, 1].map(k => `<option value="${k}" ${v === k ? 'selected' : ''}>${LV[k]}</option>`).join('');
+  const assigneeOpts = ['我', ...S.members.map(m => m.name)].map(n => `<option ${t.assignee === n ? 'selected' : ''}>${n}</option>`).join('');
+  const cats = catSelectsHTML(t.cat1, t.cat2);
+
+  return `<div class="dh">
+      <div style="flex:1">
+        <div class="split" style="margin-bottom:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}</div>
+        <input id="dTitle" value="${esc(t.title)}" data-field="title"
+          style="width:100%;border:1px solid transparent;border-radius:7px;padding:4px 6px;font-size:15px;font-weight:600;font-family:inherit;outline:none"/>
+      </div>
+      <button class="btn sm ghost" data-act="close">✕</button>
+    </div>
+    <div class="db">
+      ${isRoutine ? `<div class="note" style="margin-bottom:14px">${rule ? `由常规规则「${esc(rule.title)}」自动生成 · 本周期 ${fmt(t.start)} ~ ${fmt(t.end)}
+        ${!t.steps || !t.steps.length ? (t.planDate && t.planDate !== t.start ? `<br/>因节假日已调整到 <b>${fmt(t.start)}</b>，<span class="btn link" data-act="stage-restore" data-id="${t.id}">恢复规则日期</span>` : '') : ''}
+        <button class="btn link" data-act="rule-edit" data-id="${t.routineId}" style="margin-top:4px">编辑规则</button>`
+        : `所属规则「${esc(t.title)}」<b>已删除</b>，这条实例作为保留记录存在 · 不会再有新的 · 本周期 ${fmt(t.start)} ~ ${fmt(t.end)}
+        <br/>如需清掉，可在详情底部删除这条任务。`}
+      </div>
+      ${t.steps && t.steps.length ? `<div class="field"><label>本周期节点（勾掉即完成）</label>
+        <div class="stagelist">
+          ${t.steps.map((s, i) => `<div class="sitem">
+            <div class="cb ${s.done ? 'on' : ''}" data-act="toggle-step" data-id="${t.id}" data-idx="${i}">${s.done ? '✓' : ''}</div>
+            <div class="nm ${s.done ? 'done' : ''}" style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name || '执行')}
+              <small>${fmt(s.date)}${s.time ? ' · ' + s.time : ''}${s.plan && s.plan !== s.date ? ` · 计划 ${fmt(s.plan)}，节假日已调整` : ''}</small></div>
+          </div>`).join('')}
+        </div></div>` : ''}` : ''}
+      <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
+      <div class="field"><label>起止时间</label><div class="row">
+        <input type="date" value="${t.start}" data-field="start"/>
+        <input type="date" value="${t.end}" data-field="end"/>
+      </div></div>
+      ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
+      <div class="field"><label>承接人</label><select data-field="assignee">${assigneeOpts}</select></div>
+      <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
+      ${cats}
+      <div class="field"><label>优先级（可选填）</label><div class="row">
+        <select data-field="imp">${lvOpts(t.imp).replace('未设置', '重要度：未设置')}</select>
+        <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
+      </div></div>`}
+      ${t.type === 'special' || t.type === 'assign' ? `<div class="field"><label>阶段目标（拆分后可按阶段核进度）</label>
+        ${(t.stages || []).map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
+          <div class="n" data-act="stage-toggle" data-id="${t.id}" data-idx="${i}" style="cursor:pointer">${s.done ? '✓' : i + 1}</div>
+          <div class="t ${s.done ? 'done' : ''}"><s style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name)}</s><small>${fmt(s.start)} → ${fmt(s.end)}</small></div>
+          <button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${i}">删</button>
+        </div>`).join('') || '<div class="mini" style="margin-bottom:8px">还没有阶段</div>'}
+        <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+          <input id="sName" placeholder="阶段名称，例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
+          <div class="row">
+            <input type="date" id="sStart" value="${t.start}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
+            <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
+            <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加阶段</button>
+          </div>
+        </div>
+      </div>` : ''}
+      <div class="note" style="margin-bottom:14px">
+        ${t.sourceId ? `来源：上级下派任务（${esc((S.intake.find(i => i.id === t.sourceId) || {}).title || '')}）<br/>` : ''}
+        创建于 ${fmt(t.start)} · 分类 ${catName(t.cat1, t.cat2)} · 进度 ${taskProg(t)}%
+      </div>
+      ${isRoutine ? '' : `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>`}
+    </div>`;
+}
+function catSelectsHTML(c1, c2) {
+  const cur1 = c1 || (S.cats[0] || {}).id;
+  const kids = ((S.cats.find(c => c.id === cur1) || {}).children) || [];
+  const cur2 = c2 || (kids[0] || {}).id;
+  return `<div class="field"><label>任务分类</label><div class="row">
+    <select data-cat1 data-field="cat1">${S.cats.map(c => `<option value="${c.id}" ${c.id === cur1 ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+    <select data-cat2 data-field="cat2">${kids.map(k => `<option value="${k.id}" ${k.id === cur2 ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select>
+  </div></div>`;
+}
+function refreshCat2(root, c1) {
+  const sel = root.querySelector('[data-cat2]');
+  if (!sel) return;
+  const kids = ((S.cats.find(c => c.id === c1) || {}).children) || [];
+  sel.innerHTML = kids.map(k => `<option value="${k.id}">${esc(k.name)}</option>`).join('');
+}
+
+/* ============ 弹窗 ============ */
+let modalOk = null;
+function openModal(title, body, onOk, okText) {
+  modalOk = onOk;
+  $('#modal').className = 'modal';
+  $('#modal').innerHTML = `<div class="mh">${esc(title)}</div><div class="mb">${body}</div>
+    <div class="mf"><button class="btn" data-act="modal-cancel">取消</button>
+    <button class="btn primary" data-act="modal-ok">${okText || '保存'}</button></div>`;
+  $('#modalWrap').classList.add('show');
+}
+function closeModal() { $('#modalWrap').classList.remove('show'); modalOk = null; }
+
+function taskModalBody(type, preset) {
+  const today = (preset && preset.date) || TODAY;
+  const base = `
+  <div class="field"><label>任务名称</label><input id="f_title" placeholder="例如：季度经营分析报告" value="${preset && preset.title ? esc(preset.title) : ''}"/></div>
+  <div class="field"><label>任务类型</label><select id="f_type">
+    ${['assign', 'special', 'temp'].map(k => `<option value="${k}" ${k === type ? 'selected' : ''}>${TYPES[k].name}</option>`).join('')}
+  </select></div>
+  <div class="field"><label>承接人</label><select id="f_assignee">${['我', ...S.members.map(m => m.name)].map(n => `<option ${(preset && preset.assignee === n) ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+  <div class="field"><label>起止时间 / 时间点（可选）</label><div class="row">
+    <input type="date" id="f_start" value="${today}" style="flex:1"/>
+    <input type="date" id="f_end" value="${today}" style="flex:1"/>
+    <input type="time" id="f_time" style="flex:0 0 96px"/>
+  </div></div>
+  <div class="field"><label>达成标准</label><textarea id="f_std" placeholder="什么算完成，验收看什么">${preset && preset.std ? esc(preset.std) : ''}</textarea></div>
+  ${catSelectsHTML(type === 'temp' ? 'c3' : null, type === 'temp' ? 'c31' : null)}
+  <div class="field"><label>优先级（可选填，不填不影响使用）</label><div class="row">
+    <select id="f_imp"><option value="">重要度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
+    <select id="f_urg"><option value="">紧急度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
+  </div></div>`;
+
+  if (type !== 'special') {
+    return base + `<div class="note">${type === 'temp' ? '临时任务默认归入「其他 / 临时事项」，起止可只选今天。' : '下发后组员即可看到并更新进展；可后续在详情里加阶段目标。'}</div>`;
+  }
+  return `<div class="form-grid">
+    <div class="form-col">
+      <div class="sec-title">基本信息</div>
+      ${base}
+    </div>
+    <div class="form-col">
+      <div class="sec-title">阶段计划 <span class="mini">可留空，之后再补</span></div>
+      <div id="stageRows">${stageRowHTML(today, today)}</div>
+      <button class="btn sm" data-act="mstage-add" style="width:100%">+ 添加阶段</button>
+      <div class="note" style="margin-top:10px">每个阶段独立设开始与结束时间；后期在详情里勾掉阶段，进度自动按阶段数计算。</div>
+    </div>
+  </div>`;
+}
+function stageRowHTML(s, e) {
+  return `<div class="mrow">
+    <input class="sname" placeholder="阶段名称，例如：数据口径确认与取数"/>
+    <div class="row2">
+      <input type="date" class="sst" value="${s}"/>
+      <input type="date" class="sen" value="${e}"/>
+      <button class="del" data-act="mstage-del" title="删除该阶段">✕</button>
+    </div>
+  </div>`;
+}
+function openNewTask(type, preset) {
+  const t = type || 'temp';
+  if (t === 'assign' && !(S.me && S.me.mgr)) {
+    toast('先设置直属上级，才能下发任务');
+    authStep = 'mgr'; authPick = null; authKw = ''; authRender();
+    return;
+  }
+  openModal(`新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
+    const title = $('#f_title').value.trim();
+    if (!title) { toast('先填任务名称'); return false; }
+    const s = $('#f_start').value, e = $('#f_end').value || s;
+    if (!s) { toast('请选择开始时间'); return false; }
+    if (e < s) { toast('结束时间不能早于开始时间'); return false; }
+    const stages = $$('#stageRows .mrow').map(r => {
+      const name = r.querySelector('.sname').value.trim();
+      if (!name) return null;
+      const st = r.querySelector('.sst').value || s;
+      let en = r.querySelector('.sen').value || st;
+      if (en < st) en = st;
+      return { name, start: st, end: en, done: false };
+    }).filter(Boolean);
+    const task = {
+      id: uid('t'), type: $('#f_type').value, title,
+      owner: '我', assignee: $('#f_assignee').value,
+      start: s, end: e, time: $('#f_time').value || '',
+      std: $('#f_std').value.trim(), status: 'todo',
+      cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      imp: Number($('#f_imp').value) || null, urg: Number($('#f_urg').value) || null,
+      stages, sourceId: preset && preset.sourceId ? preset.sourceId : null
+    };
+    S.tasks.push(task);
+    if (preset && preset.sourceId) {
+      const it = S.intake.find(i => i.id === preset.sourceId);
+      if (it) it.status = 'accepted';
+    }
+    save(); render(); closeModal();
+    toast('已创建：' + title);
+  }, '创建');
+  if (t === 'special') $('#modal').classList.add('wide');
+}
+let ruleStepsDraft = [];
+function stepRowHTMLFor(cycle, s) {
+  s = s || {};
+  const pol = s.policy || 'prev';
+  const polSel = [['prev', '提前'], ['next', '顺延'], ['none', '跳过']].map(([v, n]) =>
+    `<option value="${v}" ${pol === v ? 'selected' : ''}>${n}</option>`).join('');
+  const nm = `<input class="sname" placeholder="节点名称（可空）" value="${esc(s.name || '')}"/>`;
+  const tm = `<input class="stime" type="time" value="${s.time || '09:00'}"/>`;
+  const del = `<button class="del" data-act="rstep-del" title="删除节点">✕</button>`;
+  if (cycle === 'day') return `<div class="srow noday">${nm}${tm}<select class="spol">${polSel}</select>${del}</div>`;
+  if (cycle === 'week') {
+    return `<div class="srow">${nm}<select class="sweek">${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}" ${Number(s.weekday) === d ? 'selected' : ''}>周${DOW_CN[d]}</option>`).join('')}</select>${tm}<select class="spol">${polSel}</select>${del}</div>`;
+  }
+  const mo = Number(s.mo || 0);
+  const moSel = `<select class="smo" title="这个节点落在本月还是次月">
+    <option value="0" ${mo === 0 ? 'selected' : ''}>本月</option>
+    <option value="1" ${mo === 1 ? 'selected' : ''}>次月</option>
+  </select>`;
+  return `<div class="srow smonth">${nm}${moSel}<input class="sday" type="number" min="1" max="31" value="${Number(s.day) || 1}"/>${tm}<select class="spol">${polSel}</select>${del}</div>`;
+}
+function stepLabelFor(cycle) {
+  if (cycle === 'day') return `<div class="step-lbl s2" style="grid-template-columns:1fr 96px 88px 26px"><span>节点名称</span><span>时间</span><span>逢非工作日</span><span></span></div>`;
+  if (cycle === 'week') return `<div class="step-lbl"><span>节点名称</span><span>周几</span><span>时间</span><span>逢非工作日</span><span></span></div>`;
+  return `<div class="step-lbl smonth"><span>节点名称</span><span>月份</span><span>几日</span><span>时间</span><span>逢非工作日</span><span></span></div>`;
+}
+function renderStepWrap(cycle) {
+  const wrap = $('#stepWrap');
+  if (!wrap) return;
+  wrap.innerHTML = stepLabelFor(cycle) + `<div id="stepRows">${ruleStepsDraft.map(s => stepRowHTMLFor(cycle, s)).join('')}</div>`;
+}
+function readStepRows() {
+  const cycle = $('#r_cycle').value;
+  return $$('#stepRows .srow').map(r => {
+    const name = r.querySelector('.sname') ? r.querySelector('.sname').value.trim() : '';
+    const time = r.querySelector('.stime') ? r.querySelector('.stime').value : '';
+    const pol = r.querySelector('.spol') ? r.querySelector('.spol').value : 'prev';
+    const dayEl = r.querySelector('.sday');
+    const weekEl = r.querySelector('.sweek');
+    const moEl = r.querySelector('.smo');
+    return {
+      name, time, policy: pol,
+      day: dayEl ? (Number(dayEl.value) || 1) : null,
+      weekday: weekEl ? Number(weekEl.value) : null,
+      mo: moEl ? Number(moEl.value) : 0
+    };
+  });
+}
+function openRuleModal(rule) {
+  const isEdit = !!rule;
+  const cycle = rule ? rule.cycle : 'month';
+  ruleStepsDraft = rule ? JSON.parse(JSON.stringify(ruleSteps(rule))) : [{ name: '', day: 5, time: '09:00', policy: 'prev' }];
+  openModal(isEdit ? '编辑常规工作' : '新建常规工作', `
+    <div class="form-grid">
+      <div>
+        <div class="field"><label>名称</label><input id="r_title" placeholder="例如：月度薪酬工作" value="${rule ? esc(rule.title) : ''}"/></div>
+        <div class="field"><label>周期</label><select id="r_cycle">
+          <option value="day" ${cycle === 'day' ? 'selected' : ''}>日常规（每个工作日）</option>
+          <option value="week" ${cycle === 'week' ? 'selected' : ''}>周常规（每周一次）</option>
+          <option value="month" ${cycle === 'month' ? 'selected' : ''}>月常规（每月一次）</option>
+        </select></div>
+      </div>
+      <div>
+        ${catSelectsHTML(rule ? rule.cat1 : null, rule ? rule.cat2 : null)}
+        <div class="field"><label>节点默认策略（单个节点没单独设置时沿用）</label><select id="r_policy">
+          <option value="prev" ${!rule || rule.policy === 'prev' ? 'selected' : ''}>提前至前一工作日</option>
+          <option value="next" ${rule && rule.policy === 'next' ? 'selected' : ''}>顺延至后一工作日</option>
+          <option value="none" ${rule && rule.policy === 'none' ? 'selected' : ''}>非工作日跳过</option>
+        </select></div>
+      </div>
+    </div>
+    <div class="sec-title" style="margin-top:4px">本周期要做的事 <span class="mini">一个周期可以只有一个节点，也可以是一组（如薪酬工作的发邮件/交初稿/做分析/发工资）</span></div>
+    <div id="stepWrap"></div>
+    <button class="btn sm" data-act="rstep-add" style="margin-top:4px">+ 添加节点</button>
+    <div class="note" style="margin-top:12px">${isEdit ? '保存后重排「本月及以后、尚未完成」的周期，历史周期与已完成的保留，已勾选的节点按名称恢复。' : '保存后自动生成近期实例，进入今日待办与日历；每个节点会单独出现在对应日期。节点可以选「次月」，用来表达跨月周期。'}</div>
+  `, () => {
+    const title = $('#r_title').value.trim();
+    if (!title) { toast('先填名称'); return false; }
+    const cy = $('#r_cycle').value;
+    let rows = readStepRows();
+    if (cy === 'day') rows = [rows[0] || { name: '', time: '09:00', policy: 'prev' }];
+    if (cy !== 'day' && !rows.some(r => r.name || true)) { toast('至少要有一个节点'); return false; }
+    const data = {
+      title, cycle: cy,
+      policy: $('#r_policy').value,
+      cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      steps: cy === 'day'
+        ? [{ name: rows[0].name, time: rows[0].time, policy: rows[0].policy }]
+        : rows.map(r => ({ name: r.name, day: r.day, weekday: r.weekday, mo: r.mo || 0, time: r.time, policy: r.policy })),
+      active: true
+    };
+    if (isEdit) {
+      Object.assign(rule, data);
+      regenRule(rule.id);
+      toast('规则已更新，后续实例已重排');
+    } else {
+      const r = Object.assign({ id: uid('r') }, data);
+      S.rules.push(r);
+      ensureRoutines(monthStart(addDays(TODAY, -3)), addDays(TODAY, 80));
+      toast('规则已创建，实例已生成');
+    }
+    save(); render(); closeModal();
+  }, isEdit ? '保存' : '创建');
+  $('#modal').classList.add('wide');
+  renderStepWrap(cycle);
+}
+function openIntakeModal(id) {
+  const it = S.intake.find(i => i.id === id);
+  if (!it) return;
+  openModal('规划并承接：' + it.title, `
+    <div class="note" style="margin-bottom:12px">来源：${esc(it.from)} · 要求 ${fmt(it.due)} 前 · 标准：${esc(it.std || '未填写')}</div>
+    <div class="field"><label>这件事在你这儿算什么</label><select id="f_type">
+      <option value="special">专项任务（需要自己持续推进，可拆阶段）</option>
+      <option value="temp">临时任务（一次性，尽快处理）</option>
+      <option value="assign">下发任务（交给组员办）</option>
+    </select></div>
+    <div class="field"><label>任务名称</label><input id="f_title" value="${esc(it.title)}"/></div>
+    <div class="field"><label>承接人</label><select id="f_assignee">${['我', ...S.members.map(m => m.name)].map(n => `<option>${n}</option>`).join('')}</select></div>
+    <div class="field"><label>起止时间</label><div class="row">
+      <input type="date" id="f_start" value="${TODAY}"/>
+      <input type="date" id="f_end" value="${it.due}"/>
+    </div></div>
+    <div class="field"><label>达成标准</label><textarea id="f_std">${esc(it.std || '')}</textarea></div>
+    ${catSelectsHTML()}
+  `, () => {
+    const title = $('#f_title').value.trim();
+    if (!title) { toast('先填任务名称'); return false; }
+    const type = $('#f_type').value;
+    S.tasks.push({
+      id: uid('t'), type, title, owner: '我', assignee: $('#f_assignee').value,
+      start: $('#f_start').value, end: $('#f_end').value, std: $('#f_std').value.trim(),
+      status: 'todo', cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      imp: null, urg: null, stages: [], sourceId: it.id
+    });
+    it.status = 'accepted';
+    save(); render(); closeModal();
+    toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下发组员');
+  }, '承接');
+}
+function openCatModal(level, parentId) {
+  openModal(level === 1 ? '新建一级分类' : '新建二级分类', `
+    <div class="field"><label>名称</label><input id="c_name" placeholder="例如：客户与商机"/></div>
+    ${level === 2 ? `<div class="note">上级：${esc((S.cats.find(c => c.id === parentId) || {}).name || '')}</div>` : ''}
+  `, () => {
+    const name = $('#c_name').value.trim();
+    if (!name) { toast('先填名称'); return false; }
+    if (level === 1) S.cats.push({ id: uid('c'), name, children: [] });
+    else {
+      const p = S.cats.find(c => c.id === parentId);
+      if (p) { p.children = p.children || []; p.children.push({ id: uid('k'), name }); }
+    }
+    save(); render(); closeModal(); toast('已添加');
+  }, '添加');
+}
+
+/* ============ 交互动作 ============ */
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 1900);
+}
+function moveTask(id, date, si) {
+  const t = S.tasks.find(x => x.id === id);
+  if (!t) return;
+  if (si != null && si >= 0 && t.steps && t.steps[si]) {
+    const s = t.steps[si];
+    if (s.date === date) return;
+    s.date = date;
+    const ds = t.steps.map(x => x.date).sort();
+    t.start = ds[0]; t.end = ds[ds.length - 1];
+    save(); render();
+    toast(`「${t.title} · ${s.name || '节点'}」本次调整到 ${fmt(date)}`);
+    return;
+  }
+  if (t.start === date && t.end === date) return;
+  if (t.type === 'routine') {
+    t.start = date; t.end = date;
+    toast(`「${t.title}」本次调整到 ${fmt(date)}，规则本身不变`);
+  } else {
+    const delta = diffDays(date, t.start);
+    t.start = addDays(t.start, delta);
+    t.end = addDays(t.end, delta);
+    toast(`已改期：${fmt(t.start)}${t.start !== t.end ? ' → ' + fmt(t.end) : ''}`);
+  }
+  save(); render();
+}
+
+document.addEventListener('click', e => {
+  const nav = e.target.closest('.nav-item');
+  if (nav) { view = nav.dataset.view; render(); return; }
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act, id = el.dataset.id;
+  const t = id ? S.tasks.find(x => x.id === id) : null;
+  switch (act) {
+    case 'do-login': doLogin(); break;
+    case 'pick-mgr': {
+      const p = ROSTER.find(x => x.no === el.dataset.no);
+      if (p) { authPick = p; authKw = ($('#a_kw') || {}).value || ''; authRender(); }
+      break;
+    }
+    case 'confirm-mgr': {
+      if (!authPick) { authRender('先在上面的列表里选一个人'); break; }
+      if (S.me && authPick.no === S.me.no) { authRender('不能把自己设为上级'); break; }
+      S.me.mgr = { no: authPick.no, name: authPick.name, role: authPick.role, dept: authPick.dept };
+      finishAuth('已设置直属上级：' + authPick.name);
+      break;
+    }
+    case 'skip-mgr':
+      S.me.mgr = null;
+      finishAuth('已跳过。下发任务与承接台暂不可用，可随时在设置里补');
+      break;
+    case 'switch-user':
+    case 'open-mgr':
+      authStep = 'mgr'; authPick = (S.me && S.me.mgr) ? Object.assign({}, S.me.mgr) : null; authKw = '';
+      authRender();
+      break;
+    case 'close-auth': $('#auth').classList.remove('show'); break;
+    case 'memrow': openMembers[id] = !openMembers[id]; render(); break;
+    case 'watch': {
+      const k = el.dataset.m + ':' + el.dataset.r;
+      S.watch = S.watch || {};
+      const on = !S.watch[k];
+      if (on) S.watch[k] = 1; else delete S.watch[k];
+      save(); render();
+      toast(on ? '已关注，展开它的节点明细' : '已取消关注，折叠为一行');
+      break;
+    }
+    case 'go': view = el.dataset.view; render(); break;
+    case 'open': openDrawer(id); break;
+    case 'close': closeDrawer(); break;
+    case 'toggle':
+      if (t) { t.status = t.status === 'done' ? 'todo' : 'done'; save(); render(); toast(t.status === 'done' ? '已标记完成' : '已恢复为待开展'); }
+      break;
+    case 'new': openNewTask(el.dataset.type || 'temp'); break;
+    case 'quick-new': openNewTask('temp'); break;
+    case 'new-day': openNewTask('temp', { date: selDay }); break;
+    case 'new-rule': openRuleModal(); break;
+    case 'reset':
+      if (confirm('清空本地数据并恢复演示数据？（登录身份与汇报关系会保留）')) {
+        const keepMe = S.me;
+        localStorage.removeItem(KEY); S = seed(); S.me = keepMe;
+        ensureRoutines(monthStart(addDays(TODAY, -35)), addDays(TODAY, 75));
+        save(); render(); toast('已恢复演示数据');
+      }
+      break;
+    case 'rtab': routineTab = el.dataset.tab; render(); break;
+    case 'rule-toggle': {
+      const r = S.rules.find(x => x.id === id);
+      if (r) {
+        r.active = !r.active;
+        if (r.active) ensureRoutines(monthStart(TODAY), addDays(TODAY, 75));
+        save(); render();
+        if (!r.active) {
+          const c = ruleInstanceCount(r.id);
+          toast(c.total ? `已停用，不再生成新实例；已排的 ${c.total} 条仍在日历里，可点「清空实例」` : '已停用，不再生成新实例');
+        } else {
+          toast('已启用，后续实例已补齐');
+        }
+      }
+      break;
+    }
+    case 'rule-del': {
+      const r = S.rules.find(x => x.id === id);
+      if (!r) break;
+      const c = ruleInstanceCount(r.id);
+      openModal('删除常规工作', `
+        <div class="delbox">
+          <p>「<b>${esc(r.title)}</b>」已生成 <em>${c.total}</em> 条实例，其中 <em>${c.open}</em> 条还没完成。</p>
+          <label class="rdopt"><input type="radio" name="delmode" value="all" checked/>
+            <span><b>删除规则，同时删掉这 ${c.total} 条实例</b><i>日历与今日待办里不再出现，推荐</i></span></label>
+          <label class="rdopt"><input type="radio" name="delmode" value="keep"/>
+            <span><b>只删规则，保留这 ${c.total} 条实例</b><i>已排的日程不动，只是不再自动生成新的</i></span></label>
+        </div>`, () => {
+        const mode = (document.querySelector('#modal input[name="delmode"]:checked') || {}).value || 'all';
+        S.rules = S.rules.filter(x => x.id !== r.id);
+        let n = 0;
+        if (mode === 'all') n = clearRuleInstances(r.id);
+        else S.tasks.forEach(t => { if (t.routineId === r.id) t.detached = true; });
+        save(); closeModal(); render();
+        toast(mode === 'all' ? `规则已删除，同时清理 ${n} 条实例` : '规则已删除，实例保留');
+      }, '删除');
+      break;
+    }
+    case 'rule-clear': {
+      const r = S.rules.find(x => x.id === id);
+      if (!r) break;
+      const c = ruleInstanceCount(r.id);
+      if (!c.total) { toast('这条规则没有已生成的实例'); break; }
+      if (!confirm(`清空「${r.title}」已生成的 ${c.total} 条实例？规则本身保留，之后仍按周期生成。`)) break;
+      const n = clearRuleInstances(r.id);
+      save(); render(); toast(`已清理 ${n} 条实例`);
+      break;
+    }
+    case 'task-del':
+      if (confirm('删除这条任务？')) {
+        S.tasks = S.tasks.filter(x => x.id !== id); save(); closeDrawer(); render(); toast('已删除');
+      }
+      break;
+    case 'stage-add': {
+      if (!t) break;
+      const name = $('#sName').value.trim();
+      if (!name) { toast('先填阶段名称'); break; }
+      const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
+      t.stages = t.stages || [];
+      t.stages.push({ name, start: s, end: e2, done: false });
+      save(); openDrawer(t.id); render(); toast('阶段已添加');
+      break;
+    }
+    case 'stage-toggle': {
+      if (!t) break;
+      const i = Number(el.dataset.idx);
+      t.stages[i].done = !t.stages[i].done;
+      if (t.stages.every(s => s.done)) t.status = 'done';
+      else if (t.status === 'done') t.status = 'doing';
+      save(); openDrawer(t.id); render();
+      break;
+    }
+    case 'stage-del': {
+      if (!t) break;
+      t.stages.splice(Number(el.dataset.idx), 1);
+      save(); openDrawer(t.id); render();
+      break;
+    }
+    case 'stage-restore': {
+      if (!t || !t.planDate) break;
+      t.start = t.planDate; t.end = t.planDate;
+      save(); openDrawer(t.id); render(); toast('已恢复为规则日期');
+      break;
+    }
+    case 'intake-plan': openIntakeModal(id); break;
+    case 'cal-nav': {
+      const step = Number(el.dataset.step);
+      if (calMode === 'week') {
+        selDay = addDays(selDay, step * 7); calCursor = monthStart(selDay);
+      } else {
+        const y = parse(calCursor).getFullYear(), m = parse(calCursor).getMonth() + step;
+        calCursor = iso(new Date(y, m, 1));
+      }
+      ensureRoutines(monthStart(calCursor), monthEnd(addDays(monthEnd(calCursor), 7)));
+      save(); render();
+      break;
+    }
+    case 'cal-mode': calMode = el.dataset.mode; render(); break;
+    case 'cal-today': selDay = TODAY; calCursor = monthStart(TODAY); render(); break;
+    case 'cat-add1': openCatModal(1); break;
+    case 'cat-add2': openCatModal(2, id); break;
+    case 'cat-del':
+      if (confirm('删除一级分类及其二级分类？已用该分类的任务会显示为「未分类」。')) {
+        S.cats = S.cats.filter(c => c.id !== id); save(); render();
+      }
+      break;
+    case 'cat-del2': {
+      const p = S.cats.find(c => c.id === id);
+      if (p) { p.children = p.children.filter(k => k.id !== el.dataset.cid); save(); render(); }
+      break;
+    }
+    case 'rule-edit':
+      openRuleModal(S.rules.find(x => x.id === id));
+      break;
+    case 'rstep-add': {
+      ruleStepsDraft = $('#stepRows') ? readStepRows() : ruleStepsDraft;
+      ruleStepsDraft.push({ name: '', day: 1, time: '09:00', policy: 'prev' });
+      renderStepWrap($('#r_cycle').value);
+      break;
+    }
+    case 'rstep-del': {
+      const rows = $$('#stepRows .srow');
+      const idx = rows.indexOf(el.closest('.srow'));
+      ruleStepsDraft = readStepRows();
+      ruleStepsDraft.splice(idx, 1);
+      if (!ruleStepsDraft.length) ruleStepsDraft = [{ name: '', time: '09:00', policy: 'prev' }];
+      renderStepWrap($('#r_cycle').value);
+      break;
+    }
+    case 'mstage-add': {
+      const st = ($('#f_start') || {}).value || TODAY;
+      const en = ($('#f_end') || {}).value || st;
+      $('#stageRows').insertAdjacentHTML('beforeend', stageRowHTML(st, en));
+      break;
+    }
+    case 'mstage-del':
+      el.closest('.mrow').remove();
+      break;
+    case 'toggle-step': {
+      if (!t || !t.steps) break;
+      const i = Number(el.dataset.idx), s2 = t.steps[i];
+      if (!s2) break;
+      s2.done = !s2.done;
+      t.status = t.steps.every(x => x.done) ? 'done' : 'doing';
+      save();
+      if (drawerId === t.id) openDrawer(t.id);
+      render();
+      toast(s2.done ? '已完成：' + (s2.name || '节点') : '已恢复为待办');
+      break;
+    }
+    case 'modal-ok': {
+      if (modalOk && modalOk() === false) return;
+      break;
+    }
+    case 'modal-cancel': closeModal(); break;
+  }
+});
+
+/* 日历拖拽 */
+document.addEventListener('dragstart', e => {
+  const el = e.target.closest('[data-drag]');
+  if (!el) return;
+  e.dataTransfer.setData('text/plain', el.dataset.drag);
+  e.dataTransfer.effectAllowed = 'move';
+  el.classList.add('dragging');
+});
+document.addEventListener('dragend', e => {
+  const el = e.target.closest('[data-drag]');
+  if (el) el.classList.remove('dragging');
+  $$('.cell.drop-hot').forEach(c => c.classList.remove('drop-hot'));
+});
+document.addEventListener('dragover', e => {
+  const cell = e.target.closest('.cell[data-date]');
+  if (!cell) return;
+  e.preventDefault();
+  cell.classList.add('drop-hot');
+});
+document.addEventListener('dragleave', e => {
+  const cell = e.target.closest('.cell[data-date]');
+  if (cell) cell.classList.remove('drop-hot');
+});
+document.addEventListener('drop', e => {
+  const cell = e.target.closest('.cell[data-date]');
+  if (!cell) return;
+  e.preventDefault();
+  cell.classList.remove('drop-hot');
+  const raw = e.dataTransfer.getData('text/plain');
+  if (!raw) return;
+  let id = raw, si = -1;
+  try { const o = JSON.parse(raw); id = o.id; si = (o.s == null ? -1 : o.s); } catch (err) { }
+  moveTask(id, cell.dataset.date, si);
+});
+
+/* 日历点选日期 */
+document.addEventListener('click', e => {
+  const cell = e.target.closest('.cell[data-date]');
+  if (cell && !e.target.closest('[data-drag]')) { selDay = cell.dataset.date; render(); }
+});
+
+/* 抽屉内字段编辑 */
+document.addEventListener('change', e => {
+  const modal = e.target.closest('#modal');
+  if (modal && e.target.matches('[data-cat1]')) {
+    refreshCat2(modal, e.target.value);
+    return;
+  }
+  if (modal && e.target.id === 'r_cycle') {
+    ruleStepsDraft = readStepRows();
+    renderStepWrap(e.target.value);
+    return;
+  }
+  if (modal && e.target.matches('#f_type')) {
+    // 切换类型时提示（不阻断）
+    if (e.target.value === 'temp') toast('临时任务默认归入「其他 / 临时事项」');
+    return;
+  }
+  const dr = e.target.closest('#drawer');
+  if (!dr || !drawerId) return;
+  const t = S.tasks.find(x => x.id === drawerId);
+  if (!t) return;
+  const f = e.target.dataset.field;
+  if (!f) return;
+  if (f === 'cat1') {
+    t.cat1 = e.target.value;
+    const kids = ((S.cats.find(c => c.id === t.cat1) || {}).children) || [];
+    t.cat2 = (kids[0] || {}).id || '';
+    save(); openDrawer(t.id); render(); return;
+  }
+  if (f === 'start' || f === 'end') {
+    const v = e.target.value;
+    if (!v) return;
+    if (f === 'start') { const delta = diffDays(v, t.start); t.start = v; if (t.type !== 'routine') t.end = addDays(t.end, delta); else t.end = v; }
+    else { t.end = v; }
+    if (t.end < t.start) t.end = t.start;
+  } else if (f === 'imp' || f === 'urg') {
+    t[f] = e.target.value ? Number(e.target.value) : null;
+  } else if (f === 'status') {
+    t.status = e.target.value;
+  } else if (f === 'title') {
+    t.title = e.target.value.trim() || t.title;
+  } else {
+    t[f] = e.target.value;
+  }
+  save(); render(); openDrawer(t.id);
+});
+
+/* 今日待办快捷新建 */
+document.addEventListener('submit', e => {
+  if (e.target.id !== 'quickForm') return;
+  e.preventDefault();
+  const title = $('#qTitle').value.trim();
+  if (!title) { toast('先写点什么'); return; }
+  S.tasks.push({
+    id: uid('t'), type: 'temp', title, owner: '我', assignee: '我',
+    start: TODAY, end: TODAY, time: $('#qTime').value || '', std: '', status: 'todo',
+    cat1: 'c3', cat2: 'c31', imp: null, urg: null, stages: []
+  });
+  save(); render(); toast('已加入今日待办');
+});
+
+/* 遮罩关闭 */
+$('#overlay').addEventListener('click', closeDrawer);
+$('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeDrawer(); closeModal(); }
+  if (e.key === 'Enter' && $('#auth').classList.contains('show') && (e.target.id === 'a_no' || e.target.id === 'a_name')) {
+    e.preventDefault(); doLogin();
+  }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'a_kw') {
+    authKw = e.target.value.trim();
+    const box = $('#mgrList');
+    if (box) box.innerHTML = mgrListHTML(authKw);
+  }
+});
+
+/* ============ 启动 ============ */
+(function init() {
+  S = load();
+  const fresh = !S || !S.tasks;
+  if (fresh) S = seed();
+  S.watch = S.watch || {};
+  ensureRoutines(monthStart(addDays(TODAY, -40)), addDays(TODAY, 80));
+  /* 自愈：规则已删但实例还挂着（旧版删规则不联动），启动时清掉 */
+  const pruned = pruneOrphanRoutines();
+  if (fresh) {
+    // 演示：过去的常规实例视为已完成，避免一堆「逾期」
+    S.tasks.forEach(t => {
+      if (t.type !== 'routine') return;
+      if (t.steps && t.steps.length) {
+        t.steps.forEach(x => { if (x.date < TODAY) x.done = true; });
+        t.status = t.steps.every(x => x.done) ? 'done' : 'doing';
+      } else if (t.start < TODAY) {
+        t.status = 'done';
+      }
+    });
+  }
+  save(); render();
+  if (pruned) setTimeout(() => toast(`已清理 ${pruned} 条无主常规实例（所属规则已删除）`), 400);
+  if (!S.me) { authStep = 'login'; authRender(); }
+})();
+</script>
+</body>
+</html>

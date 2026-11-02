@@ -1,0 +1,15 @@
+# 运行时数据：数据库里是真实业务数据，不进版本库（首次启动会自动建库）
+data/
+
+# 本地开发与自检产物
+_dev/
+node_modules/
+
+# 日志与临时文件
+*.log
+*.tmp
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini

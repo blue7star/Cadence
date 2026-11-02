@@ -17,6 +17,8 @@
 server.js              # HTTP 服务 + 接口 + 常规实例生成引擎
 version.js             # 版本号与更新内容的唯一定义点（含自检/生成命令）
 CHANGELOG.md           # 更新记录的人读版本（由 version.js 生成，勿手改）
+import-emp.js          # 花名册导入（CSV → emp 表，含校验与干跑）
+emp-template.csv       # 花名册模板（Excel 可直接打开填写）
 public/index.html      # 页面骨架与全部样式
 public/app.js          # 视图渲染、交互、同步
 public/changelog.js    # 顶栏版本号 + 版本更新弹窗
@@ -36,6 +38,33 @@ PORT=8799 node --no-warnings server.js   # 换端口
 ```
 
 启动后可访问 `http://localhost:8788`，用种子花名册里的 **1012 / 王磊** 登录。路由用 `/api/login`、`/api/state`、`/api/sync`、`/api/rev`、`/api/setmgr`、`/api/demo`、`/api/reset`。
+
+### 3.1 导入花名册（账号）
+
+花名册就是 `emp` 表：`no`（工号）、`name`（姓名）、`role`（岗位）、`dept`（部门）、`mgr_no`（上级工号）、`active`。登录只比对工号 + 姓名，没有密码；`mgr_no` 决定可见范围（下属的常规工作进上级看板，上级下发的任务进下属承接台）。
+
+用 `emp-template.csv` 填好，跑一条命令：
+
+```bash
+node --no-warnings import-emp.js 花名册.csv --dry-run   # 先看有没有问题，不写库
+node --no-warnings import-emp.js 花名册.csv             # 校验通过后写入
+```
+
+- CSV 列：`工号,姓名,岗位,部门,上级工号`，第一行表头可有可无，`#` 开头为注释，支持 Excel 存出的带 BOM 的 UTF-8。
+- 只有工号、姓名必填。上级工号可以指向本文件里的人，也可以指向库里已有的人。
+- 按工号 upsert：重复导入是更新，不会出现两条；导入会把该账号 `active` 置回 1。
+- 全量校验通过才写库，一行有问题整批不写（工号重复 / 姓名空 / 上级不存在 / 自己当自己上级都会被点出来），事务内写入，异常回滚。
+- 写入后 `rev` 会 +1，前端几秒内自动刷新，不用重启服务。
+- **离职 / 返聘**不用从 CSV 删行（删行不会改任何东西），用开关：
+
+```bash
+node --no-warnings import-emp.js --off 1005    # 停用：登录被拒，不进任何人的下属列表
+node --no-warnings import-emp.js --on  1005    # 重新启用
+```
+
+`active=0` 之后登录被拒、不再出现在任何人的下属列表里，历史任务与日历记录不受影响。
+
+> 为什么不做导入界面：一期没有权限分级，任何能打开工作台的人都能改花名册就等于能给自己加权限。导入放在命令行，由维护者执行。
 
 ## 4. 接口
 

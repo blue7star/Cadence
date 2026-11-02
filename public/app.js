@@ -509,9 +509,16 @@ function viewAssign() {
       <tbody>
       ${list.map(t => {
         const p = taskProg(t);
+        /* 对方选了「规划并承接」，会在他名下新建一条任务并指回这条；展开挂在下面，
+           否则上级这里永远停在「已接收」，看不到后续 */
+        const carried = S.tasks.filter(x => x.sourceId === t.id);
         return `<tr>
-          <td style="max-width:250px"><b>${esc(t.title)}</b><div class="mini">${catName(t.cat1, t.cat2)} ${prioLabel(t) ? '· ' + prioLabel(t) : ''}</div></td>
-          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${t.intakeStatus === 'pending' ? ' <span class="tag">待接收</span>' : ''}</td>
+          <td style="max-width:250px"><b>${esc(t.title)}</b><div class="mini">${catName(t.cat1, t.cat2)} ${prioLabel(t) ? '· ' + prioLabel(t) : ''}</div>
+            ${carried.map(x => `<div class="mini carry" data-act="open" data-id="${x.id}"
+                title="点开看承接后这条任务的详情"><span class="carry-ar">↳</span>${esc(nameOf(x.ownerNo))} 承接为「${esc(x.title)}」
+                <b>${taskProg(x)}%</b> · ${ST[x.status] ? ST[x.status].name : ''}${overdue(x) ? ' · <span style="color:#dc2626">已逾期</span>' : ''}</div>`).join('')}</td>
+          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${t.intakeStatus === 'pending' ? ' <span class="tag">待接收</span>'
+            : (t.intakeStatus === 'accepted' && !carried.length ? ' <span class="tag">已接收</span>' : '')}</td>
           <td class="mini" style="white-space:nowrap">${fmt(t.start)} → ${fmt(t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
           <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>
           <td class="mini" style="max-width:200px;min-width:140px">${esc(cut(t.std || '未填写', 26))}</td>
@@ -969,7 +976,7 @@ function drawerHTML(t) {
   return `<div class="dh">
       <div style="flex:1">
         <div class="split" style="margin-bottom:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
-          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} 下发</span>` : ''}</div>
+          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下发'}</span>` : ''}</div>
         <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
           style="width:100%;border:1px solid transparent;border-radius:7px;padding:4px 6px;font-size:15px;font-weight:600;font-family:inherit;outline:none"/>
       </div>
@@ -1019,7 +1026,13 @@ function drawerHTML(t) {
         </div>
       </div>` : ''}
       <div class="note" style="margin-bottom:14px">
-        ${t.sourceId ? `来源：上级下派任务（${esc((S.tasks.find(i => i.id === t.sourceId) || {}).title || '')}）<br/>` : ''}
+        ${t.sourceId ? (() => {
+          const src = S.tasks.find(i => i.id === t.sourceId) || {};
+          /* 同一句来源说明，两边看到的角度不同：我是派出方，就该看到「谁承接了、拆成什么」 */
+          return src.ownerNo === S.me.no
+            ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下发的「${esc(src.title || '')}」<br/>`
+            : `来源：上级下派任务（${esc(src.title || '')}）<br/>`;
+        })() : ''}
         ${t.ownerNo !== S.me.no ? `下发人：${esc(nameOf(t.ownerNo))} · ` : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${taskProg(t)}%
       </div>
       ${isRoutine ? '' : `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>`}

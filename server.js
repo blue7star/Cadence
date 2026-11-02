@@ -280,10 +280,17 @@ function stateFor(meNo) {
   for (const e of db.prepare('SELECT no,name,role,dept,mgr_no FROM emp').all()) names[e.no] = e.name;
   const mgr = me.mgr_no ? db.prepare('SELECT no,name,role,dept FROM emp WHERE no=?').get(me.mgr_no) : null;
 
+  /* 我派出去、对方已「规划并承接」的原任务 id。承接方新建的任务带着 source_id 指回来，
+     不给上级看就等于派完就断线：主管只知道「已接收」，之后进度、是否延期一概不知。 */
+  const delegatedSrc = new Set(
+    db.prepare("SELECT id FROM task WHERE owner_no=? AND intake_status='accepted'").all(meNo).map(r => r.id)
+  );
+
   const placeholders = ownerNos.map(() => '?').join(',');
   const rows = db.prepare(`SELECT * FROM task WHERE owner_no IN (${placeholders}) OR assignee_no=?`)
     .all(...ownerNos, meNo)
-    .filter(r => r.owner_no === meNo || r.assignee_no === meNo || r.type === 'routine');
+    .filter(r => r.owner_no === meNo || r.assignee_no === meNo || r.type === 'routine'
+      || (r.source_id && delegatedSrc.has(r.source_id)));
 
   const tasks = rows.map(r => ({
     id: r.id, type: r.type, title: r.title, ownerNo: r.owner_no, assigneeNo: r.assignee_no,

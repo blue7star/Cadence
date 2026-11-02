@@ -25,7 +25,7 @@ const weekStart = s => addDays(s, -((dow(s) + 6) % 7));
 
 let TODAY = iso(new Date());
 
-/* ============ 节假日（由服务端下发，保证服务端生成实例与前端渲染一致） ============ */
+/* ============ 节假日（由服务端提供，保证服务端生成实例与前端渲染一致） ============ */
 let HOL = {}, MK = {};
 function adoptHolidays(list) {
   HOL = {}; MK = {};
@@ -40,7 +40,7 @@ const isWorkday = s => isMakeup(s) ? true : (isHoliday(s) ? false : (dow(s) !== 
 
 /* ============ 常量 ============ */
 const TYPES = {
-  assign: { name: '任务制定', cls: 'assign' },
+  assign: { name: '下派任务', cls: 'assign' },
   routine: { name: '常规任务', cls: 'routine' },
   special: { name: '专项任务', cls: 'special' },
   temp: { name: '临时任务', cls: 'temp' }
@@ -53,7 +53,7 @@ const ST = {
 };
 const LV = { 3: '高', 2: '中', 1: '低' };
 const TITLES = {
-  today: '今日待办', assign: '任务制定', routine: '常规工作', special: '专项工作',
+  today: '今日待办', assign: '下派任务', routine: '常规工作', special: '专项工作',
   intake: '任务承接台', calendar: '日历待办', settings: '设置'
 };
 
@@ -480,7 +480,7 @@ function viewToday() {
       <div class="card">
         <div class="card-h"><h2>快捷入口</h2></div>
         <div class="stack">
-          <button class="btn" data-act="new" data-type="assign">下发新任务给组员</button>
+          <button class="btn" data-act="new" data-type="assign">下派新任务给组员</button>
           <button class="btn" data-act="new" data-type="special">新建专项（含阶段计划）</button>
           <button class="btn" data-act="new-rule">新建常规工作规则</button>
         </div>
@@ -489,23 +489,23 @@ function viewToday() {
   </div>`;
 }
 
-/* ============ 视图：任务制定 ============ */
+/* ============ 视图：下派任务 ============ */
 function viewAssign() {
   const list = S.tasks.filter(t => t.type === 'assign' && t.ownerNo === S.me.no);
   const doing = list.filter(t => t.status === 'doing').length;
   const late = list.filter(overdue).length;
   return `
-  ${noMgrBar('下发任务')}
+  ${noMgrBar('下派任务')}
   <div class="grid-4">
-    ${statCard('', '已下发任务', list.length)}
+    ${statCard('', '已下派任务', list.length)}
     ${statCard('doing', '进行中', doing)}
     ${statCard('done', '已完成', list.filter(t => t.status === 'done').length)}
     ${statCard('paused', '逾期未完成', late)}
   </div>
   <div class="card" style="margin-top:14px">
-    <div class="card-h"><h2>我下发的任务</h2><span class="hint">执行人是组员，因此不进你的日历；在这里看阶段进度与达成标准</span>
+    <div class="card-h"><h2>我下派的任务</h2><span class="hint">执行人是组员，因此不进你的日历；在这里看阶段进度与达成标准</span>
       <div class="spacer"></div>
-      <button class="btn primary sm" data-act="new" data-type="assign">+ 新建下发任务</button></div>
+      <button class="btn primary sm" data-act="new" data-type="assign">+ 新建下派任务</button></div>
     ${list.length ? `<table>
       <thead><tr><th style="width:30%">任务</th><th>承接人</th><th>起止</th><th>阶段进度</th><th>达成标准</th><th>状态</th><th></th></tr></thead>
       <tbody>
@@ -529,7 +529,7 @@ function viewAssign() {
         </tr>`;
       }).join('')}
       </tbody>
-    </table>` : '<div class="empty">还没有下发过任务</div>'}
+    </table>` : '<div class="empty">还没有下派过任务</div>'}
   </div>
 
   <div class="card">
@@ -743,7 +743,7 @@ function viewIntake() {
         <div class="note">
           上级下派的任务不直接变成待办，先落到承接台做一次「规划动作」：<br/>
           · 判断这件事是我的专项（长期、要自己推进），还是临时任务（一次性、当天处理）；<br/>
-          · 需要组员参与时，直接转成下发任务并指定承接人；<br/>
+          · 需要组员参与时，直接转成下派任务并指定承接人；<br/>
           · 承接后保留与上级任务的关联，进展可回溯，不用在群里反复问。
         </div>
       </div>
@@ -815,7 +815,7 @@ function viewCalendar() {
         ${cells.map(cellHTML).join('')}
       </div>
       <div class="cal-legend">
-        <span><i class="dot" style="background:var(--assign)"></i>任务制定</span>
+        <span><i class="dot" style="background:var(--assign)"></i>下派任务</span>
         <span><i class="dot" style="background:var(--routine)"></i>常规任务</span>
         <span><i class="dot" style="background:var(--special)"></i>专项任务</span>
         <span><i class="dot" style="background:var(--temp)"></i>临时任务</span>
@@ -863,10 +863,10 @@ function viewSettings() {
     <div class="authkv">
       <div><span>登录账号</span><b>${S.me ? esc(S.me.name) + ' · ' + esc(S.me.no) : '未登录'}</b></div>
       <div><span>部门 / 岗位</span><b>${S.me ? esc(S.me.dept) + ' · ' + esc(S.me.role) : '—'}</b></div>
-      <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置，下发与承接不可用</span>'}</b></div>
+      <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置，下派与承接不可用</span>'}</b></div>
       <div><span>可见范围</span><b>直接下属 ${S.subs.length} 人（向下 1 层）</b></div>
     </div>
-    <div class="note" style="margin-top:10px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下发的任务仍保留原上级可见，新增任务只对新上级可见。</div>
+    <div class="note" style="margin-top:10px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下派的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
   <div class="grid-2">
     <div class="card">
@@ -978,7 +978,7 @@ function drawerHTML(t) {
   return `<div class="dh">
       <div style="flex:1">
         <div class="split" style="margin-bottom:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
-          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下发'}</span>` : ''}</div>
+          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下派'}</span>` : ''}</div>
         <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
           style="width:100%;border:1px solid transparent;border-radius:7px;padding:4px 6px;font-size:15px;font-weight:600;font-family:inherit;outline:none"/>
       </div>
@@ -1032,10 +1032,10 @@ function drawerHTML(t) {
           const src = S.tasks.find(i => i.id === t.sourceId) || {};
           /* 同一句来源说明，两边看到的角度不同：我是派出方，就该看到「谁承接了、拆成什么」 */
           return src.ownerNo === S.me.no
-            ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下发的「${esc(src.title || '')}」<br/>`
+            ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下派的「${esc(src.title || '')}」<br/>`
             : `来源：上级下派任务（${esc(src.title || '')}）<br/>`;
         })() : ''}
-        ${t.ownerNo !== S.me.no ? `下发人：${esc(nameOf(t.ownerNo))} · ` : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${taskProg(t)}%
+        ${t.ownerNo !== S.me.no ? `下派人：${esc(nameOf(t.ownerNo))} · ` : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${taskProg(t)}%
       </div>
       ${isRoutine ? '' : `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>`}
     </div>`;
@@ -1123,7 +1123,7 @@ function taskModalBody(type, preset) {
   </div></div>`;
 
   if (type !== 'special') {
-    return base + `<div class="note">${type === 'temp' ? '临时任务默认归入「其他 / 临时事项」，起止可只选今天。' : '下发后组员登录即可在「承接台」看到并承接；可后续在详情里加阶段目标。'}</div>`;
+    return base + `<div class="note">${type === 'temp' ? '临时任务默认归入「其他 / 临时事项」，起止可只选今天。' : '下派后组员登录即可在「承接台」看到并承接；可后续在详情里加阶段目标。'}</div>`;
   }
   return `<div class="form-grid">
     <div class="form-col">
@@ -1151,12 +1151,12 @@ function stageRowHTML(s, e) {
 function openNewTask(type, preset) {
   const t = type || 'temp';
   if (t === 'assign' && !(S.me && S.me.mgr)) {
-    toast('先设置直属上级，才能下发任务');
+    toast('先设置直属上级，才能下派任务');
     authStep = 'mgr'; authPick = null; authKw = ''; authRender();
     return;
   }
   if (t === 'assign' && !S.subs.length) {
-    toast('你还没有直接下属，无法下发任务');
+    toast('你还没有直接下属，无法下派任务');
     return;
   }
   openModal(`新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
@@ -1316,7 +1316,7 @@ function openIntakeModal(id) {
     <div class="field"><label>这件事在你这儿算什么</label><select id="f_type">
       <option value="special">专项任务（需要自己持续推进，可拆阶段）</option>
       <option value="temp">临时任务（一次性，尽快处理）</option>
-      <option value="assign">下发任务（交给组员办）</option>
+      <option value="assign">下派任务（交给组员办）</option>
     </select></div>
     <div class="field"><label>任务名称</label><input id="f_title" value="${esc(it.title)}"/></div>
     <div class="field"><label>承接人</label><select id="f_assignee">
@@ -1346,7 +1346,7 @@ function openIntakeModal(id) {
     if (src) src.intakeStatus = 'accepted';
     S.intake = buildIntake(); S.members = buildMembers();
     save(); closeModal(); render();
-    toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下发组员');
+    toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下派组员');
   }, '承接');
 }
 function openCatModal(level, parentId) {
@@ -1430,7 +1430,7 @@ function authRender(msg) {
   body.innerHTML = `
     <div class="step">STEP 2 / 2 · 汇报关系</div>
     <h3>选择你的直属上级</h3>
-    <p class="desc">一个账号只有一个直属上级，用于下发任务、承接上级任务与可见范围。可搜索工号或姓名。</p>
+    <p class="desc">一个账号只有一个直属上级，用于下派任务、承接上级任务与可见范围。可搜索工号或姓名。</p>
     <div class="auth-field" style="margin-bottom:9px"><input id="a_kw" placeholder="搜索工号 / 姓名" value="${esc(authKw)}"/></div>
     <div class="mgr-list" id="mgrList">${mgrListHTML(authKw)}</div>
     <div class="auth-err" id="a_err">${msg || ''}</div>
@@ -1438,7 +1438,7 @@ function authRender(msg) {
       <button class="btn ghost" data-act="skip-mgr">暂时跳过</button>
       <button class="btn primary" data-act="confirm-mgr">确定</button>
     </div>
-    <div class="auth-hint">暂不设置也能用：今日待办、常规、专项、临时任务、日历都正常；只是「下发任务」和「任务承接台」会锁住。
+    <div class="auth-hint">暂不设置也能用：今日待办、常规、专项、临时任务、日历都正常；只是「下派任务」和「任务承接台」会锁住。
       ${S && S.me ? `<br/><span style="color:#7b8a9d">当前身份：${esc(S.me.name)} · ${esc(S.me.no)}</span>
       <span class="btn link" data-act="close-auth" style="margin-left:6px">返回工作台</span>` : ''}</div>`;
 }
@@ -1501,7 +1501,7 @@ document.addEventListener('click', e => {
       break;
     }
     case 'skip-mgr':
-      finishAuth('已跳过。下发任务与承接台暂不可用，可随时在设置里补');
+      finishAuth('已跳过。下派任务与承接台暂不可用，可随时在设置里补');
       break;
     case 'switch-user':
     case 'open-mgr':
@@ -1536,7 +1536,6 @@ document.addEventListener('click', e => {
       }
       break;
     case 'new': openNewTask(el.dataset.type || 'temp'); break;
-    case 'quick-new': openNewTask('temp'); break;
     case 'new-day': openNewTask('temp', { date: selDay }); break;
     case 'new-rule': openRuleModal(); break;
     case 'rtab': routineTab = el.dataset.tab; render(); break;

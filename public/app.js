@@ -54,7 +54,7 @@ const ST = {
 const LV = { 3: '高', 2: '中', 1: '低' };
 const TITLES = {
   today: '今日待办', assign: '下派任务', routine: '常规工作', special: '专项工作',
-  intake: '任务承接台', calendar: '日历待办', settings: '设置'
+  intake: '任务承接台', calendar: '日历待办', settings: '设置', task: '任务详情'
 };
 
 /* ============ 运行状态 ============ */
@@ -67,7 +67,7 @@ let pollTimer = null;
 let view = 'today', calCursor = monthStart(TODAY), calMode = 'month', selDay = TODAY;
 let routineTab = 'month';
 let openMembers = {};
-let drawerId = null, modalOk = null;
+let modalOk = null;
 let authStep = 'login', authPick = null, authKw = '';
 
 const ME_KEY = 'pm_mvp_me';    /* 只存工号，数据一律在服务端 */
@@ -210,7 +210,8 @@ async function refresh(silent) {
 }
 
 function canRerender() {
-  return !$('#modalWrap').classList.contains('show') && !$('#drawer').classList.contains('show') &&
+  /* 详情页上有人在打字，别让 7 秒一次的自动刷新把输入清掉 */
+  return view !== 'task' && !$('#modalWrap').classList.contains('show') &&
     !$('#auth').classList.contains('show');
 }
 
@@ -525,7 +526,7 @@ function viewAssign() {
           <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>
           <td class="mini" style="max-width:200px;min-width:140px">${esc(cut(t.std || '未填写', 26))}</td>
           <td>${stTag(t.status)}</td>
-          <td><button class="btn sm ghost" data-act="open" data-id="${t.id}">管理</button></td>
+          <td><button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button></td>
         </tr>`;
       }).join('')}
       </tbody>
@@ -695,7 +696,7 @@ function viewSpecial() {
           <div class="card-h" style="margin-bottom:6px">
             <h2>${esc(t.title)}</h2>${stTag(t.status)}${prioBadge(t)}
             ${t.status !== 'done' && left < 0 ? '<span class="tag red">逾期 ' + Math.abs(left) + ' 天</span>' : t.status !== 'done' && left <= 3 ? '<span class="tag warn">剩 ' + left + ' 天</span>' : ''}
-            <div class="spacer"></div><button class="btn sm ghost" data-act="open" data-id="${t.id}">管理</button>
+            <div class="spacer"></div><button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button>
           </div>
           <div class="mini" style="margin-bottom:8px">${fmt(t.start)} → ${fmt(t.end)} · ${catName(t.cat1, t.cat2)}${t.stages && t.stages.length ? ' · ' + t.stages.length + ' 个阶段' : ''}</div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -920,9 +921,9 @@ function render() {
   if (!S || !S.me) return;
   renderMe();
   $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
-  const map = { today: viewToday, assign: viewAssign, routine: viewRoutine, special: viewSpecial, intake: viewIntake, calendar: viewCalendar, settings: viewSettings };
+  const map = { today: viewToday, assign: viewAssign, routine: viewRoutine, special: viewSpecial, intake: viewIntake, calendar: viewCalendar, settings: viewSettings, task: viewTaskDetail };
   $('#view').innerHTML = (map[view] || viewToday)();
-  $('#pageTitle').textContent = TITLES[view];
+  $('#pageTitle').textContent = TITLES[view] || '任务详情';
   $('#pageSub').textContent = view === 'calendar' ? '任务与待办统一在日历上安排' : '';
   const wd = isWorkday(TODAY);
   $('#workdayPill').textContent = `${fmtFull(TODAY)} · ${wd ? '工作日' : '非工作日'}`;
@@ -949,99 +950,149 @@ function noMgrBar(what) {
     <span class="btn link" data-act="open-mgr">去设置</span></div>`;
 }
 
-/* ============ 详情抽屉 ============ */
-function openDrawer(id) {
+/* ============ 任务详情（整页，不用抽屉） ============ */
+/* 左抽屉只有 460px 宽，一列控件往下堆；管理者点开一条任务想看的是「到哪了、卡在哪」，
+   不是一列要填的表单。所以改成整页：抬头先给进度，左边看阶段，右边才是字段；
+   别人的任务整块只读，用键值表展示，不摆一堆改不动的灰控件。 */
+let detailId = null, detailFrom = 'today';
+
+function openTaskPage(id) {
   const t = S.tasks.find(x => x.id === id);
   if (!t) return;
-  drawerId = id;
-  $('#drawer').innerHTML = drawerHTML(t);
-  $('#drawer').classList.add('show');
-  $('#overlay').classList.add('show');
+  if (view !== 'task') detailFrom = view;
+  detailId = id;
+  view = 'task';
+  render();
+  window.scrollTo(0, 0);
 }
-function closeDrawer() {
-  $('#drawer').classList.remove('show');
-  $('#overlay').classList.remove('show');
-  drawerId = null;
+function closeTaskPage() {
+  detailId = null;
+  view = detailFrom || 'today';
+  render();
   if (pendingRefresh) { pendingRefresh = false; refresh(true).catch(() => { }); }
 }
-function drawerHTML(t) {
+
+function viewTaskDetail() {
+  const t = S.tasks.find(x => x.id === detailId);
+  if (!t) {
+    return `<div class="card"><div class="note">这条任务已经被删除了，或者你现在没有权限看它。</div>
+      <div style="margin-top:12px"><button class="btn sm" data-act="close">← 返回</button></div></div>`;
+  }
+  return taskDetailHTML(t);
+}
+
+function taskDetailHTML(t) {
   const isRoutine = t.type === 'routine';
   const rule = S.rules.find(r => r.id === t.routineId) || null;
+  const isMine = t.ownerNo === S.me.no || t.assigneeNo === S.me.no;
+  const canEdit = isMine;
+  const stages = t.stages || [];
+  const doneN = stages.filter(s => s.done).length;
+  const prog = taskProg(t);
+  const leftDays = diffDays(t.end, TODAY);
+  const src = t.sourceId ? (S.tasks.find(i => i.id === t.sourceId) || null) : null;
   const stOpts = Object.keys(ST).map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${ST[k].name}</option>`).join('');
   const lvOpts = v => `<option value="">未设置</option>` + [3, 2, 1].map(k => `<option value="${k}" ${v === k ? 'selected' : ''}>${LV[k]}</option>`).join('');
-  const isMine = t.ownerNo === S.me.no || t.assigneeNo === S.me.no;
   const whoOpts = [`<option value="${S.me.no}" ${t.assigneeNo === S.me.no ? 'selected' : ''}>我</option>`]
     .concat(S.subs.map(m => `<option value="${m.no}" ${t.assigneeNo === m.no ? 'selected' : ''}>${esc(m.name)}</option>`)).join('');
-  const cats = catSelectsHTML(t.cat1, t.cat2);
-  const canEdit = isMine;
 
-  return `<div class="dh">
-      <div style="flex:1">
-        <div class="split" style="margin-bottom:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
-          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下派'}</span>` : ''}</div>
+  const leftText = t.status === 'done' ? '已完成'
+    : leftDays > 0 ? `还有 ${leftDays} 天` : leftDays === 0 ? '今天到期' : `逾期 ${-leftDays} 天`;
+
+  /* ---- 抬头：返回 + 标题 + 标签，再一排进度指标 ---- */
+  const head = `<div class="td-head">
+      <button class="btn sm ghost" data-act="close">← 返回</button>
+      <div style="flex:1;min-width:0">
         <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
-          style="width:100%;border:1px solid transparent;border-radius:7px;padding:4px 6px;font-size:15px;font-weight:600;font-family:inherit;outline:none"/>
+          class="td-title${canEdit ? '' : ' ro'}"/>
+        <div class="split" style="margin-top:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
+          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下派'}</span>` : ''}
+          ${canEdit ? '' : '<span class="tag">只读</span>'}
+        </div>
       </div>
-      <button class="btn sm ghost" data-act="close">✕</button>
     </div>
-    <div class="db">
-      ${isRoutine ? `<div class="note" style="margin-bottom:14px">${rule ? `由常规规则「${esc(rule.title)}」自动生成 · 本周期 ${fmt(t.start)} ~ ${fmt(t.end)}
-        ${!(t.stages || []).length ? (t.planDate && t.planDate !== t.start ? `<br/>因节假日已调整到 <b>${fmt(t.start)}</b>，<span class="btn link" data-act="stage-restore" data-id="${t.id}">恢复规则日期</span>` : '') : ''}
-        <button class="btn link" data-act="rule-edit" data-id="${t.routineId}" style="margin-top:4px">编辑规则</button>`
-        : `所属规则「${esc(t.title)}」<b>已删除</b>，这条实例作为保留记录存在 · 不会再有新的 · 本周期 ${fmt(t.start)} ~ ${fmt(t.end)}
-        <br/>如需清掉，可在详情底部删除这条任务。`}
-      </div>
-      ${(t.stages || []).length ? `<div class="field"><label>本周期节点（勾掉即完成）</label>
-        <div class="stagelist">
-          ${t.stages.map((s, i) => `<div class="sitem">
-            <div class="cb ${s.done ? 'on' : ''}" data-act="toggle-step" data-id="${t.id}" data-idx="${i}">${s.done ? '✓' : ''}</div>
-            <div class="nm ${s.done ? 'done' : ''}" style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name || '执行')}
-              <small>${fmt(s.date)}${s.time ? ' · ' + s.time : ''}${s.plan && s.plan !== s.date ? ` · 计划 ${fmt(s.plan)}，节假日已调整` : ''}</small></div>
-          </div>`).join('')}
-        </div></div>` : ''}` : ''}
-      <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
-      <div class="field"><label>起止时间</label><div class="row">
-        <input type="date" value="${t.start}" data-field="start"/>
-        <input type="date" value="${t.end}" data-field="end"/>
-      </div></div>
-      ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
-      <div class="field"><label>承接人</label>${t.type === 'assign'
-        ? `<select data-field="assigneeNo">${whoOpts}</select>`
-        : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
-           <div class="mini" style="margin-top:5px;line-height:1.4">只有「下派任务」能换人；要交给组员，请新建一条下派任务。</div>`}</div>
-      <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
-      ${cats}
-      <div class="field"><label>优先级（可选填）</label><div class="row">
-        <select data-field="imp">${lvOpts(t.imp).replace('未设置', '重要度：未设置')}</select>
-        <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
-      </div></div>`}
-      ${t.type === 'special' || t.type === 'assign' ? `<div class="field"><label>阶段目标（拆分后可按阶段核进度）</label>
-        ${(t.stages || []).map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
-          <div class="n" data-act="stage-toggle" data-id="${t.id}" data-idx="${i}" style="cursor:pointer">${s.done ? '✓' : i + 1}</div>
-          <div class="t ${s.done ? 'done' : ''}"><s style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name)}</s><small>${fmt(s.start)} → ${fmt(s.end)}</small></div>
-          <button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${i}">删</button>
-        </div>`).join('') || '<div class="mini" style="margin-bottom:8px">还没有阶段</div>'}
-        <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+    <div class="td-kpis">
+      <div><span>进度</span><b>${prog}%</b><div class="prog" style="margin-top:8px"><i style="width:${prog}%"></i></div></div>
+      <div><span>${isRoutine ? '当天节点' : '阶段'}</span><b>${stages.length ? `${doneN} / ${stages.length}` : '—'}</b></div>
+      <div><span>时间</span><b style="font-size:15px">${leftText}</b></div>
+      <div><span>承接人</span><b style="font-size:15px">${t.assigneeNo === S.me.no ? '我' : esc(nameOf(t.assigneeNo))}</b></div>
+    </div>`;
+
+  /* ---- 左栏：阶段 / 节点 ---- */
+  const stageCard = isRoutine
+    ? `<div class="card"><div class="card-h"><h2>本周期节点</h2><span class="hint">${t.status === 'done' ? '已完成' : '勾掉即完成'}</span></div>
+        ${stages.length ? `<div class="stagelist">${stages.map((s, i) => `<div class="sitem">
+          <div class="cb ${s.done ? 'on' : ''}" ${canEdit ? `data-act="toggle-step" data-id="${t.id}" data-idx="${i}"` : ''}>${s.done ? '✓' : ''}</div>
+          <div class="nm ${s.done ? 'done' : ''}" style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name || '执行')}
+            <small>${fmt(s.date)}${s.time ? ' · ' + s.time : ''}${s.plan && s.plan !== s.date ? ` · 计划 ${fmt(s.plan)}，节假日已调整` : ''}</small></div>
+        </div>`).join('')}</div>` : '<div class="mini">这一天没有设节点</div>'}
+        ${rule
+          ? `<div class="note" style="margin-top:10px">由常规规则「${esc(rule.title)}」自动生成 · ${fmt(t.start)} ~ ${fmt(t.end)}
+              ${canEdit && t.planDate && t.planDate !== t.start ? `<br/>因节假日已调整到 <b>${fmt(t.start)}</b>，<span class="btn link" data-act="stage-restore" data-id="${t.id}">恢复规则日期</span>` : ''}
+              ${canEdit ? `<br/><button class="btn link" data-act="rule-edit" data-id="${t.routineId}">编辑这条规则</button>` : `<br/>这是${esc(nameOf(t.ownerNo))}的常规安排，你只能看`}</div>`
+          : `<div class="note" style="margin-top:10px">所属规则「${esc(t.title)}」<b>已删除</b>，这条是保留下来的历史记录，不会再有新的。</div>`}
+      </div>`
+    : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
+        <span class="hint">${stages.length ? `${doneN} / ${stages.length} 已完成，进度按阶段算` : '还没拆阶段'}</span></div>
+        ${stages.length ? stages.map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
+          <div class="n" ${canEdit ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${i}" style="cursor:pointer"` : ''}>${s.done ? '✓' : i + 1}</div>
+          <div class="t ${s.done ? 'done' : ''}"><span style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name)}</span>${s.start || s.end ? `<small>${fmt(s.start)} → ${fmt(s.end)}</small>` : ''}</div>
+          ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${i}">删</button>` : ''}
+        </div>`).join('') : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
+        ${canEdit ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
           <input id="sName" placeholder="阶段名称，例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
           <div class="row">
             <input type="date" id="sStart" value="${t.start}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加阶段</button>
           </div>
-        </div>
-      </div>` : ''}
-      <div class="note" style="margin-bottom:14px">
-        ${t.sourceId ? (() => {
-          const src = S.tasks.find(i => i.id === t.sourceId) || {};
-          /* 同一句来源说明，两边看到的角度不同：我是派出方，就该看到「谁承接了、拆成什么」 */
-          return src.ownerNo === S.me.no
-            ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下派的「${esc(src.title || '')}」<br/>`
-            : `来源：上级下派任务（${esc(src.title || '')}）<br/>`;
-        })() : ''}
-        ${t.ownerNo !== S.me.no ? `下派人：${esc(nameOf(t.ownerNo))} · ` : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${taskProg(t)}%
-      </div>
-      ${isRoutine ? '' : `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>`}
+        </div>` : ''}
+      </div>`;
+
+  /* ---- 右栏：能改就用表单，不能改就用键值表（管理者看别人的活，要的是读数不是控件） ---- */
+  const assigneeField = t.type === 'assign'
+    ? `<select data-field="assigneeNo">${whoOpts}</select>`
+    : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
+       <div class="mini" style="margin-top:5px;line-height:1.4">只有「下派任务」能换人；要交给组员，请新建一条下派任务。</div>`;
+
+  const infoCard = canEdit
+    ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
+        <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
+        <div class="field"><label>起止时间</label><div class="row">
+          <input type="date" value="${t.start}" data-field="start"/>
+          <input type="date" value="${t.end}" data-field="end"/>
+        </div></div>
+        ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
+        <div class="field"><label>承接人</label>${assigneeField}</div>
+        <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
+        ${catSelectsHTML(t.cat1, t.cat2)}
+        <div class="field"><label>优先级（可选填）</label><div class="row">
+          <select data-field="imp">${lvOpts(t.imp).replace('未设置', '重要度：未设置')}</select>
+          <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
+        </div></div>`}
+      </div>`
+    : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
+        <div class="kv"><span>状态</span><b>${ST[t.status] ? ST[t.status].name : '—'}</b></div>
+        <div class="kv"><span>承接人</span><b>${esc(nameOf(t.assigneeNo))}</b></div>
+        <div class="kv"><span>起止</span><b>${fmt(t.start)}${t.time ? ' ' + t.time : ''} → ${fmt(t.end)}</b></div>
+        <div class="kv"><span>达成标准</span><b style="font-weight:500;text-align:right">${esc(t.std || '未填写')}</b></div>
+        <div class="kv"><span>分类</span><b>${catName(t.cat1, t.cat2)}</b></div>
+        <div class="kv"><span>优先级</span><b>${prioLabel(t) || '未设置'}</b></div>
+        <div class="kv"><span>下派人</span><b>${esc(nameOf(t.ownerNo))}</b></div>
+      </div>`;
+
+  /* ---- 底部：来源链路 + 删除 ---- */
+  const srcLine = src
+    ? (src.ownerNo === S.me.no
+      ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下派的「${esc(src.title || '')}」`
+      : `来源：${esc(nameOf(t.ownerNo))} 下派的任务「${esc(src.title || '')}」`)
+    : (t.ownerNo !== S.me.no ? `下派人：${esc(nameOf(t.ownerNo))}` : '');
+  const foot = `<div class="td-foot">
+      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? '' : ' · 你对这条任务只有查看权限，改动请找下派人'}</div>
+      ${!isRoutine && canEdit ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
     </div>`;
+
+  return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}</div></div>` + foot;
 }
 function catSelectsHTML(c1, c2) {
   const cur1 = c1 || (S.cats[0] || {}).id;
@@ -1546,8 +1597,8 @@ document.addEventListener('click', e => {
       break;
     }
     case 'go': view = el.dataset.view; render(); break;
-    case 'open': openDrawer(id); break;
-    case 'close': closeDrawer(); break;
+    case 'open': openTaskPage(id); break;
+    case 'close': closeTaskPage(); break;
     case 'toggle':
       if (t) {
         t.status = t.status === 'done' ? 'todo' : 'done';
@@ -1603,7 +1654,7 @@ document.addEventListener('click', e => {
     case 'task-del':
       if (confirm('删除这条任务？')) {
         S.tasks = S.tasks.filter(x => x.id !== id);
-        save(); closeDrawer(); render(); toast('已删除');
+        save(); closeTaskPage(); render(); toast('已删除');
       }
       break;
     case 'stage-add': {
@@ -1613,7 +1664,7 @@ document.addEventListener('click', e => {
       const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
       t.stages = t.stages || [];
       t.stages.push({ name, start: s, end: e2, done: false });
-      save(); openDrawer(t.id); render(); toast('阶段已添加');
+      save(); openTaskPage(t.id); render(); toast('阶段已添加');
       break;
     }
     case 'stage-toggle': {
@@ -1623,19 +1674,19 @@ document.addEventListener('click', e => {
       if (t.stages.every(s => s.done)) t.status = 'done';
       else if (t.status === 'done') t.status = 'doing';
       S.members = buildMembers();
-      save(); openDrawer(t.id); render();
+      save(); openTaskPage(t.id); render();
       break;
     }
     case 'stage-del': {
       if (!t) break;
       t.stages.splice(Number(el.dataset.idx), 1);
-      save(); openDrawer(t.id); render();
+      save(); openTaskPage(t.id); render();
       break;
     }
     case 'stage-restore': {
       if (!t || !t.planDate) break;
       t.start = t.planDate; t.end = t.planDate;
-      save(); openDrawer(t.id); render(); toast('已恢复为规则日期');
+      save(); openTaskPage(t.id); render(); toast('已恢复为规则日期');
       break;
     }
     case 'intake-plan': openIntakeModal(id); break;
@@ -1706,7 +1757,7 @@ document.addEventListener('click', e => {
       t.status = t.stages.every(x => x.done) ? 'done' : 'doing';
       S.members = buildMembers();
       save();
-      if (drawerId === t.id) openDrawer(t.id);
+      if (detailId === t.id) openTaskPage(t.id);
       render();
       toast(s2.done ? '已完成：' + (s2.name || '节点') : '已恢复为待办');
       break;
@@ -1797,9 +1848,9 @@ document.addEventListener('change', e => {
     if (next === 'temp') toast('临时任务默认归入「其他 / 临时事项」');
     return;
   }
-  const dr = e.target.closest('#drawer');
-  if (!dr || !drawerId) return;
-  const t = S.tasks.find(x => x.id === drawerId);
+  const dr = e.target.closest('#view');
+  if (!dr || !detailId) return;
+  const t = S.tasks.find(x => x.id === detailId);
   if (!t) return;
   const f = e.target.dataset.field;
   if (!f) return;
@@ -1807,7 +1858,7 @@ document.addEventListener('change', e => {
     t.cat1 = e.target.value;
     const kids = ((S.cats.find(c => c.id === t.cat1) || {}).children) || [];
     t.cat2 = (kids[0] || {}).id || '';
-    save(); openDrawer(t.id); render(); return;
+    save(); openTaskPage(t.id); render(); return;
   }
   if (f === 'start' || f === 'end') {
     const v = e.target.value;
@@ -1829,7 +1880,7 @@ document.addEventListener('change', e => {
     t[f] = e.target.value;
   }
   S.members = buildMembers(); S.intake = buildIntake();
-  save(); render(); openDrawer(t.id);
+  save(); render(); openTaskPage(t.id);
 });
 
 /* 今日待办快捷新建 */
@@ -1848,10 +1899,9 @@ document.addEventListener('submit', e => {
   save(); render(); toast('已加入今日待办');
 });
 
-$('#overlay').addEventListener('click', closeDrawer);
 $('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') closeModal(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeDrawer(); closeModal(); }
+  if (e.key === 'Escape') { closeTaskPage(); closeModal(); }
   if (e.key === 'Enter' && $('#auth').classList.contains('show') && (e.target.id === 'a_no' || e.target.id === 'a_name')) {
     e.preventDefault(); doLogin();
   }

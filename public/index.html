@@ -166,14 +166,21 @@ tbody tr:hover{background:#fafbfd}
 .cal-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--ink3);font-size:11.5px;align-items:center}
 .cal-legend span{display:inline-flex;align-items:center;gap:5px}
 
-/* ---------- drawer / modal ---------- */
-.overlay{position:fixed;inset:0;background:rgba(16,24,40,.34);opacity:0;pointer-events:none;transition:.18s;z-index:50}
-.overlay.show{opacity:1;pointer-events:auto}
-.drawer{position:fixed;top:0;right:0;height:100vh;width:460px;max-width:92vw;background:#fff;z-index:60;
-  transform:translateX(102%);transition:transform .2s ease;overflow:auto;box-shadow:-8px 0 30px rgba(16,24,40,.12)}
-.drawer.show{transform:none}
-.drawer .dh{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
-.drawer .db{padding:16px 18px 30px}
+/* ---------- 任务详情页（不是抽屉：管理者要读的是进展，不是一列窄表单） ---------- */
+.td-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:14px}
+.td-title{width:100%;border:1px solid transparent;border-radius:7px;padding:4px 6px;font-size:17px;
+  font-weight:600;font-family:inherit;color:var(--ink);background:transparent;outline:none}
+.td-title:not(.ro):hover{border-color:var(--line);background:#fff}
+.td-title:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff;background:#fff}
+.td-title.ro{cursor:default}
+.td-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.td-kpis>div{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.td-kpis span{display:block;font-size:11.5px;color:var(--ink3);margin-bottom:2px}
+.td-kpis b{font-size:21px;font-weight:650;line-height:1.2}
+.td-foot{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin-top:14px;padding:0 2px}
+@media (max-width:860px){.td-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* ---------- modal ---------- */
 .field{margin-bottom:12px}
 .field label{display:block;font-size:11.5px;color:var(--ink3);margin-bottom:5px}
 .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;
@@ -384,9 +391,9 @@ tbody tr:hover{background:#fafbfd}
     <nav id="nav">
       <div class="nav-group">我的工作</div>
       <div class="nav-item" data-view="today"><span class="ic">◉</span>今日待办</div>
+      <div class="nav-item" data-view="calendar"><span class="ic">▦</span>日历待办</div>
       <div class="nav-item" data-view="routine"><span class="ic">↻</span>常规工作</div>
       <div class="nav-item" data-view="special"><span class="ic">◆</span>专项工作</div>
-      <div class="nav-item" data-view="calendar"><span class="ic">▦</span>日历待办</div>
       <div class="nav-group">协作</div>
       <div class="nav-item" data-view="assign"><span class="ic">▤</span>下派任务</div>
       <div class="nav-item" data-view="intake"><span class="ic">⌥</span>任务承接台<span class="badge" id="intakeBadge" style="display:none"></span></div>
@@ -417,8 +424,6 @@ tbody tr:hover{background:#fafbfd}
   </div>
 </div>
 
-<div class="overlay" id="overlay"></div>
-<aside class="drawer" id="drawer"></aside>
 <div class="modal-wrap" id="modalWrap"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
 <div id="boot"><div class="bx"><div class="sp"></div><div>正在加载你的工作台…</div></div></div>

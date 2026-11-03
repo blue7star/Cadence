@@ -839,6 +839,105 @@ async function main() {
   await push('1012', { del: { tasks: [SWAP] } });
   await push('1003', { del: { tasks: [SWAP] } });
 
+  /* ---------- 9.5 三级节点：阶段下可再拆一级子任务 ---------- */
+  await js(`document.querySelector('[data-act="new"][data-type="special"]').click();'ok'`);
+  await sleep(400);
+  await js(`(function(){
+    document.querySelector('#f_title').value='E2E三级：阶段带子任务';
+    const r=document.querySelector('#stageRows .mrow');
+    r.querySelector('.sname').value='阶段一';
+    r.querySelector('[data-act="mstage-sub"]').click();
+    return 'ok';
+  })()`);
+  await sleep(250);
+  const subForm = await js(`(function(){
+    const k=document.querySelector('#stageRows .mrow.sub');
+    if(!k) return {n:0};
+    k.querySelector('.sname').value='子任务A';
+    return {n:document.querySelectorAll('#stageRows .mrow').length,
+      subHasAdd: !!k.querySelector('[data-act="mstage-sub"]')};})()`);
+  check('阶段行可以加子任务，子行不再有「+子」（三级封顶）',
+    subForm.n === 2 && subForm.subHasAdd === false, JSON.stringify(subForm));
+  await shot('18-stage-modal');
+
+  await js(`document.querySelector('#modal [data-act="modal-ok"]').click();'ok'`);
+  await sleep(1200);
+  const tree = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    const t=j.tasks.filter(x=>x.title==='E2E三级：阶段带子任务').pop();
+    if(!t) return null;
+    const p=t.stages.filter(s=>!s.pid), k=t.stages.filter(s=>s.pid);
+    return {id:t.id,tops:p.length,subs:k.length,pidOk:p.length&&k.length?k[0].pid===p[0].id:false};})()`);
+  check('专项能拆到「阶段 → 子任务」，父子挂对并落库',
+    !!tree && tree.tops === 1 && tree.subs === 1 && tree.pidOk === true, JSON.stringify(tree));
+
+  if (tree) {
+    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(500);
+    const treeUi = await js(`(function(){
+      return {tops:document.querySelectorAll('#view .stage:not(.sub)').length,
+        subs:document.querySelectorAll('#view .stage.sub').length,
+        subHasAdd:!!document.querySelector('#view .stage.sub [data-act="stage-sub"]'),
+        parentTick:!!document.querySelector('#view .stage:not(.sub) .n[data-act="stage-toggle"]')};})()`);
+    check('详情页按层级渲染：一级带序号、子任务缩进，父阶段不单独给勾选框',
+      treeUi.tops === 1 && treeUi.subs === 1 && treeUi.subHasAdd === false && treeUi.parentTick === false,
+      JSON.stringify(treeUi));
+    await shot('17-stage-tree');
+
+    await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`); await sleep(300);
+    await nav('calendar'); await sleep(700);
+    const cal = await js(`(function(){const names=[...document.querySelectorAll('.chip.cal')].map(x=>x.innerText);
+      return {sub:names.filter(t=>t.includes('子任务A')).length, parent:names.filter(t=>t.includes('阶段一')).length};})()`);
+    check('日历上出的是子任务名，父阶段不再单独出一条',
+      cal.sub >= 1 && cal.parent === 0, JSON.stringify(cal));
+
+    await js(`moveTask('${tree.id}','2026-11-10',0);'ok'`);
+    await sleep(900);
+    const moved = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=j.tasks.find(x=>x.id==='${tree.id}');
+      const p=t.stages.find(s=>!s.pid), k=t.stages.find(s=>s.pid);
+      return {ps:p.start,ks:k.start,st:t.status};})()`);
+    check('拖有子任务的阶段，子任务跟着平移同样的天数',
+      moved.ps === '2026-11-10' && moved.ks === '2026-11-10', JSON.stringify(moved));
+
+    /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动 */
+    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(500);
+    await js(`document.querySelector('#view .stage.sub .n[data-act="stage-toggle"]').click();'ok'`);
+    await sleep(900);
+    const prog = await js(`(function(){const b=document.querySelectorAll('#view .td-kpis b');
+      return {prog:b[0]?b[0].innerText:'',cnt:b[1]?b[1].innerText:''}})()`);
+    check('勾完唯一的子任务 → 进度 100%，父阶段不重复计数',
+      prog.prog === '100%' && prog.cnt === '1 / 1', JSON.stringify(prog));
+
+    await push('1012', { del: { tasks: [tree.id] } });
+  }
+
+  const tempForm = await js(`(function(){openNewTask('temp');
+    const has=!!document.querySelector('#stageRows');
+    document.querySelector('#modal [data-act="modal-cancel"]').click();
+    return {has:has};})()`);
+  await sleep(200);
+  check('临时任务新建时没有阶段/子任务入口', tempForm.has === false, JSON.stringify(tempForm));
+
+  /* 子任务越界：它一挪，父阶段的边界跟着长，不能因此压到下一段 */
+  const GRD = 't_e2e_drag_root';
+  await push('1012', { tasks: [{ id: GRD, ownerNo: '1012', assigneeNo: '1012', type: 'special',
+    title: 'E2E拖子任务越界', start: '2026-11-03', end: '2026-11-20', status: 'todo',
+    stages: [
+      { id: 'g1', pid: null, name: '第一段', start: '2026-11-03', end: '2026-11-10', done: false },
+      { id: 'g2', pid: 'g1', name: '子一', start: '2026-11-03', end: '2026-11-05', done: false },
+      { id: 'g3', pid: 'g1', name: '子二', start: '2026-11-06', end: '2026-11-10', done: false },
+      { id: 'g4', pid: null, name: '第二段', start: '2026-11-11', end: '2026-11-20', done: false },
+    ] }] });
+  await js(`refresh(true);'ok'`); await sleep(900);
+  const verdict = await js(`(function(){
+    const t=S.tasks.find(x=>x.id==='${GRD}');
+    if(!t) return null;
+    const i=t.stages.findIndex(s=>s.id==='g3');
+    const r=dragCheck(t,'2026-11-13',i);
+    return {ok:r.ok, why:r.why||''};})()`);
+  check('子任务越界拖动会带着父阶段压到下一段，被拦下并说清原因',
+    !!verdict && verdict.ok === false && verdict.why.includes('下一阶段'), JSON.stringify(verdict));
+  await push('1012', { del: { tasks: [GRD] } });
+
   /* ---------- 10 点遮罩/按 Esc 不能烧掉没保存的内容 ---------- */
   const modalGuard = await js(`(function(){
     const w=document.querySelector('#modalWrap'), m=document.querySelector('#modal');

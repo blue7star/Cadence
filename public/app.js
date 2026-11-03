@@ -356,6 +356,8 @@ function occOn(date, mode) {
       let hit = null;
       stages.forEach((s, i) => {
         if (hit) return;
+        /* 父阶段不出条目：它的日期是子任务并集，出了就和子任务同一天撞两条 */
+        if (hasKids(stages, s)) return;
         const on = s.date ? s.date === date : (s.start && s.end && s.start <= date && s.end >= date);
         if (on) hit = { t, step: s, si: i };
       });
@@ -392,9 +394,41 @@ function sortTasks(list) {
     return a.start < b.start ? -1 : 1;
   });
 }
+/* ============ 阶段树 ============ */
+/* 阶段只允许两级：pid 为空的是阶段，其余是它的子任务。数组保持扁平，靠 pid 指父。
+   老数据没有 id/pid，`!s.pid` 对所有节点都成立 —— 所以没拆过子任务的任务，行为与改动前完全一致。 */
+const kidsOf = (stages, id) => id ? (stages || []).filter(s => s.pid === id) : [];
+const hasKids = (stages, s) => !!s.id && (stages || []).some(x => x.pid === s.id);
+/* 叶子 = 没有子任务的节点。进度、日历、完成判定都只认叶子，父阶段是派生的，不参与计数。 */
+const leavesOf = stages => (stages || []).filter(s => !hasKids(stages, s));
+/* 父阶段的起止不独立存在：有子任务时永远等于子任务日期的并集 */
+function recalcParent(stages, pid) {
+  const p = (stages || []).find(s => s.id === pid);
+  if (!p) return;
+  const kids = stages.filter(s => s.pid === pid);
+  if (!kids.length) return;
+  const ss = kids.map(k => k.start || k.date).filter(Boolean).sort();
+  const ee = kids.map(k => k.end || k.date || k.start).filter(Boolean).sort();
+  if (ss.length) p.start = ss[0];
+  if (ee.length) p.end = ee[ee.length - 1];
+}
+/* 同层相邻：子任务只和同一父下的兄弟比顺序，顶层阶段只和顶层比。
+   按数组下标直接取上一条会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。 */
+function siblingsOf(stages, si) {
+  const s = stages[si];
+  if (!s) return [];
+  const pid = s.pid || null;
+  return stages.map((x, i) => ({ x, i })).filter(o => (o.x.pid || null) === pid);
+}
+const allLeavesDone = t => {
+  const leaves = leavesOf(t.stages);
+  return leaves.length ? leaves.every(s => s.done) : t.status === 'done';
+};
+
 const taskProg = t => {
   if (t.type === 'routine') return t.status === 'done' ? 100 : 0;
-  if (t.stages && t.stages.length) return Math.round(t.stages.filter(s => s.done).length / t.stages.length * 100);
+  const leaves = leavesOf(t.stages);
+  if (leaves.length) return Math.round(leaves.filter(s => s.done).length / leaves.length * 100);
   return t.status === 'done' ? 100 : t.status === 'doing' ? 50 : 0;
 };
 const overdue = t => t.status !== 'done' && t.end < TODAY;
@@ -1070,7 +1104,8 @@ function taskDetailHTML(t) {
   const isMine = t.ownerNo === S.me.no || t.assigneeNo === S.me.no;
   const canEdit = isMine;
   const stages = t.stages || [];
-  const doneN = stages.filter(s => s.done).length;
+  const leaves = leavesOf(stages);
+  const doneN = leaves.filter(s => s.done).length;
   const prog = taskProg(t);
   const leftDays = diffDays(t.end, TODAY);
   const src = t.sourceId ? (S.tasks.find(i => i.id === t.sourceId) || null) : null;
@@ -1096,7 +1131,7 @@ function taskDetailHTML(t) {
     </div>
     <div class="td-kpis">
       <div><span>进度</span><b>${prog}%</b><div class="prog" style="margin-top:8px"><i style="width:${prog}%"></i></div></div>
-      <div><span>${isRoutine ? '当天节点' : '阶段'}</span><b>${stages.length ? `${doneN} / ${stages.length}` : '—'}</b></div>
+      <div><span>${isRoutine ? '当天节点' : '阶段'}</span><b>${leaves.length ? `${doneN} / ${leaves.length}` : '—'}</b></div>
       <div><span>时间</span><b style="font-size:15px">${leftText}</b></div>
       <div><span>承接人</span><b style="font-size:15px">${t.assigneeNo === S.me.no ? '我' : esc(nameOf(t.assigneeNo))}</b></div>
     </div>`;
@@ -1116,12 +1151,8 @@ function taskDetailHTML(t) {
           : `<div class="note" style="margin-top:10px">所属规则「${esc(t.title)}」<b>已删除</b>，这条是保留下来的历史记录，不会再有新的。</div>`}
       </div>`
     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
-        <span class="hint">${stages.length ? `${doneN} / ${stages.length} 已完成，进度按阶段算` : '还没拆阶段'}</span></div>
-        ${stages.length ? stages.map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
-          <div class="n" ${canEdit ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${i}" style="cursor:pointer"` : ''}>${s.done ? '✓' : i + 1}</div>
-          <div class="t ${s.done ? 'done' : ''}"><span style="text-decoration:${s.done ? 'line-through' : 'none'}">${esc(s.name)}</span>${s.start || s.end ? `<small>${fmt(s.start)} → ${fmt(s.end)}</small>` : ''}</div>
-          ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${i}">删</button>` : ''}
-        </div>`).join('') : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
+        <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
+        ${stages.length ? stageTreeHTML(t, canEdit) : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
         ${canEdit ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
           <input id="sName" placeholder="阶段名称，例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
           <div class="row">
@@ -1129,6 +1160,7 @@ function taskDetailHTML(t) {
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加阶段</button>
           </div>
+          <div class="mini" style="margin-top:7px;line-height:1.5">要给某个阶段再拆细，点那一行的「+子」；子任务最多再分一级。</div>
         </div>` : ''}
       </div>`;
 
@@ -1177,6 +1209,36 @@ function taskDetailHTML(t) {
 
   return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}</div></div>` + foot;
 }
+/* 阶段树：一级阶段带序号，子任务缩进一级。
+   父阶段有子任务时不给勾选框——点了就是「全勾/全不勾」，容易误解；它的完成态由子任务决定。 */
+function stageTreeHTML(t, canEdit) {
+  const stages = t.stages || [];
+  const tops = stages.filter(s => !s.pid);
+  let n = 0;
+  return tops.map(p => {
+    n++;
+    const pi = stages.indexOf(p);
+    const kids = kidsOf(stages, p.id);
+    const pDone = kids.length ? kids.every(k => k.done) : p.done;
+    const canTickP = canEdit && !kids.length;
+    const head = `<div class="stage ${pDone ? 'on' : ''}">
+      <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
+      <div class="t ${pDone ? 'done' : ''}"><span style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务">+子</button>` : ''}
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
+    </div>`;
+    const sub = kids.map(k => {
+      const ki = stages.indexOf(k);
+      return `<div class="stage sub ${k.done ? 'on' : ''}">
+        <div class="n" ${canEdit ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : ''}>${k.done ? '✓' : ''}</div>
+        <div class="t ${k.done ? 'done' : ''}"><span style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
+        ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
+      </div>`;
+    }).join('');
+    return head + sub;
+  }).join('');
+}
+
 /* 分类是手填的两个文本框，不做统一维护：写过的分类自动成为输入提示。
    sfx 用来区分同时存在的几份表单（详情页 / 新建弹窗 / 规则弹窗），避免 datalist 撞 id。 */
 function catInputsHTML(c1, c2, sfx) {
@@ -1341,19 +1403,39 @@ function taskModalBody(type, preset) {
       <div class="sec-title">阶段计划 <span class="mini">可留空，之后再补</span></div>
       <div id="stageRows">${stageRowHTML(today, today)}</div>
       <button class="btn sm" data-act="mstage-add" style="width:100%">+ 添加阶段</button>
-      <div class="note" style="margin-top:10px">每个阶段独立设开始与结束时间；后期在详情里勾掉阶段，进度自动按阶段数计算。</div>
+      <div class="note" style="margin-top:10px">每个阶段独立设开始与结束时间；要给某个阶段再拆细，点那一行的「+子」，最多再分一级。进度按最细一级自动算。</div>
     </div>
   </div>`;
 }
-function stageRowHTML(s, e) {
-  return `<div class="mrow">
-    <input class="sname" placeholder="阶段名称，例如：数据口径确认与取数"/>
+/* 弹窗里的阶段行：pid 为空是一级阶段，有值是它的子任务。
+   data-tmp 是这一行的临时 id，保存时直接当节点 id 用（uid 保证唯一），这样子任务才有父可指。 */
+function stageRowHTML(s, e, pid) {
+  const isSub = !!pid;
+  return `<div class="mrow${isSub ? ' sub' : ''}" data-tmp="${uid('s')}" data-pid="${pid || ''}">
+    <input class="sname" placeholder="${isSub ? '子任务名称，例如：取数并核对口径' : '阶段名称，例如：数据口径确认与取数'}"/>
     <div class="row2">
       <input type="date" class="sst" value="${s}"/>
       <input type="date" class="sen" value="${e}"/>
-      <button class="del" data-act="mstage-del" title="删除该阶段">✕</button>
+      ${isSub ? '' : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+子</button>`}
+      <button class="del" data-act="mstage-del" title="删除">✕</button>
     </div>
   </div>`;
+}
+/* 从弹窗读回阶段树，父阶段日期按子任务并集重算。
+   父行名字没填被丢掉时，挂在它下面的子任务不能变孤儿，一律按一级处理。 */
+function readStageRows(fallback) {
+  const out = $$('#stageRows .mrow').map(r => {
+    const name = r.querySelector('.sname').value.trim();
+    if (!name) return null;
+    const st = r.querySelector('.sst').value || fallback;
+    let en = r.querySelector('.sen').value || st;
+    if (en < st) en = st;
+    return { id: r.dataset.tmp || uid('s'), pid: r.dataset.pid || null, name, start: st, end: en, done: false };
+  }).filter(Boolean);
+  const tops = new Set(out.filter(x => !x.pid).map(x => x.id));
+  out.forEach(x => { if (x.pid && !tops.has(x.pid)) x.pid = null; });
+  out.forEach(p => { if (!p.pid) recalcParent(out, p.id); });
+  return out;
 }
 function openNewTask(type, preset) {
   const t = type || 'temp';
@@ -1372,14 +1454,7 @@ function openNewTask(type, preset) {
     const s = $('#f_start').value, e = $('#f_end').value || s;
     if (!s) { toast('请选择开始时间'); return false; }
     if (e < s) { toast('结束时间不能早于开始时间'); return false; }
-    const stages = $$('#stageRows .mrow').map(r => {
-      const name = r.querySelector('.sname').value.trim();
-      if (!name) return null;
-      const st = r.querySelector('.sst').value || s;
-      let en = r.querySelector('.sen').value || st;
-      if (en < st) en = st;
-      return { name, start: st, end: en, done: false };
-    }).filter(Boolean);
+    const stages = readStageRows(s);
     const typeVal = $('#f_type').value;
     // 专项、临时只归自己（界面已锁），这里再兜一层，避免切换类型后残留别人的工号
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
@@ -1592,17 +1667,45 @@ function dragCheck(t, date, si) {
     /* 专项/下派任务的阶段是区间：整体平移，保持阶段长短，且不能压到前后阶段 */
     const span = stage.end ? diffDays(stage.end, stage.start || stage.end) : 0;
     const newEnd = addDays(date, span);
-    const prev = t.stages[si - 1], next = t.stages[si + 1];
+    /* 相邻关系按同层算：子任务只和同父的兄弟比，顶层阶段只和顶层比。
+       按数组下标直接取上一条会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。 */
+    const sib = siblingsOf(t.stages, si);
+    const pos = sib.findIndex(o => o.i === si);
+    const prev = pos > 0 ? sib[pos - 1].x : null;
+    const next = pos >= 0 && pos < sib.length - 1 ? sib[pos + 1].x : null;
+    const scope = stage.pid ? '同一个阶段下的' : '';
     if (prev) {
       const pe = prev.end || prev.date || prev.start;
       if (pe && date <= pe) {
-        return { ok: false, why: `会和上一阶段「${prev.name || ''}」（到 ${fmt(pe)}）重叠；阶段要按顺序，不能倒着排` };
+        return { ok: false, why: `会和${scope}「${prev.name || ''}」（到 ${fmt(pe)}）重叠；要按顺序，不能倒着排` };
       }
     }
     if (next) {
       const ns = next.start || next.date || next.end;
       if (ns && newEnd >= ns) {
-        return { ok: false, why: `会压到下一阶段「${next.name || ''}」（${fmt(ns)} 开始）；先把下一段往后挪，或把这一段缩短` };
+        return { ok: false, why: `会压到${scope}「${next.name || ''}」（${fmt(ns)} 开始）；先把下一段往后挪，或把这一段缩短` };
+      }
+    }
+    /* 子任务动了会带着父阶段的长边一起动，父阶段不能因此压到相邻的顶层阶段 */
+    if (stage.pid) {
+      const p = t.stages.find(x => x.id === stage.pid);
+      if (p) {
+        const kids = t.stages.filter(k => k.pid === p.id);
+        const ns2 = kids.map(k => (k === stage ? date : (k.start || k.date))).filter(Boolean).sort()[0];
+        const ne2 = kids.map(k => (k === stage ? newEnd : (k.end || k.date || k.start))).filter(Boolean).sort().slice(-1)[0];
+        const pi = t.stages.indexOf(p);
+        const psib = siblingsOf(t.stages, pi);
+        const ppos = psib.findIndex(o => o.i === pi);
+        const pp = ppos > 0 ? psib[ppos - 1].x : null;
+        const pn = ppos >= 0 && ppos < psib.length - 1 ? psib[ppos + 1].x : null;
+        const ppEnd = pp && (pp.end || pp.date || pp.start);
+        const pnStart = pn && (pn.start || pn.date || pn.end);
+        if (ppEnd && ns2 <= ppEnd) {
+          return { ok: false, why: `改了子任务会带着「${p.name || '这个阶段'}」压到前面那段「${pp.name || ''}」（到 ${fmt(ppEnd)}）；先把前面那段往前挪` };
+        }
+        if (pnStart && ne2 >= pnStart) {
+          return { ok: false, why: `改了子任务会带着「${p.name || '这个阶段'}」压到下一阶段「${pn.name || ''}」（${fmt(pnStart)} 开始）` };
+        }
       }
     }
     return { ok: true };
@@ -1633,13 +1736,27 @@ function moveTask(id, date, si) {
     }
     const span = s.end ? diffDays(s.end, s.start || s.end) : 0;
     if (s.start === date) return;
+    const delta = diffDays(date, s.start || s.end);
     s.start = date; s.end = addDays(date, span);
-    const ds = t.stages.map(x => x.start || x.date).filter(Boolean).sort();
-    const de = t.stages.map(x => x.end || x.date).filter(Boolean).sort();
+    const kids = s.id ? t.stages.filter(k => k.pid === s.id) : [];
+    if (kids.length) {
+      /* 有子任务的阶段整段平移：子任务跟着走同样的天数，相对关系不变 */
+      kids.forEach(k => {
+        if (k.start) k.start = addDays(k.start, delta);
+        if (k.end) k.end = addDays(k.end, delta);
+        if (k.date) k.date = addDays(k.date, delta);
+      });
+    } else if (s.pid) {
+      /* 拖的是子任务：父阶段的起止按子任务并集重算 */
+      recalcParent(t.stages, s.pid);
+    }
+    const tops = t.stages.filter(x => !x.pid);
+    const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
+    const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
     if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
     save(); render();
     const tail = t.ownerNo !== S.me.no ? `；${nameOf(t.ownerNo)} 会看到这次改期` : '';
-    toast(`「${s.name || t.title}」挪到 ${fmt(date)}${span ? ' → ' + fmt(addDays(date, span)) : ''}${tail}`);
+    toast(`「${s.name || t.title}」挪到 ${fmt(date)}${span ? ' → ' + fmt(addDays(date, span)) : ''}${kids.length ? `，${kids.length} 个子任务一起移动` : ''}${tail}`);
     return;
   }
   if (t.start === date && t.end === date) return;
@@ -1848,15 +1965,55 @@ document.addEventListener('click', e => {
       if (!name) { toast('先填阶段名称'); break; }
       const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
       t.stages = t.stages || [];
-      t.stages.push({ name, start: s, end: e2, done: false });
+      t.stages.push({ id: uid('s'), pid: null, name, start: s, end: e2 < s ? s : e2, done: false });
       save(); openTaskPage(t.id); render(); toast('阶段已添加');
+      break;
+    }
+    case 'stage-sub': {
+      if (!t) break;
+      const i = Number(el.dataset.idx), p = t.stages[i];
+      if (!p) break;
+      if (p.pid) { toast('子任务下面不能再拆了'); break; }
+      const row = el.closest('.stage');
+      if (row.nextElementSibling && row.nextElementSibling.classList.contains('subadd')) break;
+      row.insertAdjacentHTML('afterend', `<div class="subadd">
+        <input class="sname" placeholder="子任务名称，例如：取数并核对口径" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit"/>
+        <div class="row">
+          <input type="date" class="sst" value="${p.start || t.start}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px"/>
+          <input type="date" class="sen" value="${p.end || t.end}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px"/>
+          <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
+          <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
+        </div>
+      </div>`);
+      break;
+    }
+    case 'subadd-cancel':
+      if (el.closest('.subadd')) el.closest('.subadd').remove();
+      break;
+    case 'stage-add-sub': {
+      if (!t) break;
+      const box = el.closest('.subadd');
+      const name = box.querySelector('.sname').value.trim();
+      if (!name) { toast('先填子任务名称'); break; }
+      const i = Number(el.dataset.idx), p = t.stages[i];
+      if (!p || p.pid) { toast('这一级不能再拆了'); break; }
+      if (!p.id) p.id = uid('s');   /* 老数据里的阶段没有 id，第一次挂子任务时补上 */
+      const s = box.querySelector('.sst').value || p.start || t.start;
+      let e2 = box.querySelector('.sen').value || s;
+      if (e2 < s) e2 = s;
+      t.stages.push({ id: uid('s'), pid: p.id, name, start: s, end: e2, done: false });
+      recalcParent(t.stages, p.id);
+      save(); openTaskPage(t.id); render(); toast('子任务已添加');
       break;
     }
     case 'stage-toggle': {
       if (!t) break;
       const i = Number(el.dataset.idx);
-      t.stages[i].done = !t.stages[i].done;
-      if (t.stages.every(s => s.done)) t.status = 'done';
+      const s = t.stages[i];
+      if (!s) break;
+      if (hasKids(t.stages, s)) { toast('这个阶段下面有子任务，勾子任务就行'); break; }
+      s.done = !s.done;
+      if (allLeavesDone(t)) t.status = 'done';
       else if (t.status === 'done') t.status = 'doing';
       S.members = buildMembers();
       save(); openTaskPage(t.id); render();
@@ -1864,7 +2021,12 @@ document.addEventListener('click', e => {
     }
     case 'stage-del': {
       if (!t) break;
-      t.stages.splice(Number(el.dataset.idx), 1);
+      const s = t.stages[Number(el.dataset.idx)];
+      if (!s) break;
+      const kids = s.id ? t.stages.filter(x => x.pid === s.id) : [];
+      if (kids.length && !confirm(`「${s.name}」下面还有 ${kids.length} 个子任务，一起删掉？`)) break;
+      t.stages = t.stages.filter(x => x !== s && !(s.id && x.pid === s.id));
+      if (s.pid) recalcParent(t.stages, s.pid);
       save(); openTaskPage(t.id); render();
       break;
     }
@@ -1919,15 +2081,40 @@ document.addEventListener('click', e => {
       $('#stageRows').insertAdjacentHTML('beforeend', stageRowHTML(st, en));
       break;
     }
-    case 'mstage-del':
-      el.closest('.mrow').remove();
+    case 'mstage-sub': {
+      const row = el.closest('.mrow');
+      const pid = row.dataset.tmp;
+      const st = row.querySelector('.sst').value || TODAY;
+      const en = row.querySelector('.sen').value || st;
+      /* 插到该阶段最后一个子行之后，不然第二、第三个子会倒着排 */
+      let anchor = row;
+      while (anchor.nextElementSibling && anchor.nextElementSibling.classList.contains('sub')
+        && anchor.nextElementSibling.dataset.pid === pid) anchor = anchor.nextElementSibling;
+      anchor.insertAdjacentHTML('afterend', stageRowHTML(st, en, pid));
       break;
+    }
+    case 'mstage-del': {
+      const row = el.closest('.mrow');
+      const pid = row.dataset.tmp;
+      /* 删父行时把它下面的子行一起删掉，不留孤儿 */
+      if (pid) {
+        let next = row.nextElementSibling;
+        while (next && next.classList.contains('sub') && next.dataset.pid === pid) {
+          const n2 = next.nextElementSibling;
+          next.remove();
+          next = n2;
+        }
+      }
+      row.remove();
+      break;
+    }
     case 'toggle-step': {
       if (!t || !(t.stages || []).length) break;
       const i = Number(el.dataset.idx), s2 = t.stages[i];
       if (!s2) break;
+      if (hasKids(t.stages, s2)) { toast('这个阶段下面有子任务，勾子任务就行'); break; }
       s2.done = !s2.done;
-      t.status = t.stages.every(x => x.done) ? 'done' : 'doing';
+      t.status = allLeavesDone(t) ? 'done' : 'doing';
       S.members = buildMembers();
       save();
       if (detailId === t.id) openTaskPage(t.id);
@@ -2040,9 +2227,12 @@ document.addEventListener('change', e => {
        设完成 = 节点全勾；常规实例退回待开展 = 节点全放（它是重复事项，不做进度考古）；
        选进行中/暂缓时至少留一个未完成节点。 */
     if ((t.stages || []).length) {
-      if (t.status === 'done') t.stages.forEach(s2 => { s2.done = true; });
+      if (t.status === 'done') leavesOf(t.stages).forEach(s2 => { s2.done = true; });
       else if (t.status === 'todo' && t.type === 'routine') t.stages.forEach(s2 => { s2.done = false; });
-      else if (t.stages.every(s2 => s2.done)) t.stages[t.stages.length - 1].done = false;
+      else {
+        const lv = leavesOf(t.stages);
+        if (lv.length && lv.every(s2 => s2.done)) lv[lv.length - 1].done = false;
+      }
     }
     if (t.type === 'assign' && t.assigneeNo === S.me.no && t.status !== 'todo') t.intakeStatus = 'accepted';
     S.members = buildMembers(); S.intake = buildIntake();

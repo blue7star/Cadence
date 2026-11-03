@@ -346,6 +346,31 @@ function bumpRev() {
   db.prepare('UPDATE meta SET v = CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');
 }
 
+/* 阶段树只允许两级嵌套（任务 → 阶段 → 子任务），数组保持扁平，靠 pid 指父。
+   三条硬规则，绕过界面直接写接口也一样生效：
+   ① 只有 assign / special 允许子任务，temp / routine 一律拉平；
+   ② pid 只能指向「pid 为空」的节点，第四级静默拉平成一级（脏数据不该让人卡在保存上）；
+   ③ 父阶段的起止不独立存在，有子任务时一律重算为子任务日期的并集。 */
+function normalizeStages(raw, type) {
+  const arr = Array.isArray(raw) ? raw : [];
+  if (type !== 'assign' && type !== 'special') return arr.map(s => Object.assign({}, s, { pid: null }));
+  const topIds = new Set(arr.filter(s => !s.pid && s.id).map(s => s.id));
+  const out = arr.map(s => {
+    const pid = s.pid && topIds.has(s.pid) ? s.pid : null;
+    return Object.assign({}, s, { pid });
+  });
+  for (const p of out) {
+    if (p.pid) continue;
+    const kids = out.filter(k => k.pid && k.pid === p.id);
+    if (!kids.length) continue;
+    const ss = kids.map(k => k.start || k.date).filter(Boolean).sort();
+    const es = kids.map(k => k.end || k.date || k.start).filter(Boolean).sort();
+    if (ss.length) p.start = ss[0];
+    if (es.length) p.end = es[es.length - 1];
+  }
+  return out;
+}
+
 function upsertTask(meNo, t) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
   if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) return false;
@@ -369,7 +394,7 @@ function upsertTask(meNo, t) {
         t.cat1 || null, t.cat2 || null,
         t.imp == null || t.imp === '' ? null : Number(t.imp),
         t.urg == null || t.urg === '' ? null : Number(t.urg),
-        JSON.stringify(t.stages || []), t.detached ? 1 : 0,
+        JSON.stringify(normalizeStages(t.stages, type)), t.detached ? 1 : 0,
         assigneeNo, intake, nowStr(), t.id);
     return true;
   }
@@ -380,7 +405,7 @@ function upsertTask(meNo, t) {
     t.start, t.end, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
     t.imp == null || t.imp === '' ? null : Number(t.imp),
     t.urg == null || t.urg === '' ? null : Number(t.urg),
-    JSON.stringify(t.stages || []), t.routineId || null, t.planDate || null,
+    JSON.stringify(normalizeStages(t.stages, type)), t.routineId || null, t.planDate || null,
     t.sourceId || null, t.detached ? 1 : 0, intake, now, now
   );
   return true;

@@ -250,6 +250,17 @@ tbody tr:hover{background:#fafbfd}
 .stage.on .n{background:var(--ok);color:#fff}
 .stage .t{flex:1;min-width:0;font-size:12.5px}
 .stage .t small{display:block;color:var(--ink3);font-size:11px}
+/* 子任务：缩进一级、底色压一档、圆圈小一号，一眼看出从属关系 */
+.stage.sub{padding:6px 8px 6px 20px;margin-top:2px;border-bottom:0;border-radius:7px;background:#f7f8fa}
+.stage.sub .n{width:16px;height:16px;flex:0 0 16px;font-size:9px;background:#fff;border:1px solid #b6c2d4;color:#fff}
+.stage.sub.on .n{background:var(--ok);border-color:var(--ok);color:#fff}
+.stage.sub .t{font-size:12px}
+.subadd{margin:6px 0 10px 20px;padding:8px;border:1px dashed #9dbcff;border-radius:9px;background:#f7faff}
+.subadd .row{display:flex;gap:6px;margin-top:6px}
+/* 子任务不做第二层卡片，否则和父行一样重：缩进 + 一道竖线，父子关系更直接 */
+.mrow.sub{margin-left:22px;padding:6px 0 6px 10px;background:transparent;border:0;border-left:2px solid #dbe3ee;border-radius:0}
+.mrow .row2 .addsub{flex:0 0 auto;border:0;background:none;color:#3b6ef0;cursor:pointer;font-size:11px;padding:0 4px;line-height:1}
+.mrow .row2 .addsub:hover{text-decoration:underline}
 .mrow{border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px;background:#fff}
 .mrow .sname{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;margin-bottom:6px;font-family:inherit;outline:none}
 .mrow .sname:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}

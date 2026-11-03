@@ -1,8 +1,15 @@
 # 运行时数据：数据库里是真实业务数据，不进版本库（首次启动会自动建库）
 data/
 
-# 本地开发与自检产物
-_dev/
+# 本地开发产物。注意：_dev 下的脚本要进版本库（e2e 就是靠它复跑），
+# 只有跑出来的东西才忽略——否则换台机器连验证都做不了。
+_dev/shots/
+_dev/chrome-profile/
+_dev/verify-report.json
+_dev/*.log
+_dev/*.json
+_dev/t-*.csv
+
 node_modules/
 
 # 日志与临时文件

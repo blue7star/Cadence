@@ -1,0 +1,17 @@
+#!/bin/sh
+# 提交门禁。规则见 AGENTS.md 第 3 节。
+#
+# 为什么不用 .git/hooks：那个目录不进版本库，换台机器就消失了。
+# 启用方式（每台机器一次）：git config core.hooksPath .githooks
+#
+# 这道闸拦的是「改完代码没重跑校验就想提交」。不要用 git commit --no-verify 绕过去——
+# 那等于把 issues.md #9 的坑再踩一次。
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "[门禁] 找不到 node，无法校验。装好 Node.js 22+ 再提交。"
+  exit 1
+fi
+
+exec node _dev/verify.mjs --hook

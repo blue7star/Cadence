@@ -115,6 +115,11 @@ function e2e() {
   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
   const total = out.split('\n').filter((l) => /^(PASS|FAIL)\s/.test(l)).length;
   check(`e2e ${total} 项`, r.status === 0, fails.length ? fails.slice(0, 6).join(' | ') : '');
+  /* 没有 FAIL 行却退出码非 0，说明 e2e 中途崩了（页面崩、CDP 断）——
+     不打印尾部就只能看到「只跑了 N 项」，完全没法定位。 */
+  if (r.status !== 0 && !fails.length) {
+    console.log(out.split('\n').slice(-12).join('\n'));
+  }
   return r.status === 0;
 }
 

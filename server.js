@@ -613,6 +613,12 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString();
+  /* 慢请求留痕：接口卡住时浏览器那边表现为「页面没反应」，从服务端这头才看得出是哪一步 */
+  const started = Date.now();
+  res.on('finish', () => {
+    const dt = Date.now() - started;
+    if (dt > 800) console.log(`[slow] ${req.method} ${p} ${dt}ms`);
+  });
 
   if (!p.startsWith('/api/')) return serveStatic(req, res, p);
 
@@ -729,6 +735,13 @@ server.on('error', (e) => {
   }
   process.exit(1);
 });
+
+/* 浏览器会复用 TCP 连接，而 Node 默认 5 秒就把它收掉。
+   工作台里两次点击之间经常隔好几秒，一旦复用了一条「服务端已经半关」的连接，
+   浏览器只对 GET 重试，POST 会直接报 failed to fetch——用户看到的就是「点保存没反应」。
+   抬到 65 秒，比默认安全得多，也不会攒下太多空闲连接（个人工作台并发极低）。 */
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');

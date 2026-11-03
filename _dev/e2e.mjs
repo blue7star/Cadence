@@ -10,10 +10,15 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const CHROME = 'C:/Users/lanmingjian/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
-const PORT = 9333;
+/* 每次随机挑一个调试端口：固定端口在上一轮崩溃、浏览器没退干净时会撞车。
+   撞车后的表现极具误导性——新浏览器起不来，脚本连到的其实是上一轮那个卡住的页面，
+   于是到处「CDP timeout」，看起来像应用坏了。 */
+const PORT = 9300 + Math.floor(Math.random() * 200);
 const BASE = process.argv[2] || 'http://localhost:8788';
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* 日期加减：统一走 UTC，避免本地时区把日期推前一天 */
+const addDaysStr = (d, n) => new Date(new Date(d + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
 
 const results = [];
 function check(name, ok, info = '') {
@@ -39,10 +44,65 @@ class Cdp {
     return new Promise((res, rej) => {
       this.pending.set(id, { res, rej });
       this.ws.send(JSON.stringify(msg));
-      setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); rej(new Error('CDP timeout: ' + method)); } }, 20000);
+      /* 20 秒在这台机器上不够：内存紧张时无头浏览器会卡住十几秒，超时太短会把慢当成错 */
+      setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); rej(new Error('CDP timeout: ' + method)); } }, 60000);
     });
   }
 }
+
+/* 关掉上一轮遗留的自动化浏览器（只认 9333 上那个调试端口，不碰用户自己的 Chrome）。
+   只发 Browser.close 不够：进程退出有延迟，端口还在，新实例抢不到就会连回这个「正在死」的会话，
+   表现成随机 CDP 超时。所以关完必须等端口真正没人听，还赖着就按进程树强杀。 */
+async function closeStale() {
+  const alive = async () => {
+    try { const r = await fetch(`http://127.0.0.1:${PORT}/json/version`); return r.ok; } catch { return false; }
+  };
+  if (!(await alive())) return;
+  try {
+    const ver = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
+    if (ver && ver.webSocketDebuggerUrl) {
+      const ws = new WebSocket(ver.webSocketDebuggerUrl);
+      await new Promise((r) => { ws.addEventListener('open', r); ws.addEventListener('error', r); });
+      ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      try { ws.close(); } catch { /* 已经断开 */ }
+    }
+  } catch { /* 关不掉就走下面的强杀 */ }
+  for (let i = 0; i < 24 && (await alive()); i++) await sleep(250);
+  if (await alive()) {
+    const pid = pidOnPort(PORT);
+    if (pid) killTree(pid);
+    for (let i = 0; i < 24 && (await alive()); i++) await sleep(250);
+  }
+  console.log('（清掉了上一轮残留的自动化浏览器）');
+}
+
+/* 谁在听这个端口：Windows 用 netstat 解析，其他平台交给 lsof */
+function pidOnPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+      for (const line of out.split(/\r?\n/)) {
+        const m = line.match(/TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i);
+        if (m && Number(m[1]) === port) return Number(m[2]);
+      }
+    } else {
+      const out = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
+      return Number(out.trim().split('\n')[0]) || null;
+    }
+  } catch { /* 没有 netstat/lsof 就当没找到 */ }
+  return null;
+}
+
+/* Windows 上 headless Chrome 会派生子进程，只 kill 主进程会留下占着端口的孤儿；
+   必须按进程树杀，否则下一次 e2e 连到的是上一轮的浏览器。 */
+function killTree(pid) {
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    else process.kill(-pid);
+  } catch { /* 进程已经自己退了 */ }
+}
+
+let child = null;
 
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -50,10 +110,19 @@ async function main() {
   const profile = `${os.tmpdir().replace(/\\/g, '/')}/wb-e2e-${Date.now()}`;
   fs.mkdirSync(profile, { recursive: true });
 
-  const child = spawn(CHROME, [
+  /* 上一次跑崩了会把 headless 浏览器留在 9333 上：新实例抢不到端口，脚本却连到旧会话，
+     于是「数据莫名不一样」——表现成断言飘。启动前先把残留的那个关掉。 */
+  await closeStale();
+
+  child = spawn(CHROME, [
     '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars',
-    '--window-size=1600,1000', 'about:blank'
+    /* 机器内存紧张时无头渲染进程容易被回收，限制堆并关掉共享内存映射能稳一些 */
+    '--disable-dev-shm-usage', '--js-flags=--max-old-space-size=768',
+    '--window-size=1600,1000',
+    /* E2E_SINGLE=1：单进程跑，内存吃紧的机器上少开几个渲染进程 */
+    ...(process.env.E2E_SINGLE ? ['--single-process', '--no-zygote'] : []),
+    'about:blank'
   ], { stdio: 'ignore' });
 
   let ver = null;
@@ -92,9 +161,19 @@ async function main() {
     return false;
   };
   const goto = async (url) => { await S('Page.navigate', { url }); await sleep(400); await waitReady(); await sleep(500); };
+  /* E2E_NO_SHOT=1：只跑断言不截图。内存紧张时无头浏览器截图会卡住，排查用。
+     截图是给人看的证据，不该决定这次自检的成败：卡住就跳过并说明，断言照跑。 */
   const shot = async (name) => {
-    const r = await S('Page.captureScreenshot', { format: 'png' });
-    fs.writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.data, 'base64'));
+    if (process.env.E2E_NO_SHOT) return;
+    try {
+      const r = await Promise.race([
+        S('Page.captureScreenshot', { format: 'png' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('超过 8 秒没返回')), 8000)),
+      ]);
+      fs.writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.data, 'base64'));
+    } catch (e) {
+      console.log(`（截图 ${name} 跳过：${e.message}；版面问题请手动核对页面）`);
+    }
   };
   const nav = async (view) => {
     await js(`document.querySelector('.nav-item[data-view="${view}"]').click(); 'ok'`);
@@ -174,8 +253,9 @@ async function main() {
   const board = await js(`(function(){const rows=[...document.querySelectorAll('#view table tbody tr')];
     return rows.map(r=>r.innerText.replace(/\\s+/g,' ').trim())})()`);
   const isWk = await js(`(()=>{const d=new Date();const w=d.getDay();return w!==0&&w!==6})()`);
-  const allHaveNodes = board.length === 4 && board.every((t) => !t.includes('无节点'));
-  check('下属看板 4 人都有节点', allHaveNodes, (isWk ? '工作日' : '非工作日') + ' · ' + board.join(' | ').slice(0, 300));
+  /* 人数不写死：花名册导入用例会往库里加人，加过之后再看「4 人」就是在测脏数据 */
+  const allHaveNodes = board.length >= 4 && board.every((t) => !t.includes('无节点'));
+  check('下属看板每个下属都有节点', allHaveNodes, (isWk ? '工作日' : '非工作日') + ' · ' + board.join(' | ').slice(0, 300));
   if (!isWk) {
     const hint = await txt('#view');
     check('非工作日看板改为看下一个工作日', hint.includes('下个工作日'), hint.replace(/\s+/g, ' ').match(/下属常规工作推进[^|]{0,60}/)?.[0] || '');
@@ -197,14 +277,20 @@ async function main() {
   })()`);
   check('可勾选常规节点', !target.err, JSON.stringify(target));
   if (!target.err) {
-    await sleep(2600);
-    const dbDone = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-      const t=s.tasks.find(x=>x.id==='${target.id}');
-      if(!t) return 'task-missing';
-      const st=(t.stages||[])[${target.idx}];
-      return st ? !!st.done : (t.status==='done')})()`);
+    /* 轮询到落库为止：固定等 2.6 秒在慢盘上会误判成「没保存」 */
+    let dbDone = false;
+    for (let i = 0; i < 16 && dbDone !== true; i++) {
+      await sleep(400);
+      dbDone = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+        const t=s.tasks.find(x=>x.id==='${target.id}');
+        if(!t) return 'task-missing';
+        const st=(t.stages||[])[${target.idx}];
+        return st ? !!st.done : (t.status==='done')})()`);
+    }
     check('勾选落库（服务端 stages.done=true）', dbDone === true, `${target.name}#${target.idx} → db=${dbDone}`);
-    await goto(BASE); await sleep(1500);
+    await goto(BASE);
+    await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+    await sleep(400);
     const reopen = await js(`(function(){openTaskPage('${target.id}');
       const cb=document.querySelector('.sitem .cb[data-idx="${target.idx}"]');
       return cb ? cb.classList.contains('on') : 'not-found'})()`);
@@ -253,6 +339,92 @@ async function main() {
     !!spDetail && spDetail.selects === 0 && spDetail.inputs === 2, JSON.stringify(spDetail));
   await js(`(()=>{const b=document.querySelector('.td-head [data-act=close]');if(b)b.click();return 'ok'})()`);
   await sleep(400);
+
+  /* ---------- 6.1 非工作日不排活：专项阶段不铺到周末，常规实例不整段铺开 ---------- */
+  await nav('calendar');
+  const restDay = await js(`(function(){
+    calCursor=monthStart(TODAY); selDay=TODAY; view='calendar'; render();
+    const cells=[...document.querySelectorAll('[data-date]')];
+    const cell=cells.find(c=>!isWorkday(c.dataset.date)&&c.dataset.date>=TODAY);
+    if(!cell) return {err:'当前视图没有非工作日'};
+    const date=cell.dataset.date;
+    const chips=cell.querySelectorAll('.chip.cal').length;
+    cell.click();
+    return {date:date, chips:chips,
+      coveredSpecial:S.tasks.some(t=>isMineTask(t)&&t.type==='special'&&(t.stages||[]).some(s=>!s.done&&s.start&&s.end&&s.start<=date&&s.end>=date)),
+      coveredRoutine:S.tasks.some(t=>isMineTask(t)&&t.type==='routine'&&(t.stages||[]).length&&t.start<=date&&t.end>=date)};
+  })()`);
+  await sleep(500);
+  const restPanel = await js(`(function(){
+    return {rows:[...document.querySelectorAll('#view .tlist .trow')].map(r=>r.innerText.replace(/\\s+/g,' ').trim()),
+      empty:(document.querySelector('#view .tlist .empty')||{}).textContent||''};
+  })()`);
+  await shot('16-restday');
+  check('非工作日不铺专项阶段，常规实例也不整段冒出来（格子和右栏都空）',
+    !restDay.err && restDay.coveredSpecial === true && restDay.coveredRoutine === true &&
+    restDay.chips === 0 && restPanel.rows.length === 0 && restPanel.empty.includes('休息日'),
+    JSON.stringify({ restDay, restPanel }));
+
+  /* ---------- 6.2 阶段能就地改名称和日期，不用删了重建 ---------- */
+  const stOpen = await js(`(function(){
+    const t=S.tasks.find(x=>x.type==='special'&&(x.stages||[]).length>=2&&(x.stages||[]).every(s=>s.start&&s.end));
+    if(!t) return {err:'没有可编辑阶段的专项'};
+    openTaskPage(t.id);
+    const row=[...document.querySelectorAll('#view .stage')].find(r=>r.querySelector('[data-act=stage-edit]'));
+    if(!row) return {err:'阶段行没有「改」入口'};
+    row.querySelector('[data-act=stage-edit]').click();
+    const box=document.querySelector('#view .sedit');
+    if(!box) return {err:'点了「改」没展开编辑框'};
+    const i=Number(box.dataset.idx), s=t.stages[i];
+    return {id:t.id, idx:i, oldName:s.name, oldStart:s.start, oldEnd:s.end,
+      shown:(box.querySelector('.sname')||{}).value||'', fields:box.querySelectorAll('input').length};
+  })()`);
+  await sleep(400); await shot('16b-stage-edit');
+  check('阶段行有编辑入口，展开的框里名称和起止日期都能改',
+    !stOpen.err && stOpen.fields === 3 && stOpen.shown === stOpen.oldName,
+    JSON.stringify(stOpen));
+
+  const stBad = stOpen.err ? {err: 'skip'} : await js(`(function(){
+    const box=document.querySelector('#view .sedit');
+    const s=S.tasks.find(x=>x.id==='${stOpen.id}').stages[${stOpen.idx != null ? stOpen.idx : 0}];
+    box.querySelector('.sname').value='不该保存的名字';
+    box.querySelector('.sst').value=s.end; box.querySelector('.sen').value=s.start;
+    box.querySelector('[data-act=stage-save]').click();
+    return {msg:(document.querySelector('#toast')||{}).textContent||'', name:s.name};
+  })()`);
+  await sleep(300);
+  check('结束早于开始时拦下并说明原因，改动不落库',
+    !stOpen.err && stBad.msg.includes('结束日期不能早于开始日期') && stBad.name === stOpen.oldName,
+    JSON.stringify(stBad));
+
+  const stFix = stOpen.err ? {err: 'skip'} : await js(`(function(){
+    const box=document.querySelector('#view .sedit');
+    const s=S.tasks.find(x=>x.id==='${stOpen.id}').stages[${stOpen.idx != null ? stOpen.idx : 0}];
+    box.querySelector('.sname').value='改名后的阶段';
+    box.querySelector('.sst').value=addDays(s.start,1);
+    box.querySelector('.sen').value=addDays(s.end,-1);
+    box.querySelector('[data-act=stage-save]').click();
+    return {msg:(document.querySelector('#toast')||{}).textContent||''};
+  })()`);
+  await sleep(900);
+  const stAfter = stOpen.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    const t=s.tasks.find(x=>x.id==='${stOpen.id}');const st=t.stages[${stOpen.idx != null ? stOpen.idx : 0}];
+    return {name:st.name, start:st.start, end:st.end}})()`);
+  check('改完立刻落库：名称、开始、结束三样都按新值存下来',
+    !!stAfter && stAfter.name === '改名后的阶段' &&
+    stAfter.start === addDaysStr(stOpen.oldStart, 1) && stAfter.end === addDaysStr(stOpen.oldEnd, -1),
+    JSON.stringify({ before: { name: stOpen.oldName, start: stOpen.oldStart, end: stOpen.oldEnd }, after: stAfter }));
+  /* 还原，后面几条用例还要用这份数据 */
+  if (!stOpen.err) {
+    await js(`(function(){const t=S.tasks.find(x=>x.id==='${stOpen.id}');const s=t.stages[${stOpen.idx}];
+      s.name=${JSON.stringify(stOpen.oldName)};s.start=${JSON.stringify(stOpen.oldStart)};s.end=${JSON.stringify(stOpen.oldEnd)};
+      save();return 1})()`);
+    await js(`(()=>{const b=document.querySelector('.td-head [data-act=close]');if(b)b.click();return 'ok'})()`);
+    await sleep(500);
+  }
+  await nav('calendar');
+  await js(`(function(){selDay=TODAY;calCursor=monthStart(TODAY);render();return 1})()`);
+  await sleep(300);
 
   /* ---------- 7 拖动改期：能改的整体平移，不能改的说清原因 ---------- */
   const drag = await js(`(function(){
@@ -349,7 +521,7 @@ async function main() {
 
   /* ---------- 8 列表里直接改状态（暂缓不用进详情） ---------- */
   const qst = await js(`(function(){
-    const t0=S.tasks.find(x=>isMineTask(x)&&x.type!=='routine'&&!(x.stages||[]).length&&x.status==='todo');
+    const t0=S.tasks.find(x=>isMineTask(x)&&x.type!=='routine'&&!(x.stages||[]).length&&x.status==='todo'&&isWorkday(x.start));
     if(!t0) return {err:'没有可改状态的普通任务'};
     selDay=t0.start; view='calendar'; render();
     const sel=document.querySelector('#view .tlist .qst[data-id="'+t0.id+'"]');
@@ -359,9 +531,12 @@ async function main() {
     sel.dispatchEvent(new Event('change',{bubbles:true}));
     return {id:t0.id, title:t0.title, opt:opt};
   })()`);
-  await sleep(1800);
-  const qstDb = qst.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-    const t=s.tasks.find(x=>x.id==='${qst.id}');return t?t.status:null})()`);
+  let qstDb = qst.err ? null : 'pending';
+  for (let i = 0; i < 16 && qstDb === 'pending'; i++) {
+    await sleep(400);
+    qstDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      const t=s.tasks.find(x=>x.id==='${qst.id}');return t?t.status:null})()`);
+  }
   check('任务行里直接选「暂缓」即可落库，不用点进详情',
     !qst.err && qst.opt.includes('暂缓') && qstDb === 'paused', JSON.stringify({ row: qst.title, opt: qst.opt, db: qstDb }));
 
@@ -377,9 +552,12 @@ async function main() {
     sel.dispatchEvent(new Event('change',{bubbles:true}));
     return {id:t0.id, title:t0.title, opt:opt};
   })()`);
-  await sleep(1600);
-  const rqDb = rq.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-    const t=s.tasks.find(x=>x.id==='${rq.id}');return t?t.status:null})()`);
+  let rqDb = rq.err ? null : 'pending';
+  for (let i = 0; i < 16 && rqDb === 'pending'; i++) {
+    await sleep(400);
+    rqDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      const t=s.tasks.find(x=>x.id==='${rq.id}');return t?t.status:null})()`);
+  }
   check('常规任务也能在列表里设状态（暂缓落库）',
     !rq.err && rq.opt.includes('暂缓') && rqDb === 'paused', JSON.stringify({ row: rq.title, db: rqDb, err: rq.err }));
 
@@ -528,7 +706,18 @@ async function main() {
       const cy=document.querySelector('#r_cycle'); cy.value='day'; cy.dispatchEvent(new Event('change',{bubbles:true}));return 'ok'})()`);
     await sleep(600);
     await js(`document.querySelector('#modal [data-act=modal-ok]').click();'ok'`);
-    await sleep(2600);
+    /* 规则要由服务端生成实例，轮询到出现为止，别用固定等待赌命 */
+    let created = false;
+    for (let i = 0; i < 20 && !created; i++) {
+      await sleep(400);
+      created = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+        return (s.rules||[]).some(x=>x.title==='自检规则')})()`);
+    }
+    /* 失败时要有可判的现场：弹窗还在不在、toast 说什么、本地是否已有这条规则 */
+    ruleDiag = JSON.stringify(await js(`(function(){return {
+      toast:(document.querySelector('#toast')||{}).textContent||'',
+      modalOpen:document.querySelector('#modalWrap').classList.contains('show'),
+      local:(S.rules||[]).map(r=>r.title), sync:(document.querySelector('#syncState')||{}).textContent||''}})()`));
   } else {
     ruleDiag = '弹窗未打开 / 常规页文本: ' + (await txt('#view')).replace(/\s+/g, ' ').slice(0, 120);
   }
@@ -543,13 +732,20 @@ async function main() {
   check('空态下可新建常规规则', ruleInUi && ruleInDb.rule && ruleInDb.inst > 0,
     ruleDiag || `界面=${ruleInUi} 库=${JSON.stringify(ruleInDb)}`);
 
-  await goto(BASE); await sleep(1500);
+  await goto(BASE);
+  await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+  await sleep(400);
   const persistedTask = await js(`(function(){return document.body.innerText.includes('自检临时任务')})()`);
+  const persistDiag = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    return {view:(typeof view!=='undefined'?view:'?'), login:!!document.querySelector('#auth.show'),
+      inDb:(s.tasks||[]).some(t=>t.title==='自检临时任务'),
+      localMe:(window.S&&S.me?S.me.no:null),
+      lsMe:localStorage.getItem('pm_mvp_me')}})()`);
   await nav('routine');
   await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=day]');if(b)b.click();return 'ok'})()`);
   await sleep(600);
   const ruleAlive = (await txt('#view')).includes('自检规则');
-  check('新建数据刷新后仍在', persistedTask && ruleAlive, `任务=${persistedTask} 规则=${ruleAlive}`);
+  check('新建数据刷新后仍在', persistedTask && ruleAlive, `任务=${persistedTask} 规则=${ruleAlive} 现场=${JSON.stringify(persistDiag)}`);
 
   /* ---------- 7.5 删除 = 彻底删除：规则与它的安排一起清掉 ---------- */
   const delDlg = await js(`(async()=>{
@@ -563,10 +759,13 @@ async function main() {
     if(ok) ok.click();
     return {dialog:t.slice(0,120)};
   })()`);
-  await sleep(3000);
-  const goneDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-    return {rules:s.rules.filter(x=>x.title==='自检规则').length,
-      inst:s.tasks.filter(t=>t.title==='自检规则').length}})()`);
+  let goneDb = { rules: -1, inst: -1 };
+  for (let i = 0; i < 20 && goneDb.rules !== 0; i++) {
+    await sleep(400);
+    goneDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      return {rules:s.rules.filter(x=>x.title==='自检规则').length,
+        inst:s.tasks.filter(t=>t.title==='自检规则').length}})()`);
+  }
   check('删除规则 = 连同安排彻底清掉',
     /删除/.test(String(delDlg.dialog || '')) && goneDb.rules === 0 && goneDb.inst === 0,
     JSON.stringify({ dlg: delDlg, db: goneDb }).slice(0, 240));
@@ -576,10 +775,20 @@ async function main() {
   await js(`document.querySelector('[data-act=reset]').click();'ok'`);
   await sleep(2000);
   await js(`document.querySelector('[data-act=load-demo]').click();'ok'`);
-  await sleep(3500);
+  /* 示例数据要生成几百条实例，别用固定等待；等到数据真回来再断言 */
+  for (let i = 0; i < 30; i++) {
+    const n = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      return (s.tasks||[]).length})()`);
+    if (n > 0) break;
+    await sleep(500);
+  }
   await nav('today');
-  const restored = await js(`(function(){return {rows:document.querySelectorAll('.trow').length,
-    sub:document.querySelectorAll('#view table tbody tr').length}})()`);
+  let restored = { rows: 0, sub: 0 };
+  for (let i = 0; i < 12 && restored.rows < 1; i++) {
+    await sleep(500);
+    restored = await js(`(function(){return {rows:document.querySelectorAll('.trow').length,
+      sub:document.querySelectorAll('#view table tbody tr').length}})()`);
+  }
   check('载入示例数据可用', restored.rows >= 1 && restored.sub >= 1, JSON.stringify(restored));
   await shot('02-after-restore');
 
@@ -603,10 +812,14 @@ async function main() {
 
   let afterStop = { active: 'skipped', left: -1 };
   if (beforeStop.id) {
-    await sleep(3200);
-    afterStop = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-      const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
-      return {active:rule?rule.active:'rule-missing', left:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
+    /* 停用要重排实例，轮询到真的停用为止 */
+    for (let i = 0; i < 20; i++) {
+      await sleep(500);
+      afterStop = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+        const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
+        return {active:rule?rule.active:'rule-missing', left:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
+      if (afterStop.active === false) break;
+    }
   }
   check('停用只停今后：今天及以前保留，明天以后撤掉',
     !!beforeStop.id && beforeStop.n > 0 && beforeStop.future > 0 &&
@@ -614,7 +827,9 @@ async function main() {
     `停用前 ${beforeStop.n} 条（其中未来 ${beforeStop.future}）→ 应留 ${beforeStop.kept}，实际 ${JSON.stringify(afterStop)}`);
 
   if (beforeStop.id) {
-    await goto(BASE); await sleep(1600); await nav('routine');
+    await goto(BASE);
+    await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+    await sleep(400); await nav('routine');
     await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=day]');if(b)b.click();return 'ok'})()`);
     await sleep(700);
     const stopCard = await js(`(function(){const c=[...document.querySelectorAll('.rule-card')].find(x=>x.innerText.includes('部门晨会'));
@@ -625,10 +840,13 @@ async function main() {
     /* 恢复启用，保证后续用例有数据 */
     await js(`(function(){const c=[...document.querySelectorAll('.rule-card')].find(x=>x.innerText.includes('部门晨会'));
       if(!c) return 'no-card'; c.querySelector('[data-act=rule-toggle]').click(); return 'ok'})()`);
-    await sleep(3400);
-    const reOn = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
-      const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
-      return {active:rule?rule.active:'missing', n:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
+    let reOn = { active: 'pending', n: 0 };
+    for (let i = 0; i < 20 && reOn.active !== true; i++) {
+      await sleep(500);
+      reOn = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+        const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
+        return {active:rule?rule.active:'missing', n:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
+    }
     check('重新启用后恢复生成', reOn.active === true && reOn.n > afterStop.left, JSON.stringify(reOn));
   }
 
@@ -1049,8 +1267,13 @@ async function main() {
   const bad = results.filter((r) => !r.ok);
   console.log(`\n===== 合计 ${results.length} 项，失败 ${bad.length} 项 =====`);
   if (bad.length) bad.forEach((b) => console.log('  失败：' + b.name + ' · ' + b.info));
-  ws.close(); child.kill();
+  ws.close(); killTree(child.pid);
   setTimeout(() => process.exit(bad.length ? 1 : 0), 300);
 }
 
-main().catch((e) => { console.error('自检异常: ' + e.message); process.exit(2); });
+main().catch((e) => {
+  console.error('自检异常: ' + e.message);
+  /* 异常退出也要收干净：留着会把下一轮的 9333 占住，故障表现出来就是「随机断言失败」 */
+  if (child) killTree(child.pid);
+  process.exit(2);
+});

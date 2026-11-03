@@ -345,9 +345,11 @@ const isMineTask = t => {
 
 /* 日历上出现的应该是一件大事的「哪一段」，不是父任务的名字。
    有阶段的任务（专项 / 下派 / 带节点的常规）按阶段展开：常规节点是单日，
-   专项阶段是区间，落在这一段里就显示这一段的名字；阶段之间有空档时退回整体区间，
-   免得任务在日历上凭空消失。 */
+   专项阶段是区间，落在这一段里就显示这一段的名字。
+   非工作日（周末 / 法定假日）不铺区间型条目：阶段跨周末只说明计划是连着的，
+   不等于周末要干活；明确落在这一天的单日节点照常显示。 */
 function occOn(date, mode) {
+  const rest = !isWorkday(date);
   const out = [];
   S.tasks.forEach(t => {
     if (!isMineTask(t)) return;
@@ -358,15 +360,19 @@ function occOn(date, mode) {
         if (hit) return;
         /* 父阶段不出条目：它的日期是子任务并集，出了就和子任务同一天撞两条 */
         if (hasKids(stages, s)) return;
+        if (rest && !s.date) return;
         const on = s.date ? s.date === date : (s.start && s.end && s.start <= date && s.end >= date);
         if (on) hit = { t, step: s, si: i };
       });
-      if (hit) { out.push(hit); return; }
+      if (hit) out.push(hit);
+      /* 拆过阶段的任务只在阶段上出现，不再退回整条任务：
+         常规实例的起止横跨两个月，一退回就会在没排节点的周末凭空冒出一条。 */
+      return;
     }
-    if (t.start <= date && t.end >= date) {
-      if (mode === 'ends' && t.type !== 'routine' && t.start !== t.end && date !== t.start && date !== t.end) return;
-      if (!stages.length || mode === 'all') out.push({ t, step: null, si: -1 });
-    }
+    if (!(t.start <= date && t.end >= date)) return;
+    if (rest && t.start !== t.end) return;
+    if (mode === 'ends' && t.type !== 'routine' && t.start !== t.end && date !== t.start && date !== t.end) return;
+    out.push({ t, step: null, si: -1 });
   });
   return out;
 }
@@ -943,7 +949,8 @@ function viewCalendar() {
           ${isHoliday(selDay) ? '<span class="pill warn">法定假日</span>' : isMakeup(selDay) ? '<span class="pill green">补班</span>' : isWorkday(selDay) ? '<span class="pill">工作日</span>' : '<span class="pill">周末</span>'}
         </div>
         <div class="tlist">
-          ${dayItems.length ? dayItems.map(o => taskRow(o.t, o.step, o.si)).join('') : '<div class="empty">这一天还没有安排</div>'}
+          ${dayItems.length ? dayItems.map(o => taskRow(o.t, o.step, o.si)).join('')
+            : `<div class="empty">${isWorkday(selDay) ? '这一天还没有安排' : '这天是休息日，不排活；跨周末的专项阶段只在工作日显示'}</div>`}
         </div>
         <button class="btn sm" style="margin-top:10px;width:100%" data-act="new-day">+ 在这一天加临时任务</button>
       </div>
@@ -1160,7 +1167,7 @@ function taskDetailHTML(t) {
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加阶段</button>
           </div>
-          <div class="mini" style="margin-top:7px;line-height:1.5">要给某个阶段再拆细，点那一行的「+子」；子任务最多再分一级。</div>
+          <div class="mini" style="margin-top:7px;line-height:1.5">名称或日期写错了，点那一行的「改」就地调整，不用删了重建；要再拆细点「+子」，子任务最多再分一级。</div>
         </div>` : ''}
       </div>`;
 
@@ -1224,6 +1231,7 @@ function stageTreeHTML(t, canEdit) {
     const head = `<div class="stage ${pDone ? 'on' : ''}">
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
       <div class="t ${pDone ? 'done' : ''}"><span style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务">+子</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
     </div>`;
@@ -1232,6 +1240,7 @@ function stageTreeHTML(t, canEdit) {
       return `<div class="stage sub ${k.done ? 'on' : ''}">
         <div class="n" ${canEdit ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : ''}>${k.done ? '✓' : ''}</div>
         <div class="t ${k.done ? 'done' : ''}"><span style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
+        ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="改这一段的名称和日期">改</button>` : ''}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
       </div>`;
     }).join('');
@@ -1708,6 +1717,10 @@ function dragCheck(t, date, si) {
         }
       }
     }
+    /* 周末和节假日不铺阶段条，拖过去就等于把这一段藏起来了，干脆拦下 */
+    if (!isWorkday(date)) {
+      return { ok: false, why: '专项阶段不排到周末或节假日：那两天日历不显示阶段，拖过去会看不见' };
+    }
     return { ok: true };
   }
   if (t.type === 'routine' && !isWorkday(date)) {
@@ -1990,6 +2003,78 @@ document.addEventListener('click', e => {
     case 'subadd-cancel':
       if (el.closest('.subadd')) el.closest('.subadd').remove();
       break;
+    /* 改阶段：原来只能删了重建，改个错别字或挪两天都得重来一遍，等于变相惩罚修改。
+       就地展开一个小表单，名称和起止一起改；有子任务的阶段时间由子任务决定，只让改名。 */
+    case 'stage-edit': {
+      if (!t) break;
+      const i = Number(el.dataset.idx), s = (t.stages || [])[i];
+      if (!s) break;
+      document.querySelectorAll('#view .sedit').forEach(x => x.remove());
+      const row = el.closest('.stage');
+      const kids = kidsOf(t.stages, s.id);
+      const from = s.start || s.date || t.start;
+      const to = s.end || s.date || from;
+      row.insertAdjacentHTML('afterend', `<div class="sedit" data-idx="${i}">
+        <input class="sname" value="${esc(s.name || '')}" placeholder="阶段名称"/>
+        <div class="row">
+          <input type="date" class="sst" value="${from}" ${kids.length ? 'disabled' : ''}/>
+          <input type="date" class="sen" value="${to}" ${kids.length ? 'disabled' : ''}/>
+          <button class="btn primary sm" data-act="stage-save" data-id="${t.id}" data-idx="${i}">保存</button>
+          <button class="btn ghost sm" data-act="sedit-cancel">取消</button>
+        </div>
+        <div class="mini" style="margin-top:6px">${kids.length
+          ? `这一阶段的时间由下面 ${kids.length} 个子任务决定，要改时间请改子任务`
+          : '结束日期不能早于开始日期，也不能压到前后两段上'}</div>
+      </div>`);
+      break;
+    }
+    case 'sedit-cancel':
+      if (el.closest('.sedit')) el.closest('.sedit').remove();
+      break;
+    case 'stage-save': {
+      if (!t) break;
+      const i = Number(el.dataset.idx), s = (t.stages || [])[i];
+      const box = el.closest('.sedit');
+      if (!s || !box) break;
+      const name = box.querySelector('.sname').value.trim();
+      if (!name) { toast('阶段名称不能为空'); break; }
+      const kids = kidsOf(t.stages, s.id);
+      if (!kids.length) {
+        const ns = box.querySelector('.sst').value;
+        let ne = box.querySelector('.sen').value;
+        if (!ns) { toast('先选开始日期'); break; }
+        if (!ne) ne = ns;
+        if (ne < ns) { toast('结束日期不能早于开始日期'); break; }
+        /* 和拖拽同一套口径：同层不能重叠，顺序不能倒 */
+        const sib = siblingsOf(t.stages, i);
+        const pos = sib.findIndex(o => o.i === i);
+        const prev = pos > 0 ? sib[pos - 1].x : null;
+        const next = pos >= 0 && pos < sib.length - 1 ? sib[pos + 1].x : null;
+        const scope = s.pid ? '同一个阶段下的' : '';
+        const pe = prev && (prev.end || prev.date || prev.start);
+        if (pe && ns <= pe) {
+          toast(`不能和${scope}「${prev.name || ''}」重叠：它到 ${fmt(pe)}，开始最早 ${fmt(addDays(pe, 1))}`);
+          break;
+        }
+        const nStart = next && (next.start || next.date || next.end);
+        if (nStart && ne >= nStart) {
+          toast(`不能压到${scope}「${next.name || ''}」：它 ${fmt(nStart)} 开始，结束最晚 ${fmt(addDays(nStart, -1))}`);
+          break;
+        }
+        s.start = ns;
+        s.end = ne;
+        /* 单日节点改成区间时把 date 摘掉，否则日历还按单日取 */
+        if (s.date) { if (ne === ns) s.date = ns; else delete s.date; }
+      }
+      s.name = name;
+      if (s.pid) recalcParent(t.stages, s.pid);
+      const tops = t.stages.filter(x => !x.pid);
+      const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
+      const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
+      if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
+      save(); openTaskPage(t.id); render(); toast(`已更新「${name}」`);
+      break;
+    }
     case 'stage-add-sub': {
       if (!t) break;
       const box = el.closest('.subadd');

@@ -23,11 +23,19 @@ public/index.html      # 页面骨架与全部样式
 public/app.js          # 视图渲染、交互、同步
 public/changelog.js    # 顶栏版本号 + 版本更新弹窗
 data/                  # 运行时数据库（已 gitignore）
+AGENTS.md              # 工程规矩与事实指针（改代码前先读）
+issues.md              # 问题台账，每条带 fail_source
 docs/product-design.html  # 产品设计方案（含一期范围、权限、决策记录）
 docs/prototype.html       # 交互原型（无后端，localStorage，供对照）
+docs/modules.md           # 模块边界、不变量、依赖方向
+docs/contracts/           # G2 改动的契约（_template.md 是模板）
+docs/review-checklist.md  # G2 复核清单（每条对应踩过的坑）
+docs/adoption-log.md      # 采纳外部工程方法的实测记录
+.githooks/pre-commit   # 提交门禁入口（需 git config core.hooksPath .githooks）
+_dev/verify.mjs        # 门禁本体：语法/版本/CHANGELOG/服务版本/e2e/树摘要
+_dev/e2e.mjs           # 端到端自检（76 项），脚本进版本库、产物不进
 启动工作台.bat / 停止工作台.bat  # Windows 一键启停
 readme-no-node.txt     # 未安装 Node 时的提示（由 bat 用 type 输出）
-_dev/                  # 本地自检脚本与产物（已 gitignore）
 ```
 
 ## 3. 本地运行
@@ -113,7 +121,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | `emp` | 花名册 | `no`(PK) `name` `role` `dept` `mgr_no` `active` |
 | `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month)` `policy` `steps`(JSON) `active` |
 | `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no` `assignee_no` `start_date` `end_date` `stages`(JSON) `routine_id` `plan_date` `source_id` `detached` `intake_status` |
-| `cat` | 两级分类 | `lvl` `parent_id` `name` |
+| `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |
 | `watch` | 管理者关注的“下属+规则” | `mgr_no` `sub_no` `rule_id` |
 | `holiday` | 节假日与调休 | `date` `kind` |
 | `op_log` | 操作日志 | `actor_no` `action` `detail` `ip` |
@@ -138,17 +146,47 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 10. **承接人只有「下派任务」才换得动**（这条是产品口径，不是实现细节）：专项、临时一律 `assignee_no = owner_no`，新建弹窗和详情抽屉都不给下拉，服务端 `upsertTask` 也会把非 assign 类型强行落回负责人——即使绕过界面直接写接口，脏值也进不来。理由：这两个页面只办自己的事，留个可选人的下拉，会让人以为能在这里给组员派活，而真正派活的路径是「下派任务」（有承接台、待接收、可见范围一整套语义）。换人时只有下发人（`owner_no`）能改，改完把 `intake_status` 重新置 `pending`。
 11. **导航按「事情归谁」分组，不按功能多少分组**：`我的工作` = 今日待办 / 日历待办 / 常规工作 / 专项工作（这四页的操作对象只有本人，前两页是时间视图「今天 → 整月」，后两页是工作类型）；`协作` = 下派任务 / 任务承接台（这两页一进一出，活儿在人和人之间流转）。所以「日历待办」不在协作组，「下派任务」不在我的工作组——判断标准只有一句：**这一页会不会动到别人的任务**。新增页面时按这句判断放哪组，别按「看起来像计划类」这种模糊感觉。
 12. **任务详情是整页，不是右侧抽屉**：抽屉宽度 460px，只能把表单从上往下堆；而点开一条任务的人，尤其是管理者点开组员的活，想看的是「到哪了、卡在哪、还剩几天」，不是一列要填的控件。所以详情做成整页：抬头四个指标（进度 / 阶段数 / 时间 / 承接人），左栏阶段时间线，右栏才是字段；**不是自己的任务整块只读，用键值表渲染，不摆一堆改不动的灰控件**（`canEdit` 由 `owner_no` / `assignee_no` 判定，同一套判定服务端 `upsertTask` 也在用）。列表里的按钮叫「查看」不叫「管理」——管理者对组员的活只有查看权，叫「管理」是骗人。
+13. **日历条目是「阶段/节点」，不是父任务**：`occOn()` 先看 `stages`——常规节点是单日（`s.date`），专项/下派的阶段是区间（`s.start~s.end`），当天落在哪一段就出哪一段的条目，标题用段名，父任务名只作 `title` 提示与行内灰标签。阶段之间有空档时退回整体区间，保证任务不会在日历上凭空消失。**别改回「整个任务只在起止两天出条目」**：那样 11 月 4 日看到的是 31 天的大项目名，管理者判断不了当天该干什么。
+14. **拖动 = 改期，只改计划，不改归属/规则/历史**，校验集中在 `dragCheck()`，`moveTask()` 必须复用它：
+    - 只能拖自己的（`owner_no` 或 `assignee_no`）；
+    - 已完成的任务、已完成的阶段不能拖（发生的日期是记录）；未完成的任务不能拖到过去；
+    - 常规实例只能落在工作日（规则本就按工作日生成），拖的是这一次，`plan` 保留用于标记「本次改期」；
+    - 阶段区间拖动保持段长，且 `newStart > 上一段结束`、`newEnd < 下一段开始`，否则拒绝并说明撞了哪一段；移动后由阶段日期重算任务起止；
+    - 无阶段任务整段平移，工期不变。
+    拖拽过程中（`dragover`）就调用同一函数给 `drop-no` + `#dragHint`，不要等 `drop` 才报错。
+15. **任务分类手填，不做分类树维护**：`task.cat1/cat2` 存文字，历史数据里可能是 `cat` 表的 id，`catLabel()` 两种都解析，展示不会露 id。新建/编辑用带 `datalist` 的文本框，提示项来自现有 `cat` 表；`cat` 表保留是为了给提示和历史兼容，设置页只做只读统计，不再有增删入口。
+
+16. **填过内容的弹窗不许被一次误点清空**：点遮罩、按 Esc 都走 `tryCloseModal()`——`modalSnapshot()` 与打开时的快照一致（一个字没动）才关；填过东西就**不关**，弹窗轻抖并给一行橙字「内容还没保存」，要留就点保存，不要了点取消。「取消」是明确的放弃动作，不拦。别图省事在遮罩上直接 `closeModal()`：用户敲了半分钟的内容，一次手滑就没了，这是最贵的 bug。
+
+17. **来源占底色和字色，状态占左侧色条和右侧短文字**：日历卡片由 `calChipHTML()` 统一产出。来源沿用最初 `.chip.assign/routine/special/temp` 的四套浅色卡片，不要再给 `.chip.cal.s-*` 写 `background/color` 把它们盖掉。状态用 `::before` 画 3px 色条：待开展灰 `#cbd5e1`、进行中蓝 `#2563eb`、暂缓橙 `#d97706`、已完成绿 `#0f9d8c`；右侧 `.st` 对非默认状态直接写「进行中 / 暂缓 / 已完成」，待开展不写，已完成标题再划掉。颜色不是唯一线索，窄屏或色弱时仍能靠文字读懂。
+    逾期：`chipLate()` 只看计划结束日是否已过，且**已完成的不算逾期**。`.overdue` 只加红框 `#dc2626`、标题加粗和右侧「逾期」，**不改背景与整卡字色**，因此来源底色和左侧状态色条都保留。
+    坑记着：① 色条用伪元素，不用会被圆角弯成弧形的 `border-left`；② 「改期过」继续用右下角 `::after` 小三角；③ 图例 `.lgsrc` 是来源色块、`.lgst` 是状态竖条、`.lglate` 是逾期红框，新增状态时卡片和图例一起补；④ 卡片保持 `line-height:1.3`、上下 padding 为 0，避免任务被收进「+N」。
+18. **常规实例也能改状态，且必须和节点对齐**：`qStatusHTML()` 不再排除 `routine`。`qstatus` 的处理里，设 `done` 就把 `stages` 全勾，常规实例退回 `todo` 就全放（它是重复事项，不做进度考古），选 `doing`/`paused` 时至少留一个未完成节点。不对齐的后果很直观：日历上会出现「状态已完成、节点还空着」，或者反之，两种说法打架。
+19. **月历窗口固定为「上月 26 日 → 当月最后一天」**：`calCells()` 不再从当月 1 日所在周的周一开始，也不是固定 42 格。`prevMonth26()` 取窗口起点，起点前用 `.cell.blank` 空格补齐星期，窗口末尾补齐整周但**不显示下月日期**。这样账期口径每月一致，不会因为 1 日是周几而有时多出上月 19–25 日、有时又没有 26 日。月视图抬头显示 `${fmt(prevMonth26(calCursor))} 起`，改窗口规则时同步这句和 e2e 的边界断言。
 
 ## 7. 自检
 
-`_dev/e2e.mjs` 是端到端自检：零依赖，直接驱动本机 Chromium（CDP），覆盖登录、七个页面与导航分组顺序、日历默认月份、下属看板、勾节点落库与刷新留存、拖拽改期、空态新建、示例数据、切换身份看承接角标、**上级派活→下属承接→上级仍能追踪且只读**、**详情是整页不是抽屉（抬头 4 指标 + 两栏，只读用键值表）**、**专项/临时不能指派给别人（界面锁 + 接口兜底 + 下派任务换人真落库）**、版本号与更新弹窗、JS 错误与失败请求。
+`_dev/e2e.mjs` 是端到端自检：零依赖，直接驱动本机 Chromium（CDP），覆盖登录、七个页面与导航分组顺序、日历默认月份、**日历格子显示阶段名（子任务）而非父任务名**、下属看板、勾节点落库与刷新留存、**拖拽：合法平移 + 拖到过去被拦 + 阶段压到相邻段被拦**、**列表直接改暂缓**、**分类手填落库**、**弹窗填过内容后点遮罩/Esc 不关且内容还在**、**常规实例可改状态且节点对齐**、**月历固定上月 26 日起 + 日历来源底色/字色 + 状态色条/短文字 + 逾期红框不盖来源 + 已完成不逾期 + 图例两组分开**、空态新建、示例数据、切换身份看承接角标、**上级派活→下属承接→上级仍能追踪且只读**、**详情是整页不是抽屉（抬头 4 指标 + 两栏，只读用键值表）**、**专项/临时不能指派给别人（界面锁 + 接口兜底 + 下派任务换人真落库）**、版本号与更新弹窗、JS 错误与失败请求。
 
 ```bash
-node version.js --check      # 版本号与更新内容自检（发版必跑）
-node _dev/e2e.mjs            # 需先起服务，默认 http://localhost:8788
+node _dev/verify.mjs --fast   # 语法 + 版本 + CHANGELOG 一致性（1 秒）
+node _dev/verify.mjs --full   # 上面全套 + 服务版本比对 + e2e 76 项（提交前跑）
+node _dev/e2e.mjs             # 只想要 e2e 时直接跑（调试用，默认 http://localhost:8788）
 ```
 
-脚本里的 Chromium 路径取自本机 Playwright 缓存，换机器需要改 `_dev/e2e.mjs` 顶部的 `CHROME` 常量。产物（截图）在 `_dev/shots/`。`_dev/` 不进版本库。
+`verify.mjs` 是提交门禁的本体。它先算「磁盘上这棵树」的摘要（**含未提交、未跟踪的文件**），
+五项全绿才把摘要写进 `_dev/verify-report.json`；`--hook` 模式再复核这个摘要没变过。
+所以「验过之后又改了代码」会被拦，并列出改动了哪几个文件——这正是 0.4.7–0.4.13 七版积压时缺的那道闸。
+
+钩子要在每台机器上启用一次，**不做就静默失效**：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+脚本里的 Chromium 路径取自本机 Playwright 缓存，换机器需要改 `_dev/e2e.mjs` 顶部的 `CHROME` 常量。
+`_dev/` 下的**脚本进版本库**（e2e 得能换机器复跑），产物不进：截图在 `_dev/shots/`，
+报告是 `_dev/verify-report.json`，两者都在 `.gitignore` 里。
 
 ## 8. 换机器部署
 
@@ -163,6 +201,7 @@ node _dev/e2e.mjs            # 需先起服务，默认 http://localhost:8788
 - `.gitattributes` 已固定 `*.bat text eol=crlf`，clone 后无需手动转换。
 - 前端不引入构建工具与第三方库，保持“拷过去就能跑”。
 - 数据库结构变更写在 `server.js` 建表处，并对老库做兼容（`ALTER TABLE` 前先查 `pragma table_info`）。
+- 工程治理文件（`AGENTS.md` / `issues.md` / `docs/modules.md` / `docs/contracts/` / `docs/review-checklist.md`）各管一件事，**别把同一口径写第二遍**：业务写 `README.md`，工程写本文件，规矩和指针写 `AGENTS.md`，问题写 `issues.md`。写完发现两边说法不一致时，先判断哪边是对的，删掉另一边，别让两处并存。
 
 ## 10. 版本与发版
 
@@ -203,7 +242,7 @@ node version.js --json     # 调试用：接口会返回的完整内容
 
 1. 改 `version.js`：`SEMVER` 加一档，`CHANGELOG` 最前面加这一版的内容。
 2. `node version.js --check` 通过后 `node version.js --write` 刷新 `CHANGELOG.md`。
-3. 跑 `node _dev/e2e.mjs`，全绿再出门（含版本弹窗用例）。
+3. 跑 `node _dev/verify.mjs --full`，全绿再出门（含版本弹窗用例）。
 4. 提交：`release(v0.2.1): 一句话说清这次给使用者带来了什么`。
 5. 打标签并推送：
 

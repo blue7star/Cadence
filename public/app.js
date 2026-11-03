@@ -314,10 +314,21 @@ function acceptedList() {
 }
 
 /* ============ 数据查询 ============ */
+/* 分类在新建/编辑时手填，存的是文字；早期数据里存的是分类 id，两种都认，
+   免得老任务在列表里显示成一串 id。 */
+const catLabel = v => {
+  if (!v) return '';
+  for (const c of S.cats) {
+    if (c.id === v) return c.name;
+    const k = (c.children || []).find(x => x.id === v);
+    if (k) return k.name;
+  }
+  return String(v);
+};
 const catName = (c1, c2) => {
-  const p = S.cats.find(c => c.id === c1);
-  const k = p && (p.children || []).find(x => x.id === c2);
-  return [p ? p.name : '未分类', k ? k.name : ''].filter(Boolean).join(' / ');
+  const a = catLabel(c1), b = catLabel(c2);
+  if (!a && !b) return '未分类';
+  return a ? (b ? a + ' / ' + b : a) : b;
 };
 const prioScore = t => (t.imp || 0) + (t.urg || 0);
 const prioLabel = t => {
@@ -332,23 +343,37 @@ const isMineTask = t => {
   return true;
 };
 
+/* 日历上出现的应该是一件大事的「哪一段」，不是父任务的名字。
+   有阶段的任务（专项 / 下派 / 带节点的常规）按阶段展开：常规节点是单日，
+   专项阶段是区间，落在这一段里就显示这一段的名字；阶段之间有空档时退回整体区间，
+   免得任务在日历上凭空消失。 */
 function occOn(date, mode) {
   const out = [];
   S.tasks.forEach(t => {
     if (!isMineTask(t)) return;
-    if (t.type === 'routine' && t.stages && t.stages.length) {
-      t.stages.forEach((s, i) => { if (s.date === date) out.push({ t, step: s, si: i }); });
-      return;
+    const stages = t.stages || [];
+    if (stages.length) {
+      let hit = null;
+      stages.forEach((s, i) => {
+        if (hit) return;
+        const on = s.date ? s.date === date : (s.start && s.end && s.start <= date && s.end >= date);
+        if (on) hit = { t, step: s, si: i };
+      });
+      if (hit) { out.push(hit); return; }
     }
     if (t.start <= date && t.end >= date) {
       if (mode === 'ends' && t.type !== 'routine' && t.start !== t.end && date !== t.start && date !== t.end) return;
-      out.push({ t, step: null, si: -1 });
+      if (!stages.length || mode === 'all') out.push({ t, step: null, si: -1 });
     }
   });
   return out;
 }
 function sortOcc(list) {
+  const doneOf = o => (o.step ? !!o.step.done : o.t.status === 'done');
   return [...list].sort((a, b) => {
+    /* 做完的沉到后面：当天列表从上往下读，应该先看到还没干的 */
+    const da = doneOf(a) ? 1 : 0, db = doneOf(b) ? 1 : 0;
+    if (da !== db) return da - db;
     const pa = prioScore(a.t), pb = prioScore(b.t);
     if (pb !== pa) return pb - pa;
     const ta = (a.step && a.step.time) || a.t.time || '99';
@@ -382,29 +407,47 @@ function prioBadge(t) {
   if (!p) return '';
   return `<span class="tag ${p === 'P0' ? 'red' : ''}">${p}</span>`;
 }
+/* 状态快捷改：勾选框只解决「做完了」，暂缓/进行中要进详情翻半天，
+   所以列表里直接给一个状态下拉，一个动作到位。
+   专项的阶段行也给：那一段属于哪条任务，改的就是那条任务的状态，省得再点进去。
+   常规实例只有完成/未完成，用勾选框就够。 */
+/* 状态快捷改：勾选框只解决「做完了」，暂缓/进行中要进详情翻半天，所以列表里直接给下拉。
+   常规实例也能改——今天没空做，先挂「暂缓」是最常见的动作，不该逼人进详情。 */
+function qStatusHTML(t, step) {
+  return `<select class="qst s-${t.status}" data-act="qstatus" data-id="${t.id}" title="改整条任务的状态">` +
+    ['todo', 'doing', 'paused', 'done'].map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${ST[k].name}</option>`).join('') +
+    `</select>`;
+}
 function taskRow(t, step, si) {
   const done = step ? step.done : t.status === 'done';
   const delay = !step && t.auto && t.planDate && t.planDate !== t.start;
   const time = (step && step.time) || t.time;
-  const title = step && step.name ? `${t.title} · ${step.name}` : t.title;
-  const late = step ? (!step.done && step.date < TODAY) : overdue(t);
+  /* 节点行显示节点名（这是这一段的活），父任务名降级成标签做归属提示 */
+  const stepName = step ? (step.name || '') : '';
+  const title = stepName || t.title;
+  const parentTag = stepName && stepName !== t.title ? `<span class="tag parent">${esc(t.title)}</span>` : '';
+  const spanFrom = step ? (step.start || step.date || t.start) : t.start;
+  const spanTo = step ? (step.end || step.date || t.end) : t.end;
+  const late = step ? (!step.done && spanTo < TODAY) : overdue(t);
   const who = (t.assigneeNo && t.assigneeNo !== S.me.no) ? nameOf(t.assigneeNo) : '';
+  /* 有状态下拉的普通任务不再重复写一遍状态；常规实例写「节点进度」 */
+  const stText = step ? `${si + 1}/${t.stages.length} 节点` : (t.type === 'routine' ? ST[t.status].name : '');
   return `<div class="trow ${done ? 'done' : ''}">
     <span class="bar ${t.type}"></span>
     <div class="cb ${done ? 'on' : ''}" data-act="${step ? 'toggle-step' : 'toggle'}" data-id="${t.id}"${step ? ` data-idx="${si}"` : ''}>${done ? '✓' : ''}</div>
     <div class="body">
-      <div class="t"><b>${esc(title)}</b>${typeChip(t)}
-        ${step ? (si + 1) + '/' + t.stages.length + ' 节点' : ST[t.status].name}
+      <div class="t"><b>${esc(title)}</b>${typeChip(t)}${parentTag}
+        ${stText}
         ${prioBadge(t)}
         ${delay ? '<span class="tag" title="按规则调整过日期">日期已调整</span>' : ''}
         ${late ? '<span class="tag red">已逾期</span>' : ''}</div>
       <div class="meta">
-        <span>${time ? time + ' · ' : ''}${t.start === t.end ? fmt(t.start) : fmt(t.start) + ' → ' + fmt(t.end)}</span>
+        <span>${time ? time + ' · ' : ''}${spanFrom === spanTo ? fmt(spanFrom) : fmt(spanFrom) + ' → ' + fmt(spanTo)}</span>
         ${who ? `<span>承接：${esc(who)}</span>` : ''}
         <span>${catName(t.cat1, t.cat2)}</span>
       </div>
     </div>
-    <div class="right"><button class="btn sm ghost" data-act="open" data-id="${t.id}">详情</button></div>
+    <div class="right">${qStatusHTML(t, step)}<button class="btn sm ghost" data-act="open" data-id="${t.id}">详情</button></div>
   </div>`;
 }
 function statCard(cls, label, n, extra) {
@@ -758,14 +801,42 @@ function calCells() {
     const start = weekStart(selDay);
     return Array.from({ length: 7 }, (_, i) => ({ d: addDays(start, i), in: true }));
   }
-  const first = calCursor, lead = (dow(first) + 6) % 7;
-  const start = addDays(first, -lead);
-  return Array.from({ length: 42 }, (_, i) => {
-    const d = addDays(start, i);
-    return { d, in: d.slice(0, 7) === calCursor.slice(0, 7) };
+  /* 月视图固定从「上月 26 日」开始，到当月最后一天结束；26 日之前补空格保持星期对齐。
+     这是账期口径，不随当月 1 日是星期几而变化。 */
+  const cycleStart = prevMonth26(calCursor), gridStart = weekStart(cycleStart);
+  const last = monthEnd(calCursor);
+  const slots = Math.ceil((diffDays(last, gridStart) + 1) / 7) * 7;
+  return Array.from({ length: slots }, (_, i) => {
+    const d = addDays(gridStart, i);
+    return { d, blank: d < cycleStart || d > last, in: d >= cycleStart && d <= last };
   });
 }
+function prevMonth26(s) {
+  const d = parse(monthStart(s));
+  return iso(new Date(d.getFullYear(), d.getMonth() - 1, 26));
+}
+/* 日历卡片：来源靠最初的底色和字色区分，状态靠左侧色条 + 右侧短文字。
+   待开展是默认状态，不额外占文字宽度；进行中 / 暂缓 / 已完成都直接写明白。
+   逾期只看计划结束日是否已过，用红框和「逾期」提示，不覆盖来源底色；
+   已完成的活再晚也是记录，不该在日历上常亮红灯。 */
+function chipLate(t, step) {
+  if (step) return !step.done && !!((step.end || step.date)) && (step.end || step.date) < TODAY;
+  if (t.status === 'done') return false;
+  return (t.end || t.start) < TODAY;
+}
+const CHIP_STATE = { doing: '进行中', paused: '暂缓', done: '已完成' };
+function calChipHTML(t, step, si, label, maxLen) {
+  const stKey = (step && step.done) ? 'done' : (ST[t.status] ? t.status : 'todo');
+  const late = chipLate(t, step);
+  const tip = (step && step.name ? t.title + ' · ' + step.name : t.title) + ' · ' + ST[stKey].name + (late ? ' · 已逾期' : '');
+  const adjusted = step ? false : (t.auto && t.planDate && t.planDate !== t.start);
+  const stateText = late ? '逾期' : (CHIP_STATE[stKey] || '');
+  return `<span class="chip cal ${t.type} s-${stKey}${late ? ' overdue' : ''}${adjusted ? ' adjusted' : ''}"
+    draggable="true" data-drag='${JSON.stringify({ id: t.id, s: si })}' data-act="open" data-id="${t.id}" data-st="${stKey}"${late ? ' data-late="1"' : ''}
+    title="${esc(tip)}"><span class="lbl">${esc(maxLen ? cut(label, maxLen) : label)}</span>${stateText ? `<i class="st">${stateText}</i>` : ''}</span>`;
+}
 function cellHTML(c) {
+  if (c.blank) return '<div class="cell blank"></div>';
   const d = c.d, items = sortOcc(occOn(d, 'ends'));
   const cls = ['cell'];
   if (!c.in) cls.push('out');
@@ -773,12 +844,8 @@ function cellHTML(c) {
   if (isHoliday(d)) cls.push('holiday');
   else if (!isWorkday(d)) cls.push('weekend');
   const chips = items.slice(0, 4).map(o => {
-    const t = o.t, st = o.step;
-    const label = st && st.name ? st.name : t.title;
-    const drag = JSON.stringify({ id: t.id, s: o.si });
-    const adjusted = st ? false : (t.auto && t.planDate !== t.start);
-    return `<span class="chip cal ${t.type} ${adjusted ? 'adjusted' : ''} ${st && st.done ? 'donechip' : ''}"
-      draggable="true" data-drag='${drag}' data-act="open" data-id="${t.id}" title="${esc(t.title + (st && st.name ? ' · ' + st.name : ''))}">${esc(cut(label, 9))}</span>`;
+    const label = o.step && o.step.name ? o.step.name : o.t.title;
+    return calChipHTML(o.t, o.step, o.si, label);
   }).join('');
   return `<div class="${cls.join(' ')}" data-date="${d}">
     <div class="dhead">
@@ -801,6 +868,7 @@ function viewCalendar() {
     <div class="card">
       <div class="cal-head">
         <span class="m">${head}</span>
+        ${calMode === 'month' ? `<span class="mini">${fmt(prevMonth26(calCursor))} 起</span>` : ''}
         <div class="seg">
           <button data-act="cal-mode" data-mode="month" class="${calMode === 'month' ? 'on' : ''}">月</button>
           <button data-act="cal-mode" data-mode="week" class="${calMode === 'week' ? 'on' : ''}">周</button>
@@ -809,20 +877,29 @@ function viewCalendar() {
         <button class="btn sm" data-act="cal-nav" data-step="1">›</button>
         <button class="btn sm ghost" data-act="cal-today">回到今天</button>
         <div class="spacer"></div>
-        <span class="mini">拖动卡片到别的日期即可改期</span>
+        <span class="mini" id="dragHint">拖动卡片 = 改期</span>
       </div>
       <div class="cal">
         ${['一', '二', '三', '四', '五', '六', '日'].map(x => `<div class="dow">周${x}</div>`).join('')}
         ${cells.map(cellHTML).join('')}
       </div>
       <div class="cal-legend">
-        <span><i class="dot" style="background:var(--assign)"></i>下派任务</span>
-        <span><i class="dot" style="background:var(--routine)"></i>常规任务</span>
-        <span><i class="dot" style="background:var(--special)"></i>专项任务</span>
-        <span><i class="dot" style="background:var(--temp)"></i>临时任务</span>
+        <span class="lg-cap">来源</span>
+        <span><i class="lgsrc assign"></i>下派</span>
+        <span><i class="lgsrc routine"></i>常规</span>
+        <span><i class="lgsrc special"></i>专项</span>
+        <span><i class="lgsrc temp"></i>临时</span>
+        <span class="lg-sep"></span>
+        <span class="lg-cap">状态</span>
+        <span><i class="lgst todo"></i>待开展</span>
+        <span><i class="lgst doing"></i>进行中</span>
+        <span><i class="lgst paused"></i>暂缓</span>
+        <span><i class="lgst done"></i>已完成</span>
+        <span><i class="lglate"></i>已逾期</span>
+        <span class="lg-sep"></span>
         <span><span class="hol" style="font-size:10px;background:#fde8e8;color:#c0392b;border-radius:4px;padding:0 4px">休</span> 法定节假日</span>
         <span><span class="mk" style="font-size:10px;background:#e8f7f4;color:#0b7a6d;border-radius:4px;padding:0 4px">补班</span> 调休上班</span>
-        <span>虚线框 = 常规实例本次改期</span>
+        <span>右下角小三角 = 常规实例本次改期</span>
       </div>
     </div>
     <div>
@@ -839,9 +916,15 @@ function viewCalendar() {
       <div class="card">
         <div class="card-h"><h2>今日待办（可拖到日历）</h2></div>
         <div class="stack">
-          ${todayTasks().map(o => `<span class="chip cal ${o.t.type}" draggable="true" data-drag='${JSON.stringify({ id: o.t.id, s: o.si })}' data-act="open" data-id="${o.t.id}">${esc(cut(o.step && o.step.name ? o.t.title + ' · ' + o.step.name : o.t.title, 18))}</span>`).join('') || '<span class="mini">今天没有待办</span>'}
+          ${todayTasks().map(o => calChipHTML(o.t, o.step, o.si,
+            o.step && o.step.name ? o.t.title + ' · ' + o.step.name : o.t.title, 18)).join('') || '<span class="mini">今天没有待办</span>'}
         </div>
-        <div class="note" style="margin-top:12px">拖到某一天：普通任务整体平移起止日期；常规实例只调整本次，规则不变。</div>
+        <div class="note" style="margin-top:12px">
+          拖到某一天 = 改这一段的计划日期，不是把活交给别人：<br/>
+          · 没拆阶段的活：整段一起平移，工期天数不变<br/>
+          · 专项 / 下派任务：拖的是当前这一个阶段，保持阶段长短，且不能压到前后阶段上<br/>
+          · 常规工作：只改这一次，规则本身不动，仍只能落在工作日
+        </div>
       </div>
     </div>
   </div>`;
@@ -857,6 +940,13 @@ function viewSettings() {
     if (d > holCfg[n].to) holCfg[n].to = d;
   });
   const mks = Object.keys(MK).sort();
+  /* 分类不再统一维护，这里只回看「实际用过哪些」，当个标签统计用 */
+  const catUse = {};
+  S.tasks.forEach(t => {
+    const n = catName(t.cat1, t.cat2);
+    if (n && n !== '未分类') catUse[n] = (catUse[n] || 0) + 1;
+  });
+  const catTop = Object.keys(catUse).sort((a, b) => catUse[b] - catUse[a]).slice(0, 10);
   return `
   <div class="card" style="margin-bottom:14px">
     <div class="card-h"><h2>账号与汇报关系</h2><span class="hint">一期：工号 + 姓名登录，免密码；一个直属上级</span>
@@ -871,19 +961,12 @@ function viewSettings() {
   </div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-h"><h2>任务分类（两级，管理者自行维护）</h2>
-        <div class="spacer"></div><button class="btn sm" data-act="cat-add1">+ 一级分类</button></div>
-      ${S.cats.map(c => `<div style="padding:10px 0;border-bottom:1px dashed var(--line2)">
-        <div class="split" style="margin-bottom:6px">
-          <b>${esc(c.name)}</b><span class="mini">${(c.children || []).length} 个二级</span>
-          <div class="spacer"></div>
-          <button class="btn sm ghost" data-act="cat-add2" data-id="${c.id}">+ 二级</button>
-          <button class="btn sm ghost" data-act="cat-del" data-id="${c.id}">删除</button>
-        </div>
-        <div class="split">${(c.children || []).map(k => `<span class="tag">${esc(k.name)}
-          <span style="cursor:pointer;color:#b6bcc8" data-act="cat-del2" data-id="${c.id}" data-cid="${k.id}">×</span></span>`).join('') || '<span class="mini">暂无二级分类</span>'}</div>
-      </div>`).join('') || '<div class="empty">还没有分类，先建一级分类</div>'}
-      <div class="note" style="margin-top:10px">临时任务创建时默认归入「其他 / 临时事项」，可手动改。</div>
+      <div class="card-h"><h2>任务分类</h2><span class="hint">新建任务时手填，不做统一维护</span></div>
+      <div class="note">分类只用来给任务贴个标签，方便在列表里一眼认出这类活。新建或编辑任务时直接写；写过的会自动出现在输入提示里，写错也不影响任务本身。</div>
+      <div class="split" style="margin-top:12px;flex-wrap:wrap;gap:6px">
+        ${catTop.map(n => `<span class="tag">${esc(n)} · ${catUse[n]}</span>`).join('') || '<span class="mini">还没有用过分类</span>'}
+      </div>
+      <div class="note" style="margin-top:10px">临时任务默认填「其他 / 临时事项」，可改。分类不做删除、改名这类集中管理，避免为几个字去维护一棵树。</div>
     </div>
     <div>
       <div class="card">
@@ -1065,7 +1148,7 @@ function taskDetailHTML(t) {
         ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
         <div class="field"><label>承接人</label>${assigneeField}</div>
         <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
-        ${catSelectsHTML(t.cat1, t.cat2)}
+        ${catInputsHTML(t.cat1, t.cat2, 'd')}
         <div class="field"><label>优先级（可选填）</label><div class="row">
           <select data-field="imp">${lvOpts(t.imp).replace('未设置', '重要度：未设置')}</select>
           <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
@@ -1094,25 +1177,32 @@ function taskDetailHTML(t) {
 
   return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}</div></div>` + foot;
 }
-function catSelectsHTML(c1, c2) {
-  const cur1 = c1 || (S.cats[0] || {}).id;
-  const kids = ((S.cats.find(c => c.id === cur1) || {}).children) || [];
-  const cur2 = c2 || (kids[0] || {}).id;
-  return `<div class="field"><label>任务分类</label><div class="row">
-    <select data-cat1 data-field="cat1">${S.cats.map(c => `<option value="${c.id}" ${c.id === cur1 ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
-    <select data-cat2 data-field="cat2">${kids.map(k => `<option value="${k.id}" ${k.id === cur2 ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select>
-  </div></div>`;
+/* 分类是手填的两个文本框，不做统一维护：写过的分类自动成为输入提示。
+   sfx 用来区分同时存在的几份表单（详情页 / 新建弹窗 / 规则弹窗），避免 datalist 撞 id。 */
+function catInputsHTML(c1, c2, sfx) {
+  const s = sfx || 'd';
+  /* 提示项 = 分类表里有的 + 任务里真用过的，清空分类表后照样有东西可选 */
+  const used1 = new Set(), used2 = new Set();
+  S.tasks.forEach(t => {
+    const a = catLabel(t.cat1), b = catLabel(t.cat2);
+    if (a) used1.add(a);
+    if (b) used2.add(b);
+  });
+  const l1 = [...new Set([...S.cats.map(c => c.name), ...used1])].filter(Boolean);
+  const l2 = [...new Set([...S.cats.flatMap(c => (c.children || []).map(k => k.name)), ...used2])].filter(Boolean);
+  return `<div class="field"><label>任务分类 <span class="mini">手填，可留空</span></label>
+    <div class="row">
+      <input data-field="cat1" list="catL1-${s}" value="${esc(catLabel(c1))}" placeholder="一级，例如：业务交付"/>
+      <input data-field="cat2" list="catL2-${s}" value="${esc(catLabel(c2))}" placeholder="二级，例如：数据与报表"/>
+    </div>
+    <datalist id="catL1-${s}">${l1.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
+    <datalist id="catL2-${s}">${l2.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>
+  </div>`;
 }
-function refreshCat2(root, c1) {
-  const sel = root.querySelector('[data-cat2]');
-  if (!sel) return;
-  const kids = ((S.cats.find(c => c.id === c1) || {}).children) || [];
-  sel.innerHTML = kids.map(k => `<option value="${k.id}">${esc(k.name)}</option>`).join('');
-}
-function otherCat() {
-  const c = S.cats.find(x => x.name === '其他') || S.cats[S.cats.length - 1];
-  if (!c) return { c1: null, c2: null };
-  return { c1: c.id, c2: (c.children && c.children[0] || {}).id || null };
+const otherCat = () => ({ c1: '其他', c2: '临时事项' });
+function catInputVal(root, field) {
+  const el = document.querySelector(`${root} [data-field="${field}"]`);
+  return el ? (el.value.trim() || null) : null;
 }
 
 /* 与服务端一致的日期推算（只用于规则卡片预览与「本次改期」提示） */
@@ -1139,6 +1229,20 @@ function shiftDay(s, policy) {
 }
 
 /* ============ 弹窗 ============ */
+let modalSnap = '';
+let nudgeTimer = 0;
+
+/* 表单快照：用来判断「有没有填过东西」。
+   只比控件值和勾选状态；阶段行增删天然改变控件数量，也算改过。 */
+function modalSnapshot() {
+  const root = $('#modal');
+  if (!root) return '';
+  return [...root.querySelectorAll('input,select,textarea')]
+    .map((el, i) => [i, el.type || '', el.id || '', el.value || '', el.checked ? 1 : 0].join('\u0001'))
+    .join('\u0002');
+}
+function modalDirty() { return modalSnapshot() !== modalSnap; }
+
 function openModal(title, body, onOk, okText) {
   modalOk = onOk;
   $('#modal').className = 'modal';
@@ -1146,9 +1250,39 @@ function openModal(title, body, onOk, okText) {
     <div class="mf"><button class="btn" data-act="modal-cancel">取消</button>
     <button class="btn primary" data-act="modal-ok">${okText || '保存'}</button></div>`;
   $('#modalWrap').classList.add('show');
+  modalSnap = modalSnapshot();
 }
+
+/* 点了遮罩/按了 Esc：没填过东西就直接关（顺手），填过了就别关——
+   直接关等于把用户敲的半分钟内容烧了，这是最不该省的那一下确认。 */
+function tryCloseModal() {
+  if (!modalDirty()) { closeModal(); return; }
+  const m = $('#modal');
+  m.classList.remove('shake');
+  void m.offsetWidth;
+  m.classList.add('shake');
+  const box = $('#modal .mb');
+  if (box) {
+    let tip = $('#modalNote');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'modalNote';
+      tip.className = 'mnote';
+      box.appendChild(tip);
+    }
+    tip.textContent = '内容还没保存：要留下就点「保存」，确实不要了点「取消」';
+    tip.scrollIntoView({ block: 'nearest' });
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(() => { const x = $('#modalNote'); if (x) x.remove(); }, 4000);
+  }
+}
+
 function closeModal() {
   $('#modalWrap').classList.remove('show');
+  $('#modal').classList.remove('shake');
+  const tip = $('#modalNote'); if (tip) tip.remove();
+  clearTimeout(nudgeTimer);
+  modalSnap = '';
   modalOk = null;
   if (pendingRefresh) { pendingRefresh = false; refresh(true).catch(() => { }); }
 }
@@ -1189,7 +1323,7 @@ function taskModalBody(type, preset) {
     <input type="time" id="f_time" style="flex:0 0 96px"/>
   </div></div>
   <div class="field"><label>达成标准</label><textarea id="f_std" placeholder="什么算完成，验收看什么">${preset && preset.std ? esc(preset.std) : ''}</textarea></div>
-  ${catSelectsHTML(type === 'temp' ? otherCat().c1 : null, type === 'temp' ? otherCat().c2 : null)}
+  ${catInputsHTML(type === 'temp' ? otherCat().c1 : null, type === 'temp' ? otherCat().c2 : null, 'm')}
   <div class="field"><label>优先级（可选填，不填不影响使用）</label><div class="row">
     <select id="f_imp"><option value="">重要度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
     <select id="f_urg"><option value="">紧急度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
@@ -1255,7 +1389,7 @@ function openNewTask(type, preset) {
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
       start: s, end: e, time: $('#f_time').value || '',
       std: $('#f_std').value.trim(), status: 'todo',
-      cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       imp: Number($('#f_imp').value) || null, urg: Number($('#f_urg').value) || null,
       stages, sourceId: preset && preset.sourceId ? preset.sourceId : null,
       intakeStatus: (typeVal === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null,
@@ -1335,7 +1469,7 @@ function openRuleModal(rule) {
         </select></div>
       </div>
       <div>
-        ${catSelectsHTML(rule ? rule.cat1 : null, rule ? rule.cat2 : null)}
+        ${catInputsHTML(rule ? rule.cat1 : null, rule ? rule.cat2 : null, 'r')}
         <div class="field" id="r_policy_wrap"><label>节点默认策略（单个节点没单独设置时沿用）</label><select id="r_policy">
           <option value="prev" ${!rule || rule.policy === 'prev' ? 'selected' : ''}>提前至前一工作日</option>
           <option value="next" ${rule && rule.policy === 'next' ? 'selected' : ''}>顺延至后一工作日</option>
@@ -1358,7 +1492,7 @@ function openRuleModal(rule) {
     const data = {
       title, cycle: cy,
       policy: $('#r_policy').value,
-      cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       steps: cy === 'day'
         ? [{ name: rows[0].name, time: rows[0].time, policy: rows[0].policy }]
         : rows.map(r => ({ name: r.name, day: r.day, weekday: r.weekday, mo: r.mo || 0, time: r.time, policy: r.policy })),
@@ -1399,7 +1533,7 @@ function openIntakeModal(id) {
       <input type="date" id="f_end" value="${it.due}"/>
     </div></div>
     <div class="field"><label>达成标准</label><textarea id="f_std">${esc(it.std || '')}</textarea></div>
-    ${catSelectsHTML()}
+    ${catInputsHTML(null, null, 'i')}
   `, () => {
     const title = $('#f_title').value.trim();
     if (!title) { toast('先填任务名称'); return false; }
@@ -1409,7 +1543,7 @@ function openIntakeModal(id) {
       id: uid('t'), type, title, ownerNo: S.me.no, assigneeNo,
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
       start: $('#f_start').value, end: $('#f_end').value, std: $('#f_std').value.trim(),
-      status: 'todo', cat1: $('#modal [data-cat1]').value, cat2: $('#modal [data-cat2]').value,
+      status: 'todo', cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       imp: null, urg: null, stages: [], sourceId: it.id,
       intakeStatus: (type === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null
     });
@@ -1420,22 +1554,6 @@ function openIntakeModal(id) {
     toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下派组员');
   }, '承接');
 }
-function openCatModal(level, parentId) {
-  openModal(level === 1 ? '新建一级分类' : '新建二级分类', `
-    <div class="field"><label>名称</label><input id="c_name" placeholder="例如：客户与商机"/></div>
-    ${level === 2 ? `<div class="note">上级：${esc((S.cats.find(c => c.id === parentId) || {}).name || '')}</div>` : ''}
-  `, () => {
-    const name = $('#c_name').value.trim();
-    if (!name) { toast('先填名称'); return false; }
-    if (level === 1) S.cats.push({ id: uid('c'), name, children: [] });
-    else {
-      const p = S.cats.find(c => c.id === parentId);
-      if (p) { p.children = p.children || []; p.children.push({ id: uid('k'), name }); }
-    }
-    save(); render(); closeModal(); toast('已添加');
-  }, '添加');
-}
-
 /* ============ 交互动作 ============ */
 function toast(msg) {
   const el = $('#toast');
@@ -1445,17 +1563,83 @@ function toast(msg) {
   el._t = setTimeout(() => el.classList.remove('show'), 1900);
 }
 
+/* 拖动的业务含义：只改「这一段的计划日期」，不改归属、不改规则、不动历史。
+   校验顺序：是否是我的 → 是否已完成 → 目标是否在过去 → 阶段/常规的特殊约束 → 相邻阶段顺序。
+   返回 { ok, why }，why 会直接展示给使用者，所以必须说人话。 */
+function dragCheck(t, date, si) {
+  if (!t) return { ok: false, why: '找不到这条任务' };
+  if (t.ownerNo !== S.me.no && t.assigneeNo !== S.me.no) {
+    return { ok: false, why: '这不是你的任务，改期请找下派人' };
+  }
+  const stage = si >= 0 ? (t.stages || [])[si] : null;
+  if (stage && stage.done) {
+    return { ok: false, why: `「${stage.name || '这个节点'}」已完成，已经发生的日期不能再挪` };
+  }
+  if (t.status === 'done') {
+    return { ok: false, why: '已完成的任务不能改期；要改请先改回进行中' };
+  }
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, why: '没落到具体日期上' };
+  if (date < TODAY) {
+    return { ok: false, why: '不能拖到过去：改计划改不了已经发生的事' };
+  }
+  if (stage) {
+    if (t.type === 'routine') {
+      if (!isWorkday(date)) {
+        return { ok: false, why: '常规工作只在工作日发生，这一次不能挪到周末或节假日；要改请编辑规则' };
+      }
+      return { ok: true };
+    }
+    /* 专项/下派任务的阶段是区间：整体平移，保持阶段长短，且不能压到前后阶段 */
+    const span = stage.end ? diffDays(stage.end, stage.start || stage.end) : 0;
+    const newEnd = addDays(date, span);
+    const prev = t.stages[si - 1], next = t.stages[si + 1];
+    if (prev) {
+      const pe = prev.end || prev.date || prev.start;
+      if (pe && date <= pe) {
+        return { ok: false, why: `会和上一阶段「${prev.name || ''}」（到 ${fmt(pe)}）重叠；阶段要按顺序，不能倒着排` };
+      }
+    }
+    if (next) {
+      const ns = next.start || next.date || next.end;
+      if (ns && newEnd >= ns) {
+        return { ok: false, why: `会压到下一阶段「${next.name || ''}」（${fmt(ns)} 开始）；先把下一段往后挪，或把这一段缩短` };
+      }
+    }
+    return { ok: true };
+  }
+  if (t.type === 'routine' && !isWorkday(date)) {
+    return { ok: false, why: '常规工作只在工作日发生；要改到周末请编辑规则' };
+  }
+  return { ok: true };
+}
+
 function moveTask(id, date, si) {
   const t = S.tasks.find(x => x.id === id);
   if (!t) return;
+  const verdict = dragCheck(t, date, si);
+  if (!verdict.ok) { toast('没有改：' + verdict.why); render(); return; }
   if (si != null && si >= 0 && (t.stages || [])[si]) {
     const s = t.stages[si];
-    if (s.date === date) return;
-    s.date = date;
-    const ds = t.stages.map(x => x.date).sort();
-    t.start = ds[0]; t.end = ds[ds.length - 1];
+    if (t.type === 'routine') {
+      if (s.date === date) return;
+      s.date = date;
+      /* 常规实例可能挂着多个节点（如月度薪酬工作），起止要跟着全部节点走，不能压成当天 */
+      const ds = t.stages.map(x => x.date).filter(Boolean).sort();
+      if (ds.length) { t.start = ds[0]; t.end = ds[ds.length - 1]; }
+      else { t.start = date; t.end = date; }
+      save(); render();
+      toast(`「${s.name || t.title}」这一次挪到 ${fmt(date)}，规则本身不变`);
+      return;
+    }
+    const span = s.end ? diffDays(s.end, s.start || s.end) : 0;
+    if (s.start === date) return;
+    s.start = date; s.end = addDays(date, span);
+    const ds = t.stages.map(x => x.start || x.date).filter(Boolean).sort();
+    const de = t.stages.map(x => x.end || x.date).filter(Boolean).sort();
+    if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
     save(); render();
-    toast(`「${t.title} · ${s.name || '节点'}」本次调整到 ${fmt(date)}`);
+    const tail = t.ownerNo !== S.me.no ? `；${nameOf(t.ownerNo)} 会看到这次改期` : '';
+    toast(`「${s.name || t.title}」挪到 ${fmt(date)}${span ? ' → ' + fmt(addDays(date, span)) : ''}${tail}`);
     return;
   }
   if (t.start === date && t.end === date) return;
@@ -1466,7 +1650,8 @@ function moveTask(id, date, si) {
     const delta = diffDays(date, t.start);
     t.start = addDays(t.start, delta);
     t.end = addDays(t.end, delta);
-    toast(`已改期：${fmt(t.start)}${t.start !== t.end ? ' → ' + fmt(t.end) : ''}`);
+    const tail = t.ownerNo !== S.me.no ? `；${nameOf(t.ownerNo)} 会看到这次改期` : '';
+    toast(`已改期：${fmt(t.start)}${t.start !== t.end ? ' → ' + fmt(t.end) : ''}${tail}`);
   }
   save(); render();
 }
@@ -1710,18 +1895,6 @@ document.addEventListener('click', e => {
     }
     case 'cal-mode': calMode = el.dataset.mode; render(); break;
     case 'cal-today': selDay = TODAY; calCursor = monthStart(TODAY); render(); break;
-    case 'cat-add1': openCatModal(1); break;
-    case 'cat-add2': openCatModal(2, id); break;
-    case 'cat-del':
-      if (confirm('删除一级分类及其二级分类？已用该分类的任务会显示为「未分类」。')) {
-        S.cats = S.cats.filter(c => c.id !== id); save(); render();
-      }
-      break;
-    case 'cat-del2': {
-      const p = S.cats.find(c => c.id === id);
-      if (p) { p.children = p.children.filter(k => k.id !== el.dataset.cid); save(); render(); }
-      break;
-    }
     case 'rule-edit':
       openRuleModal(S.rules.find(x => x.id === id));
       break;
@@ -1782,10 +1955,29 @@ document.addEventListener('click', e => {
   }
 });
 
-/* 日历拖拽 */
+/* 日历拖拽：拖动过程中就把能不能放说清楚，别等松手才弹失败 */
+let dragCtx = null, dragBlocked = '';
+const DRAG_TIP = '拖动卡片 = 改期';
+function setDragHint(text, warn) {
+  const el = $('#dragHint');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('warn', !!warn);
+}
+function clearDragUI() {
+  $$('.cell.drop-hot').forEach(c => c.classList.remove('drop-hot'));
+  $$('.cell.drop-no').forEach(c => c.classList.remove('drop-no'));
+  setDragHint(DRAG_TIP, false);
+  dragCtx = null; dragBlocked = '';
+}
 document.addEventListener('dragstart', e => {
   const el = e.target.closest('[data-drag]');
   if (!el) return;
+  dragCtx = null; dragBlocked = '';
+  try {
+    const o = JSON.parse(el.dataset.drag);
+    dragCtx = { t: S.tasks.find(x => x.id === o.id) || null, si: o.s == null ? -1 : o.s };
+  } catch (err) { }
   e.dataTransfer.setData('text/plain', el.dataset.drag);
   e.dataTransfer.effectAllowed = 'move';
   el.classList.add('dragging');
@@ -1793,28 +1985,43 @@ document.addEventListener('dragstart', e => {
 document.addEventListener('dragend', e => {
   const el = e.target.closest('[data-drag]');
   if (el) el.classList.remove('dragging');
-  $$('.cell.drop-hot').forEach(c => c.classList.remove('drop-hot'));
+  /* 拖到不能放的地方松手时，浏览器不会触发 drop，原因得在这里补一句，别让提示一闪就没 */
+  if (dragBlocked) toast('没有改：' + dragBlocked);
+  clearDragUI();
 });
 document.addEventListener('dragover', e => {
   const cell = e.target.closest('.cell[data-date]');
   if (!cell) return;
+  const verdict = dragCtx && dragCtx.t ? dragCheck(dragCtx.t, cell.dataset.date, dragCtx.si) : { ok: true };
+  if (!verdict.ok) {
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+    dragBlocked = verdict.why;
+    cell.classList.add('drop-no');
+    setDragHint('放不下：' + verdict.why, true);
+    return;
+  }
   e.preventDefault();
+  dragBlocked = '';
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  cell.classList.remove('drop-no');
   cell.classList.add('drop-hot');
+  setDragHint(`松手改到 ${fmt(cell.dataset.date)}`, false);
 });
 document.addEventListener('dragleave', e => {
   const cell = e.target.closest('.cell[data-date]');
-  if (cell) cell.classList.remove('drop-hot');
+  if (cell) cell.classList.remove('drop-hot', 'drop-no');
 });
 document.addEventListener('drop', e => {
   const cell = e.target.closest('.cell[data-date]');
   if (!cell) return;
   e.preventDefault();
-  cell.classList.remove('drop-hot');
+  cell.classList.remove('drop-hot', 'drop-no');
   const raw = e.dataTransfer.getData('text/plain');
   if (!raw) return;
   let id = raw, si = -1;
   try { const o = JSON.parse(raw); id = o.id; si = (o.s == null ? -1 : o.s); } catch (err) { }
   moveTask(id, cell.dataset.date, si);
+  clearDragUI();
 });
 
 /* 日历点选日期 */
@@ -1825,8 +2032,25 @@ document.addEventListener('click', e => {
 
 /* 抽屉内字段编辑 */
 document.addEventListener('change', e => {
+  if (e.target.matches('[data-act="qstatus"]')) {
+    const t = S.tasks.find(x => x.id === e.target.dataset.id);
+    if (!t) return;
+    t.status = e.target.value;
+    /* 状态和节点必须对得上，否则日历上会出现「状态已完成、节点还没做」这种自相矛盾的画面：
+       设完成 = 节点全勾；常规实例退回待开展 = 节点全放（它是重复事项，不做进度考古）；
+       选进行中/暂缓时至少留一个未完成节点。 */
+    if ((t.stages || []).length) {
+      if (t.status === 'done') t.stages.forEach(s2 => { s2.done = true; });
+      else if (t.status === 'todo' && t.type === 'routine') t.stages.forEach(s2 => { s2.done = false; });
+      else if (t.stages.every(s2 => s2.done)) t.stages[t.stages.length - 1].done = false;
+    }
+    if (t.type === 'assign' && t.assigneeNo === S.me.no && t.status !== 'todo') t.intakeStatus = 'accepted';
+    S.members = buildMembers(); S.intake = buildIntake();
+    save(); render();
+    toast(`「${t.title}」已改为${ST[t.status].name}`);
+    return;
+  }
   const modal = e.target.closest('#modal');
-  if (modal && e.target.matches('[data-cat1]')) { refreshCat2(modal, e.target.value); return; }
   if (modal && e.target.id === 'r_cycle') {
     ruleStepsDraft = readStepRows(); renderStepWrap(e.target.value);
     const pw = $('#r_policy_wrap'), dn = $('#r_day_note');
@@ -1854,11 +2078,9 @@ document.addEventListener('change', e => {
   if (!t) return;
   const f = e.target.dataset.field;
   if (!f) return;
-  if (f === 'cat1') {
-    t.cat1 = e.target.value;
-    const kids = ((S.cats.find(c => c.id === t.cat1) || {}).children) || [];
-    t.cat2 = (kids[0] || {}).id || '';
-    save(); openTaskPage(t.id); render(); return;
+  if (f === 'cat1' || f === 'cat2') {
+    t[f] = e.target.value.trim() || null;
+    save(); render(); return;
   }
   if (f === 'start' || f === 'end') {
     const v = e.target.value;
@@ -1880,7 +2102,8 @@ document.addEventListener('change', e => {
     t[f] = e.target.value;
   }
   S.members = buildMembers(); S.intake = buildIntake();
-  save(); render(); openTaskPage(t.id);
+  /* 只重渲染，不调 openTaskPage：后者会把页面滚回顶部，改个分类/日期就跳走很烦 */
+  save(); render();
 });
 
 /* 今日待办快捷新建 */
@@ -1899,9 +2122,9 @@ document.addEventListener('submit', e => {
   save(); render(); toast('已加入今日待办');
 });
 
-$('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') closeModal(); });
+$('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') tryCloseModal(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeTaskPage(); closeModal(); }
+  if (e.key === 'Escape') { if ($('#modalWrap').classList.contains('show')) tryCloseModal(); else closeTaskPage(); }
   if (e.key === 'Enter' && $('#auth').classList.contains('show') && (e.target.id === 'a_no' || e.target.id === 'a_name')) {
     e.preventDefault(); doLogin();
   }

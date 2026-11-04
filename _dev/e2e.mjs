@@ -237,6 +237,41 @@ async function main() {
     if (['today', 'assign', 'routine', 'calendar', 'settings'].includes(v)) await shot('01-' + v);
   }
 
+  /* ---------- 2.1 专项卡片按层级排，不把子任务平铺成同级阶段 ---------- */
+  await nav('special');
+  const cardTree = await js(`(function(){
+    const arr0=t=>t.stages||[];
+    const t=(S.tasks||[]).find(x=>x.type==='special'&&x.ownerNo===S.me.no
+      &&arr0(x).some(s=>s.pid)&&arr0(x).every(s=>s.start));
+    if(!t) return {err:'没有带子任务的专项'};
+    const arr=arr0(t), isTop=s=>!s.pid||!arr.some(x=>x.id===s.pid);
+    const exp=[]; let n=0;
+    for(const s of arr){ if(!isTop(s)) continue; n++; exp.push({label:String(n),name:s.name,sub:false});
+      let k=0;
+      for(const c of arr){ if(c.pid!==s.id||isTop(c)) continue; k++;
+        exp.push({label:n+'.'+k,name:c.name,sub:true}); } }
+    const card=[...document.querySelectorAll('#view .rule-card')]
+      .find(c=>{const h=c.querySelector('h2');return h&&h.textContent.trim()===t.title});
+    if(!card) return {err:'卡片没渲染出来'};
+    const rows=[...card.querySelectorAll('.stage')].map(r=>({
+      no:((r.querySelector('.n')||{}).textContent||'').trim(),
+      name:((r.querySelector('.sn')||{}).textContent||'').trim(),
+      sub:r.classList.contains('sub')}));
+    const meta=[...card.querySelectorAll('.mini')].map(x=>x.textContent).find(x=>x.includes('个阶段'))||'';
+    return {title:t.title, rows, exp, meta,
+      tops:arr.filter(isTop).length, kids:arr.length-arr.filter(isTop).length};
+  })()`);
+  check('专项卡片按层级编号：一级阶段后面紧跟自己的子任务，不再把子任务平铺成 4、5、6',
+    !cardTree.err && cardTree.rows.length === cardTree.exp.length &&
+    cardTree.rows.every((r, i) => r.name === cardTree.exp[i].name && r.sub === cardTree.exp[i].sub) &&
+    cardTree.rows.every((r, i) => r.no === '✓' || r.no === cardTree.exp[i].label),
+    JSON.stringify(cardTree).slice(0, 400));
+  check('卡片上的阶段数只数一级阶段，子任务单列',
+    !cardTree.err && cardTree.meta.includes(cardTree.tops + ' 个阶段') &&
+    (!cardTree.kids || cardTree.meta.includes(cardTree.kids + ' 个子任务')),
+    cardTree.meta);
+  await shot('02-special-card');
+
   /* 导航分组定死：自己的事归「我的工作」，跟组员往来的两件归「协作」 */
   const navShape = await js(`(function(){const out=[];document.querySelectorAll('#nav > div').forEach(d=>{
     out.push(d.classList.contains('nav-group') ? '#'+d.textContent.trim() : d.dataset.view)});return out})()`);

@@ -981,6 +981,39 @@ function seedDemo(meNo) {
   const now = nowStr();
   const st = (id, name, start, end, extra) => Object.assign({ id, name, start, end, done: false }, extra || {});
 
+  /* 示例数据的阶段边界要落在工作日上。按「今天 +N 天」硬算，落到周末就等于有两天
+     日历不铺阶段条（周末不显示专项阶段），示例看起来就像排错了。
+     逐段往前推，不能各自吸附：各吸各的会吸到同一天，反而造出重叠。
+     子任务再收回父阶段窗口，越界的按窗口夹住——示例不能违反自己的校验。 */
+  function fitDemoStages(stages) {
+    let prevEnd = '';
+    for (const s of stages.filter(x => !x.pid)) {
+      let a = s.start || s.end, b = s.end || s.start;
+      if (prevEnd && a <= prevEnd) a = addDays(prevEnd, 1);
+      a = shiftDay(a, 'next');
+      b = shiftDay(b < a ? a : b, 'next');
+      s.start = a; s.end = b;
+      prevEnd = b;
+    }
+    for (const k of stages.filter(x => x.pid)) {
+      const p = stages.find(x => x.id === k.pid);
+      if (!p) continue;
+      let a = k.start || k.end, b = k.end || k.start;
+      if (a < p.start) a = p.start;
+      if (a > p.end) a = p.end;
+      if (b > p.end) b = p.end;
+      if (b < a) b = a;
+      k.start = a; k.end = b;
+    }
+    const tops = stages.filter(x => !x.pid);
+    if (tops.length) {
+      const ss = tops.map(x => x.start).filter(Boolean).sort();
+      const ee = tops.map(x => x.end).filter(Boolean).sort();
+      return { stages, start: ss[0], end: ee[ee.length - 1] };
+    }
+    return { stages, start: '', end: '' };
+  }
+
   /* 演示数据要能一眼看懂这套流程：两条在等接收、一条已经移交出去、
      一条我自己的专项里已经派人（一个已加入待办、一个还没）。 */
   const T = [
@@ -1016,10 +1049,13 @@ function seedDemo(meNo) {
       start: d(1), end: d(1), std: '', status: 'todo', imp: null, urg: null, stages: [] }
   ];
   for (const t of T) {
+    /* 有阶段的按阶段边界重定任务的起止，没阶段的（临时任务）保持原样 */
+    const fit = (t.stages || []).length ? fitDemoStages(t.stages) : null;
     upsertTask(meNo, {
       id: t.id, type: t.type, title: t.title, ownerNo: meNo,
       assigneeNo: t.who || meNo, assignee: t.who && t.who !== meNo ? '' : '我',
-      start: t.start, end: t.end, dueDate: t.end, time: t.time || '',
+      start: (fit && fit.start) || t.start, end: (fit && fit.end) || t.end,
+      dueDate: (fit && fit.end) || t.end, time: t.time || '',
       std: t.std, status: t.status, cat1: meNo + '_c2', cat2: meNo + '_c22',
       imp: t.imp, urg: t.urg, stages: t.stages
     }, { demo: true });

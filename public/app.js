@@ -377,7 +377,10 @@ function acceptedList() {
 
 /* ============ 数据查询 ============ */
 /* 分类在新建/编辑时手填，存的是文字；早期数据里存的是分类 id，两种都认，
-   免得老任务在列表里显示成一串 id。 */
+   免得老任务在列表里显示成一串 id。
+   还有一种情况：任务被交接给别人之后，身上还挂着上一个人分类树里的 id。
+   别的账号的分类树我在本地看不见，也没必要为它多拉一份数据——认不出来的 id
+   就当没分类，别把 1012_c2 这种东西印在卡片上。 */
 const catLabel = v => {
   if (!v) return '';
   for (const c of S.cats) {
@@ -385,7 +388,8 @@ const catLabel = v => {
     const k = (c.children || []).find(x => x.id === v);
     if (k) return k.name;
   }
-  return String(v);
+  /* 形如 1004_c12 的内部 id：本机解析不出来就丢弃，人工填的分类名照原样显示 */
+  return /^\d+_c\d+$/.test(String(v)) ? '' : String(v);
 };
 const catName = (c1, c2) => {
   const a = catLabel(c1), b = catLabel(c2);
@@ -493,6 +497,38 @@ function siblingsOf(stages, si) {
 }
 const dayOf = (s, k) => (s && (s[k] || s.date)) || '';
 const topNo = (stages, p) => stages.filter(x => !x.pid).indexOf(p) + 1;
+/* 阶段树的展示顺序：每个一级阶段后面紧跟它自己的子任务，编号 1 / 1.1 / 2 / 2.1。
+   stages 数组里子任务排在所有一级阶段之后（新增就是 push 到末尾），
+   直接按数组顺序编号会把子任务排成 4、5、6，看着像 6 个并列阶段、日期还来回跳。
+   父 id 指向不存在的节点时按一级处理，宁可多显示也不要让它凭空消失。 */
+function stageRows(stages) {
+  const arr = stages || [];
+  const isTop = s => !s.pid || !arr.some(x => x.id === s.pid);
+  const rows = [];
+  let n = 0;
+  for (const s of arr) {
+    if (!isTop(s)) continue;
+    n++;
+    rows.push({ s, no: String(n), sub: false });
+    let k = 0;
+    for (const c of arr) {
+      if (c.pid !== s.id) continue;
+      if (isTop(c)) continue;      /* 自引用的脏数据不当子任务 */
+      k++;
+      rows.push({ s: c, no: `${n}.${k}`, sub: true });
+    }
+  }
+  return rows;
+}
+/* 卡片上那句「N 个阶段 · M 个子任务」：阶段数只数一级，子任务另说。
+   以前拿 stages.length 当阶段数，6 个节点报成「6 个阶段」。 */
+function stageMeta(t) {
+  const arr = (t && t.stages) || [];
+  if (!arr.length) return '';
+  const tops = arr.filter(s => !s.pid || !arr.some(x => x.id === s.pid)).length;
+  const kids = arr.length - tops;
+  return ` · ${tops} 个阶段${kids ? ` · ${kids} 个子任务` : ''}`;
+}
 const dateSpan = s => {
   const a = dayOf(s, 'start'), b = dayOf(s, 'end') || a;
   return a ? (a === b ? fmt(a) : `${fmt(a)}–${fmt(b)}`) : '';
@@ -945,7 +981,7 @@ function specialLineHTML(m, t) {
     <span class="rnm">${esc(t.title)}</span>
     ${fromOther ? `<span class="tag pub" title="发布人：这条活不是他自己起的">${esc(nameOf(pub0))} 发布</span>` : ''}
     <span class="rmeta">${fmt(t.start)} → ${fmt(t.end)}</span>
-    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 阶段` : '未拆阶段'}</span>
+    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 项` : '未拆阶段'}</span>
     <span class="curnode ${late ? 'warn' : ''}">${cur
       ? (late ? '卡在：' : '当前：') + esc(cur.name || '阶段') + ' · ' + fmt(cur.start || cur.date)
       : (t.status === 'done' ? '已全部完成' : '还没开始')}</span>
@@ -1007,7 +1043,7 @@ function followRowHTML(f) {
     <span class="tag">${f.kind === 'informed' ? '知情' : '专项'}</span>
     <span class="who">${esc(f.who)}</span>
     <span class="rnm">${esc(t.title)}</span>
-    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 阶段` : '未拆阶段'}</span>
+    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 项` : '未拆阶段'}</span>
     <div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div>
     <span class="mini">${p}%</span>
     ${stTag(t.status)}
@@ -1171,14 +1207,15 @@ function viewSpecial() {
             ${t.status !== 'done' && left < 0 ? '<span class="tag red">逾期 ' + Math.abs(left) + ' 天</span>' : t.status !== 'done' && left <= 3 ? '<span class="tag warn">剩 ' + left + ' 天</span>' : ''}
             <div class="spacer"></div><button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button>
           </div>
-          <div class="mini" style="margin-bottom:8px">${fmt(t.start)} → ${fmt(t.end)} · ${catName(t.cat1, t.cat2)}${t.stages && t.stages.length ? ' · ' + t.stages.length + ' 个阶段' : ''}</div>
+          <div class="mini" style="margin-bottom:8px">${fmt(t.start)} → ${fmt(t.end)} · ${catName(t.cat1, t.cat2)}${stageMeta(t)}</div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <div class="prog" style="flex:1"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div>
             <span class="mini">${p}%</span>
           </div>
-          ${t.stages && t.stages.length ? t.stages.map((s, i) => `<div class="stage ${s.done ? 'on' : ''}">
-            <div class="n">${s.done ? '✓' : i + 1}</div>
-            <div class="t ${s.done ? 'done' : ''}">${esc(s.name)}<small>${fmt(s.start)} → ${fmt(s.end)}</small></div>
+          ${t.stages && t.stages.length ? stageRows(t.stages).map(r => `<div class="stage ${r.sub ? 'sub' : ''} ${r.s.done ? 'on' : ''}">
+            <div class="n">${r.s.done ? '✓' : r.no}</div>
+            <div class="t ${r.s.done ? 'done' : ''}"><span class="sn" style="text-decoration:${r.s.done ? 'line-through' : 'none'}">${esc(r.s.name)}</span><small>${r.s.start || r.s.end ? dateSpan(r.s) : ''}</small></div>
+            ${r.sub && r.s.who ? `<span class="mini who-ro">${esc(nameOf(r.s.who))}</span>` : ''}
           </div>`).join('') : '<div class="mini">还没有阶段，进入详情可拆分阶段计划</div>'}
         </div>`;
       }).join('')}
@@ -1566,7 +1603,7 @@ function taskDetailHTML(t) {
     </div>
     <div class="td-kpis">
       <div><span>进度</span><b>${prog}%</b><div class="prog" style="margin-top:8px"><i style="width:${prog}%"></i></div></div>
-      <div><span>${isRoutine ? '当天节点' : '阶段'}</span><b>${leaves.length ? `${doneN} / ${leaves.length}` : '—'}</b></div>
+      <div><span>${isRoutine ? '当天节点' : '完成'}</span><b>${leaves.length ? `${doneN} / ${leaves.length}` : '—'}</b></div>
       <div><span>${t.ownerNo === S.me.no ? '距截止' : '总截止'}</span><b style="font-size:15px">${t.ownerNo === S.me.no ? leftText : fmt(t.dueDate || t.end)}</b></div>
       <div><span>承接人</span><b style="font-size:15px">${t.assigneeNo === S.me.no ? '我' : esc(nameOf(t.assigneeNo))}</b></div>
     </div>`;

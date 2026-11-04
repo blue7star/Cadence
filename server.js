@@ -292,6 +292,10 @@ function pruneOrphans(ownerNos) {
     const del = db.prepare('DELETE FROM task WHERE id=?');
     for (const i of insts) if (!rules.includes(i.routine_id)) del.run(i.id);
   }
+  /* 0.6.1 之前删任务不清知情人名单，老库里可能留着指向已删任务的孤儿行。
+     必须放在上面删完实例之后：本函数自己也会删任务，放开头就变成「扫掉上一轮的孤儿」，
+     这一次新产生的要等下一次 GET 才清。 */
+  db.prepare('DELETE FROM task_observer WHERE task_id NOT IN (SELECT id FROM task)').run();
 }
 
 /* ============ 身份与可见范围 ============ */
@@ -327,9 +331,11 @@ function stateFor(meNo) {
       || (r.source_id && delegatedSrc.has(r.source_id)));
 
   /* 别人让我知情的专项：我只看进度，不进任何执行链路。
-     这一条不扩大别的可见范围——知情人只在「下派任务」页的「我关注的任务」里出现。 */
+     这一条不扩大别的可见范围——知情人只在「下派任务」页的「我关注的任务」里出现。
+     只认 type='special'：契约把知情人的适用范围写死在专项上，不因为库里多了几行就自动放开。 */
   const obsMine = new Set(
-    db.prepare('SELECT task_id FROM task_observer WHERE emp_no=?').all(meNo).map(r => r.task_id)
+    db.prepare(`SELECT o.task_id FROM task_observer o JOIN task t ON t.id=o.task_id
+                WHERE o.emp_no=? AND t.type='special'`).all(meNo).map(r => r.task_id)
   );
   const obsRows = obsMine.size
     ? db.prepare(`SELECT * FROM task WHERE id IN (${[...obsMine].map(() => '?').join(',')})`).all(...obsMine)
@@ -342,7 +348,6 @@ function stateFor(meNo) {
   for (const r of db.prepare('SELECT task_id, emp_no FROM task_observer').all()) {
     (obsMap[r.task_id] = obsMap[r.task_id] || []).push(r.emp_no);
   }
-
   const tasks = allRows.map(r => ({
     id: r.id, type: r.type, title: r.title, ownerNo: r.owner_no, assigneeNo: r.assignee_no,
     assignee: r.assignee_no === meNo ? '我' : (names[r.assignee_no] || ''),
@@ -353,7 +358,9 @@ function stateFor(meNo) {
     routineId: r.routine_id || null, planDate: r.plan_date || null,
     sourceId: r.source_id || null, detached: !!r.detached,
     intakeStatus: r.intake_status || null, auto: !!r.routine_id,
-    observers: obsMap[r.id] || [],
+    /* 名单只给这条任务的经手人看：知情人能看到自己「被告知过」，看不到「还有谁被告知」——
+       那是别人的社交关系，不是项目进度。 */
+    observers: (r.owner_no === meNo || r.assignee_no === meNo) ? (obsMap[r.id] || []) : [],
     observer: obsMine.has(r.id)
   }));
 
@@ -426,7 +433,9 @@ function normalizeStages(raw, type) {
 
 function upsertTask(meNo, t, opts) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
-  if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) return { ok: false };
+  if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) {
+    return { ok: false, msg: '这条任务不归你管，你的改动没有生效' };
+  }
 
   /* 承接人：只有「下派任务」存在换人这回事，且只有下发人能换。
      专项、临时一律归本人——页面不给入口，这里兜底，避免脏数据绕过界面写进来。 */
@@ -465,7 +474,9 @@ function upsertTask(meNo, t, opts) {
         JSON.stringify(normalizeStages(t.stages, type)), t.detached ? 1 : 0,
         assigneeNo, intake, nowStr(), t.id);
   } else {
-    if (t.ownerNo !== meNo && t.assigneeNo !== meNo) return { ok: false };
+    if (t.ownerNo !== meNo && t.assigneeNo !== meNo) {
+    return { ok: false, msg: '不能替别人建任务——下派给人，或者把对方加成知情人' };
+  }
     const now = nowStr();
     insTaskStmt.run(
       t.id, t.ownerNo || meNo, assigneeNo, type, t.title, t.std || '',
@@ -478,8 +489,10 @@ function upsertTask(meNo, t, opts) {
   }
 
   /* 知情人：只有任务 owner 能定。整体替换——payload 里带了 observers 就以它为准，
-     不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。 */
-  if (Array.isArray(t.observers)) {
+     不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。
+     只认 type='special'：契约把知情人锁在专项上，读侧已经这么做了，
+     写侧不锁的话，接口可以给下派/临时任务写名单——落库后谁也看不见、也永不清，纯脏数据。 */
+  if (Array.isArray(t.observers) && type === 'special') {
     const ownerNo = exist ? exist.owner_no : (t.ownerNo || meNo);
     if (ownerNo === meNo) {
       db.prepare('DELETE FROM task_observer WHERE task_id=?').run(t.id);
@@ -530,7 +543,12 @@ function applySync(meNo, body) {
   const del = body.del || {};
   for (const id of del.tasks || []) {
     const r = db.prepare('SELECT owner_no FROM task WHERE id=?').get(id);
-    if (r && r.owner_no === meNo) n += db.prepare('DELETE FROM task WHERE id=?').run(id).changes;
+    if (r && r.owner_no === meNo) {
+      n += db.prepare('DELETE FROM task WHERE id=?').run(id).changes;
+      /* 任务没了，知情人名单跟着走——留在库里就成了孤儿，
+         下一个人打开「我关注的任务」会看到一条已经删掉的专项。 */
+      db.prepare('DELETE FROM task_observer WHERE task_id=?').run(id);
+    }
   }
   for (const id of del.rules || []) {
     const r = db.prepare('SELECT owner_no FROM rule WHERE id=?').get(id);

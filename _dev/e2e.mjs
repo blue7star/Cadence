@@ -1236,8 +1236,57 @@ async function main() {
       JSON.stringify(obsRo));
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`);
     await sleep(300);
+
+    /* 界面不给按钮只是一半，真正的边界在服务端。
+       少了这条，「知情人只读」就只证明了「没做按钮」——把 server.js 的归属校验删掉照样全绿。 */
+    const obsWrite = await js(`(async()=>{
+      const r=await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({me:'1101',tasks:[{id:${JSON.stringify(obsSaved.id)},type:'special',
+          title:'知情人改的标题',ownerNo:'1012',assigneeNo:'1012',
+          start:'2026-11-03',end:'2026-11-30',status:'done',stages:[]}]})});
+      const j=await r.json();
+      const st=await (await fetch('/api/state?me=1012')).json();
+      const t=st.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
+      return {rows:j.rows|0,errors:(j.errors||[]).length,title:t&&t.title,status:t&&t.status};})()`);
+    /* 只看「状态没变」不够：任何原因写不进去都会让状态不变。
+       必须同时看到 rows=0 且有 errors——那才证明是归属校验挡的，而不是别的地方碰巧失败。 */
+    check('知情人绕开界面直接提交：服务端明确拒收，标题和状态一个字没变',
+      obsWrite.rows === 0 && obsWrite.errors >= 1
+        && obsWrite.title === OBS_TASK && obsWrite.status !== 'done', JSON.stringify(obsWrite));
+
     await push('1012', { del: { tasks: [obsSaved.id] } });
   }
+
+  /* 登录即激活——「派活能不能送到」全靠这一行。
+     基线用直连 sqlite 把 activated 钉死，等于把这条实现替换成了测试自己的断言；
+     所以必须单独验一次：登录真的会写标记，且登录后派活不再被拦。 */
+  const loginAct = await js(`(async()=>{
+    const st=async()=>((await (await fetch('/api/state?me=1012')).json()).roster||[]).find(e=>e.no==='1102')||{};
+    const before=await st();
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({no:'1102',name:before.name})});
+    const lj=await r.json();
+    const after=await st();
+    /* 登录后立刻派一条过去：这才是「他真能收到活」的证明 */
+    const w=await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({me:'1012',tasks:[{id:'e2e_login_assign',type:'assign',title:'E2E登录后派活',
+        ownerNo:'1012',assigneeNo:'1102',start:'2026-11-04',end:'2026-11-05',status:'todo',stages:[]}]})});
+    const wj=await w.json();
+    await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({me:'1012',del:{tasks:['e2e_login_assign']}})});
+    return {ok:lj.ok,before:!!before.activated,after:!!after.activated,rows:wj.rows|0,errs:(wj.errors||[]).length};})()`);
+  check('登录成功后立即置 activated，同一个人马上就能被派活',
+    loginAct.ok === true && loginAct.before === false && loginAct.after === true
+      && loginAct.rows > 0 && loginAct.errs === 0, JSON.stringify(loginAct));
+
+  /* 跑完把 1102 还原成「没登录过」。不复位的话，真实库里会留一条测试造的登录记录——
+     下次打开下派下拉，看到的是「测试说他登录过」，不是业务事实。 */
+  execFileSync(process.execPath, ['--no-warnings', '-e', `
+    const {DatabaseSync}=require('node:sqlite');
+    const db=new DatabaseSync('data/workbench.db');
+    db.prepare("UPDATE emp SET activated=0,last_login=NULL WHERE no='1102'").run();
+    db.prepare("UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k='rev'").run();
+    db.close();`], { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: 'ignore' });
 
   await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
   await goto(BASE); await sleep(1200);

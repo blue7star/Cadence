@@ -2643,7 +2643,15 @@ document.addEventListener('change', e => {
   } else if (f === 'title') {
     t.title = e.target.value.trim() || t.title;
   } else if (f === 'assigneeNo') {
-    t.assigneeNo = e.target.value;
+    const no = e.target.value;
+    /* 新建、承接弹窗都拦了未登录的人，详情页换人这里漏了——
+       只能等服务端回 errors，而下拉会停在那个"收不到活"的人名上。三处口径要一致。 */
+    if (no !== S.me.no && !empActivated(no)) {
+      toast(`${nameOf(no)} 还没有登录过工作台，派过去收不到——先让他登录一次，或改派给别的同事`);
+      e.target.value = t.assigneeNo;
+      return;
+    }
+    t.assigneeNo = no;
     t.assignee = t.assigneeNo === S.me.no ? '我' : nameOf(t.assigneeNo);
     if (t.type === 'assign' && t.assigneeNo !== S.me.no && t.ownerNo === S.me.no) t.intakeStatus = 'pending';
   } else {

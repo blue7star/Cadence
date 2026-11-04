@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const REPORT = path.join(ROOT, '_dev', 'verify-report.json');
+const FAST_REPORT = path.join(ROOT, '_dev', 'verify-report-fast.json');
+const FAIL_REPORT = path.join(ROOT, '_dev', 'verify-report-last-fail.json');
 const BASE = process.env.CADENCE_BASE || 'http://localhost:8788';
 const MODE = process.argv[2] || '--fast';
 
@@ -73,15 +75,23 @@ function version() {
 /* 「复核由没参与实现的人做」写在模板里，三年也不会有一次发生。
    要让它真发生，只能让它在提交时变红。
 
-   第一版只检查「状态写了 PASS 吗」，结果它有四条无障碍通道（都是复核时被指出的）：
-   ① 永远不写 PASS → 直接放行；② 四行全填「无」→ 放行；
-   ③ 正文里先放一行「示例：**状态**：PLANNED」→ 真正的 PASS 躲过检查；④ `_` 开头或子目录 → 整体跳过。
-   现在的口径：
-   - 状态行全文件唯一、值必须在枚举里；
-   - 交付段写了东西 = 这件事做完了 → 必须 PASS 且有复核记录；
-     停在未复核状态可以，但必须在 issues.md 未解决表里挂一个编号（欠债登记，不是豁免）；
-   - 复核对象必须是 16 位树摘要，且等于当前 --full 报告里的摘要 → 复核记录绑在具体的树上；
-   - 没有 --full 证据时不许写 PASS（NOT_RUN 不等于 PASS）。
+   前几版的漏洞，都是复核时被抓出来的，记在这里免得再走一遍：
+   ① 只判「有没有写 PASS」→ 永远不写 PASS 就成了合规通道；
+   ② 正文里先放一行「示例：**状态**：PLANNED」→ 真正的 PASS 躲过检查；
+   ③ `_` 开头或子目录 → 整体跳过；④ 一份契约都没有 → 判绿（把门拆了就算通过）；
+   ⑤ 第 2 段按加粗标签判 → 标签少两个星号，检查完全失效；
+   ⑥ 段落用 `##\s*3[\.\s]` 定位 → 标题写成 `## 3 复核`（少一个点）整段跳过；
+   ⑦ 第 2 段判成「未交付」就免复核 → 把交付内容删空，反而最省事。
+
+   现在的口径是「状态与交付必须自洽」：
+   - 状态行全文件唯一、值在枚举里；
+   - 段落按标题**文字**定位（含「交付」「复核」），各恰好一段——逗号、空格、少个点都不影响；
+   - 交付段与模板重合的部分不算交付（照抄占位符等于没写），剩下的字数说了算；
+   - 交付段空着，状态却是 READY_FOR_REVIEW / PASS → 红（说可以复核了，可什么都没交）；
+   - 交付段有内容，状态却是 PLANNED / IN_PROGRESS → 红（做完了不往前走）；
+   - 交付有内容、停在 READY_FOR_REVIEW → 必须在 issues.md「未解决」表里挂编号（欠债登记，不是豁免）；
+   - PASS 另外要：一次 --full 的绿证据 + 复核记录绑在**同一棵树**上 + 结论就是「通过」（「有条件通过」不算）；
+   - 一个编号只能挂一份契约，PASS 之后也一样——否则它就从欠债凭证变成通用豁免券。
    机器只能证明「有人写下过一条指向这版代码的复核记录」，证明不了复核真的发生了——那部分仍归人。 */
 function contracts() {
   const dir = path.join(ROOT, 'docs', 'contracts');
@@ -93,60 +103,181 @@ function contracts() {
   (function walk(d) {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (e.isDirectory()) walk(path.join(d, e.name));
-      else if (e.name.endsWith('.md') && e.name !== '_template.md') files.push(path.join(d, e.name));
+      else if (e.name.toLowerCase().endsWith('.md') && e.name !== '_template.md') files.push(path.join(d, e.name));
     }
   })(dir);
+
+  /* 一份契约都没有 = G2 的入口被删掉了。这时候判绿，等于「把门拆了就算通过」。 */
+  if (!files.length) return check('契约状态', false, 'docs/contracts 下一份契约都没有（模板不算）');
 
   const V = ['PLANNED', 'IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'];
   const unresolved = fs.existsSync(path.join(ROOT, 'issues.md'))
     ? fs.readFileSync(path.join(ROOT, 'issues.md'), 'utf8').split('## 已解决')[0] : '';
   const bad = [];
+  const debts = {}; /* 欠债编号 → 挂了它的契约名，用来发现「一张豁免券被几份契约共用」 */
+  const nos = (t) => [...t.matchAll(/[#＃](\d+)/g)].map((x) => x[1]);
+
+  /* 段落锚定：**认编号，不认标题里的字**。
+     上一版用 `includes('交付')` 找段落，于是「## 1. 任务（交付前必读）」这种标题
+     把第 1 段当成了交付段，真正的交付段随便改成「## 2. 记录」、内容删空，门禁照样绿——
+     这是复核找出来的第七种绕法。现在先按 `## 2` / `## 3` 的编号认；
+     只有整份文件根本没编号时才退回按关键字认（老契约可能写成 `## 交付`）。 */
+  const headsOf = (text) => [...text.matchAll(/^##[ \t]+([^\n]*)$/gm)].map((m) => {
+    const n = /^(\d+)(?![0-9])/.exec(m[1]);
+    return { text: m[1], num: n ? Number(n[1]) : null, start: m.index, bodyStart: m.index + m[0].length };
+  });
+  const findSeg = (heads, num, kw) => {
+    const byNum = heads.filter((h) => h.num === num);
+    return byNum.length ? byNum : heads.filter((h) => h.text.includes(kw));
+  };
+
+  /* 交付段「写了没有」怎么量：和模板重合的部分不算。
+     照抄模板占位符的契约，看起来有几百字，其实一个字都没写。
+     做法是拿模板第 2 段做参照，算「这棵树里找不到的字符数」——
+     比硬编码一份字段名列表可靠：模板改字段，这把尺子自动跟着变。 */
+  const tplFile = path.join(dir, '_template.md');
+  const tplSeg2 = (() => {
+    if (!fs.existsSync(tplFile)) return '';
+    const t = fs.readFileSync(tplFile, 'utf8');
+    const th = headsOf(t);
+    const a = findSeg(th, 2, '交付')[0];
+    const b = findSeg(th, 3, '复核')[0];
+    return a && b && a.start < b.start ? t.slice(a.bodyStart, b.start) : '';
+  })();
+  /* 归一化：只留中日韩文字和字母数字。标点、下划线占位符、行首符号全部丢掉。 */
+  const norm = (t) => t.replace(/<!--[\s\S]*?-->/g, '').replace(/待填/g, '')
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '');
+  const tplNorm = norm(tplSeg2);
+  const W = 6;
+  const freshChars = (seg) => {
+    const n = norm(seg);
+    if (!tplNorm) return n.length;
+    const covered = new Uint8Array(n.length);
+    for (let i = 0; i + W <= n.length; i++) {
+      if (tplNorm.includes(n.slice(i, i + W))) for (let k = 0; k < W; k++) covered[i + k] = 1;
+    }
+    let c = 0;
+    for (let i = 0; i < n.length; i++) if (!covered[i]) c++;
+    return c;
+  };
 
   for (const p of files) {
     const name = path.relative(dir, p).split(path.sep).join('/');
     const s = fs.readFileSync(p, 'utf8');
+    const own = new Set(); /* 这份契约名下挂的编号 */
 
-    const sts = [...s.matchAll(/\*\*状态\*\*[：:]\s*`?([A-Z_]+)`?/g)].map((m) => m[1]);
-    if (sts.length !== 1) { bad.push(`${name}：状态行出现 ${sts.length} 次（必须恰好 1 次）`); continue; }
-    const st = sts[0];
+    const stM = [...s.matchAll(/\*\*状态\*\*[：:]\s*`?([A-Z_]+)`?/g)];
+    if (stM.length !== 1) { bad.push(`${name}：状态行出现 ${stM.length} 次（必须恰好 1 次）`); continue; }
+    const st = stM[0][1];
     if (!V.includes(st)) { bad.push(`${name}：状态「${st}」不在 ${V.join('/')} 里`); continue; }
+    /* 状态行后面常跟一行说明（「—— 待补，见 issues.md #17」），欠债编号要看这一小段 */
+    const stBlock = s.slice(stM[0].index, stM[0].index + 300);
 
-    /* 交付段（第 2 段「实际改了」）有没有内容 */
-    const d = /##\s*2\.\s*交付[\s\S]*?-\s*\*\*实际改了\*\*[：:]\s*([\s\S]*?)(?=\n-\s*\*\*|##\s*3\.)/.exec(s);
-    const delivered = d ? d[1].trim() : '';
-    const hasDelivered = !!delivered && !/^(待填|)$/.test(delivered);
-
-    if (hasDelivered && st !== 'PASS') {
-      const debt = /\*\*状态\*\*[：:][^\n]*issues\.md[^\n]*?[#＃](\d+)/.exec(s);
-      if (!debt || !new RegExp(`\\|\\s*${debt[1]}\\s*\\|`).test(unresolved)) {
-        bad.push(`${name}：已交付但状态是 ${st}，且没在 issues.md「未解决」里挂编号`);
-      }
+    const hs = headsOf(s);
+    const h2 = findSeg(hs, 2, '交付');
+    const h3 = findSeg(hs, 3, '复核');
+    if (h3.length !== 1) {
+      bad.push(`${name}：第 3 段（复核）标题有 ${h3.length} 个（必须恰好 1 个）——删掉它等于跳过复核`);
       continue;
     }
-    if (st !== 'PASS') continue;
+    if (h2.length !== 1) {
+      bad.push(`${name}：第 2 段（交付）标题有 ${h2.length} 个（必须恰好 1 个）——没法知道交付写在哪`);
+      continue;
+    }
+    if (h2[0].start > h3[0].start) { bad.push(`${name}：第 2 段排在第 3 段后面`); continue; }
 
-    if (!live) { bad.push(`${name}：标了 PASS，但没有任何一次 --full 的绿证据`); continue; }
+    const seg2 = s.slice(h2[0].bodyStart, h3[0].start);
+    const seg3 = s.slice(h3[0].bodyStart);
+    /* 阈值 60：太短等于给「实际改了：见代码」这种半句话开口子。 */
+    const hasDelivered = freshChars(seg2) >= 60;
 
-    const seg = s.split(/##\s*3\.\s*复核/)[1] || '';
-    const val = (k) => {
-      const m = seg.match(new RegExp(`-\\s*[^\\n]*${k}[^：:]*[：:]\\s*([^\\n]*)`));
+    const val = (seg, k) => {
+      const m = seg.match(new RegExp(`-\\s*[^\\n]*${k}[^：:\\n]*[：:]\\s*([^\\n]*)`));
       return m ? m[1].trim() : '';
     };
-    const way = val('复核方式');
-    const obj = val('复核对象');
-    const verdict = val('结论');
-    const found = val('发现的问题');
+    const verdict = val(seg3, '结论');
+
+    if (st !== 'PASS') {
+      /* 复核写完了却不转状态，两处会打架：人看到「通过」，机器看到「没做完」。 */
+      if (/^通过/.test(verdict)) {
+        bad.push(`${name}：第 3 段写了「通过」，状态却是 ${st}——复核完就该转 PASS`);
+        continue;
+      }
+      if (!hasDelivered) {
+        /* 状态说「可以复核了」，交付段却只有模板占位符。这一段是空的，就没什么可复核的。 */
+        if (st !== 'PLANNED' && st !== 'IN_PROGRESS') {
+          bad.push(`${name}：状态 ${st}，第 2 段（交付）却是空的——没写交付，就不算交出去了`);
+        }
+        for (const n of nos(stBlock)) own.add(n);
+      } else if (st === 'PLANNED' || st === 'IN_PROGRESS') {
+        bad.push(`${name}：状态还是 ${st}，第 2 段却写了交付——交付了就该进 READY_FOR_REVIEW`);
+        continue;
+      } else {
+        const debt = /issues\.md[\s\S]{0,200}?[#＃](\d+)/.exec(stBlock);
+        if (!debt) {
+          bad.push(`${name}：已交付但状态是 ${st}，却没说清欠在哪——状态行要写「见 issues.md #编号」`);
+        } else if (!new RegExp(`\\|\\s*${debt[1]}\\s*\\|`).test(unresolved)) {
+          bad.push(`${name}：挂的 issues.md #${debt[1]} 不在「未解决」表里——那就不叫欠债`);
+        }
+        /* 第 2 段「遗留问题」点到的编号，也算挂在它名下 */
+        const legacy = seg2.split('\n').filter((l) => l.includes('遗留')).join('\n');
+        for (const n of [...nos(stBlock), ...nos(legacy)]) own.add(n);
+      }
+      for (const n of own) (debts[n] = debts[n] || []).push(name);
+      continue;
+    }
+
+    /* ── PASS：交付、证据、复核记录三样都要，而且要对得上 ── */
+    if (!live) { bad.push(`${name}：标了 PASS，但没有任何一次 --full 的绿证据`); continue; }
+    const way = val(seg3, '复核方式');
+    const obj = val(seg3, '复核对象');
+    const found = val(seg3, '发现的问题');
     const holes = [];
-    if (!/^(新开的对话|独立的子代理|他人)/.test(way)) holes.push('复核方式（要写明是谁、哪种方式）');
+    if (!hasDelivered) holes.push('第 2 段（交付）是空的——PASS 的契约必须有交付记录');
+    /* 模板写的是「新开一轮对话」，门禁原先只认「新开的对话」——按模板填的 PASS 会被误拦。
+       这类「模板与门禁对不上」的错，机器只会报成「复核方式不合格」，人看了只会去改文档。 */
+    if (!/^(新开(的对话|一轮对话)|独立的子代理|他人)/.test(way)) holes.push('复核方式（要写明是谁、哪种方式）');
     if (!/树摘要\s*`?[0-9a-f]{16}`?/.test(obj)) holes.push('复核对象（必须写 16 位树摘要）');
     else if (!obj.includes(live)) holes.push(`复核对象不是当前这棵树（报告是 ${live}）`);
-    if (!/^(通过|有条件通过|打回)/.test(verdict)) holes.push('结论（通过／有条件通过／打回）');
-    if (!/(^无$|#\d+)/.test(found)) holes.push('发现的问题（写编号，或「无」）');
+    /* PASS 的结论只能是「通过」。「有条件通过」的意思是条件还没做完，那就是没通过。 */
+    if (!/^通过/.test(verdict) || /有条件/.test(verdict)) {
+      holes.push('结论（PASS 只能是「通过」；「有条件通过」说明条件还没做完）');
+    }
+    if (!/(^无$|#[0-9]+)/.test(found)) holes.push('发现的问题（写编号，或「无」）');
     if (holes.length) bad.push(`${name}：状态 PASS 但 ${holes.join('、')}`);
+    /* PASS 也要登记编号：转成 PASS 之后编号就被「释放」的话，下一份契约能接着用它当豁免券 */
+    for (const n of [...nos(found), ...nos(stBlock)]) own.add(n);
+    for (const n of own) (debts[n] = debts[n] || []).push(name);
+  }
+
+  /* 一个编号只能挂一份契约。三份契约共用 #19 的时候，它就不是欠债登记，是通用豁免券——
+     谁会去修一条「同时欠三份契约」的债？ */
+  for (const [no, names] of Object.entries(debts)) {
+    if (names.length > 1) bad.push(`issues.md #${no} 被 ${names.length} 份契约共用（${names.join('、')}）——欠债要一条对一份`);
   }
 
   return check(`契约状态 ${files.length} 份（交付即须复核，复核绑树摘要）`, bad.length === 0,
     bad.length ? bad.join('；') : '');
+}
+
+/* ── 3.5 门禁的反面用例 ──────────────────────────────────── */
+/* 上面那段 `contracts()` 改到第四版，每一版都是「复核指出一种绕法 → 补一条判断」。
+   补完从来没人证明它真拦得住，下一次改别的规则又可能把门开回去。
+   `_dev/gate-selftest.mjs` 把历次被指出的绕法固化成用例（改一份契约 → 跑 --fast → 期望非 0 → 还原）。
+   门禁自己也需要一份「坏的例子」，否则它只是在宣称自己有效。 */
+function gateSelftest() {
+  if (process.env.CADENCE_NO_SELFTEST) return true; /* 反面用例自己会调 --fast，别递归 */
+  const file = path.join(ROOT, '_dev', 'gate-selftest.mjs');
+  if (!fs.existsSync(file)) return check('门禁反面用例', false, '找不到 _dev/gate-selftest.mjs——没人证明它拦得住绕法');
+  const r = spawnSync(process.execPath, [file], {
+    encoding: 'utf8', maxBuffer: 1 << 24,
+    env: { ...process.env, CADENCE_NO_SELFTEST: '1', CADENCE_NO_REPORT: '1' }
+  });
+  const out = ((r.stdout || '') + (r.stderr || '')).trim();
+  const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
+  return check('门禁反面用例（已知绕法全部被拦）', r.status === 0,
+    r.status === 0 ? out.split('\n').filter((l) => l.startsWith('[通过]'))[0] || ''
+      : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
 }
 
 /* ── 4. 这棵树的摘要 ─────────────────────────────────────── */
@@ -159,6 +290,11 @@ function contracts() {
       而 AGENTS.md 第 2 节本来就允许 G0 只跑 --fast。
    文档单独算一个 docsDigest，只作记录，不参与放行判断。 */
 const DOC_ONLY = /^(docs\/|\.agents\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
+/* 「证据与规矩」类文件：不改变运行行为，但改变了「能不能信这棵树」。
+   它们也排除在代码摘要之外，所以单独算一个 evidenceDigest，让 --hook 也能看见——
+   否则改完契约第 3 段、改完 AGENTS.md 的 G 分级，门禁一律认为「这棵树没变过」。 */
+const EVIDENCE = [/^docs\/contracts\//, /^issues\.md$/, /^AGENTS\.md$/, /^docs\/review-checklist\.md$/,
+  /^\.agents\//, /^docs\/modules\.md$/, /^docs\/adoption-log\.md$/];
 
 function treeDigest() {
   const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
@@ -166,8 +302,10 @@ function treeDigest() {
   const files = out.split('\0').filter(Boolean).sort();
   const h = crypto.createHash('sha256');
   const dh = crypto.createHash('sha256');
+  const eh = crypto.createHash('sha256');
   const each = {};
   let codeFiles = 0;
+  let evidenceFiles = 0;
   for (const f of files) {
     let buf;
     try { buf = fs.readFileSync(path.join(ROOT, f)); } catch { continue; } /* 已删除、待提交 */
@@ -175,11 +313,16 @@ function treeDigest() {
     const isDoc = DOC_ONLY.test(f);
     const hh = isDoc ? dh : h;
     if (!isDoc) codeFiles++;
+    if (EVIDENCE.some((re) => re.test(f))) {
+      evidenceFiles++;
+      eh.update(f); eh.update('\0'); eh.update(String(buf.length)); eh.update('\0'); eh.update(buf);
+    }
     hh.update(f); hh.update('\0'); hh.update(String(buf.length)); hh.update('\0'); hh.update(buf);
   }
   return {
     digest: h.digest('hex').slice(0, 16), docsDigest: dh.digest('hex').slice(0, 16),
-    files: Object.keys(each).length, codeFiles, each
+    evidenceDigest: eh.digest('hex').slice(0, 16),
+    files: Object.keys(each).length, codeFiles, evidenceFiles, each
   };
 }
 
@@ -228,7 +371,7 @@ function e2e() {
 /* ── 5. 入口 ─────────────────────────────────────────────── */
 async function main() {
   console.log(`\n[校验] ${MODE}  ${path.basename(ROOT)}\n`);
-  let ok = syntax() && version() && contracts();
+  let ok = syntax() && version() && contracts() && gateSelftest();
 
   if (MODE === '--full') {
     const up = await served();
@@ -241,30 +384,50 @@ async function main() {
   if (MODE === '--hook') {
     /* 静态问题先报，报完再看有没有完整的验证记录 */
     const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
-    const bound = !!rep && rep.digest === tree.digest && rep.full === true && rep.ok === true;
+    const fast = fs.existsSync(FAST_REPORT) ? JSON.parse(fs.readFileSync(FAST_REPORT, 'utf8')) : null;
+    const codeSame = !!rep && rep.digest === tree.digest;
+    const evSame = !!rep && rep.evidenceDigest === tree.evidenceDigest;
+    /* 契约/台账/规矩改了但代码没动：跑一次 0.5 秒的 --fast 就够，不用陪跑 90 秒 e2e */
+    const fastCovers = !!fast && fast.ok === true && fast.digest === tree.digest
+      && fast.evidenceDigest === tree.evidenceDigest;
+    const bound = !!rep && rep.full === true && rep.ok === true && codeSame && (evSame || fastCovers);
     let why = '';
-    if (bound) why = `${rep.digest} · ${rep.at.slice(11, 19)} 验过`;
+    if (bound) why = `${rep.digest} · ${rep.at.slice(11, 19)} 验过` + (evSame ? '' : '（文档改动由 --fast 覆盖）');
     else if (!rep) why = '从来没有验证记录 → 先跑 node _dev/verify.mjs --full';
-    else if (rep.digest !== tree.digest) {
+    else if (!rep.full) why = '这棵树只跑过 --fast，缺 e2e → 重跑 --full';
+    else if (!rep.ok) why = '上次完整校验没通过 → 修完重跑 --full';
+    else if (!codeSame) {
       const d = diffPaths(rep.each, tree.each);
       why = `验过之后又改了 ${d.length} 个文件（${d.slice(0, 5).join(', ')}${d.length > 5 ? ' …' : ''}）→ 重跑 --full`;
-    } else if (!rep.full) why = '这棵树只跑过 --fast，缺 e2e → 重跑 --full';
-    else if (!rep.ok) why = '上次完整校验没通过 → 修完重跑 --full';
+    } else if (!evSame) why = '契约 / 台账 / 规矩改过了 → 跑 node _dev/verify.mjs --fast';
     else why = `${rep.digest} 的记录不完整 → 重跑 --full`;
     check('这棵树跑过完整校验', bound, why);
     ok = ok && bound;
   }
 
-  /* 只有 --full 落证据。--fast 不写报告：
-     它是「改一行先看一眼」的秒级自检，一旦也写报告，就会把上一次 --full 的绿记录覆盖成
-     full=false，pre-commit 立刻拦下——而且真正的证据也丢了。证据只许被 --full 更新。 */
-  if (MODE === '--full') {
+  /* 证据只许被 --full 更新。--fast 写到另一个文件：
+     它是「改一行先看一眼」的秒级自检，写进正式证据就会把上次的绿记录覆盖成 full=false。
+     失败的 --full 也不写正式证据——一次 e2e 抖动不该把唯一的绿记录弄丢；
+     靠 digest 对不上来拦「失败后又改代码」，而不是靠销毁证据。
+     `CADENCE_NO_REPORT`：门禁反面用例会拿改过的契约反复跑 --fast，那是探针，不是证据，
+     让它写报告等于用假状态覆盖真记录。 */
+  if (process.env.CADENCE_NO_REPORT) { /* 探针模式：只判绿红，不写任何证据 */ } else if (MODE === '--full') {
     const report = {
       at: new Date().toISOString(), mode: MODE, head: headRev(),
-      digest: tree.digest, docsDigest: tree.docsDigest, files: tree.files, codeFiles: tree.codeFiles,
+      digest: tree.digest, docsDigest: tree.docsDigest, evidenceDigest: tree.evidenceDigest,
+      files: tree.files, codeFiles: tree.codeFiles, evidenceFiles: tree.evidenceFiles,
       each: tree.each, full: true, ok, checks
     };
-    fs.writeFileSync(REPORT, JSON.stringify(report, null, 1), 'utf8');
+    if (ok) fs.writeFileSync(REPORT, JSON.stringify(report, null, 1), 'utf8');
+    else {
+      fs.writeFileSync(FAIL_REPORT, JSON.stringify(report, null, 1), 'utf8');
+      if (fs.existsSync(REPORT)) console.log('（这次没通过，正式的绿证据保留不动，见 verify-report-last-fail.json）');
+    }
+  } else if (MODE === '--fast') {
+    fs.writeFileSync(FAST_REPORT, JSON.stringify({
+      at: new Date().toISOString(), mode: MODE, ok,
+      digest: tree.digest, evidenceDigest: tree.evidenceDigest
+    }, null, 1), 'utf8');
   }
 
   const failed = checks.filter((c) => !c.ok);
@@ -273,7 +436,7 @@ async function main() {
     console.log(`[通过] ${checks.length} 项全绿 · 树 ${tree.digest}`
       + `（${tree.codeFiles} 个代码文件 / ${tree.files - tree.codeFiles} 个文档）`);
     if (MODE === '--full') console.log('可以提交：git add -A && git commit -m "…"');
-    else console.log('--fast 只做静态检查，不留证据；提交前要跑 --full');
+    else if (MODE === '--fast') console.log('--fast 不跑 e2e：只适用于「代码没动、只改了文档/契约」的提交');
     process.exit(0);
   }
   console.log(`[不通过] ${failed.length}/${checks.length} 项有问题，提交会被拦下：`);

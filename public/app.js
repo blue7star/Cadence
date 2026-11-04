@@ -40,7 +40,7 @@ const isWorkday = s => isMakeup(s) ? true : (isHoliday(s) ? false : (dow(s) !== 
 
 /* ============ 常量 ============ */
 const TYPES = {
-  assign: { name: '下派任务', cls: 'assign' },
+  assign: { name: '发布任务', cls: 'assign' },
   routine: { name: '常规任务', cls: 'routine' },
   special: { name: '专项任务', cls: 'special' },
   temp: { name: '临时任务', cls: 'temp' }
@@ -53,7 +53,7 @@ const ST = {
 };
 const LV = { 3: '高', 2: '中', 1: '低' };
 const TITLES = {
-  today: '今日待办', assign: '下派任务', routine: '常规工作', special: '专项工作',
+  today: '今日待办', assign: '发布任务', routine: '常规工作', special: '专项工作',
   intake: '任务承接台', calendar: '日历待办', settings: '设置', task: '任务详情'
 };
 
@@ -61,6 +61,7 @@ const TITLES = {
 let S = null;                  /* 视图数据（内存缓存，真相在服务端） */
 let REV = 0;
 let SNAP = null;               /* 上次同步成功时的自有数据快照，用于算增量 */
+let obsSign = {};              /* 每行知情人名单的指纹：只在这份副本动过名单时才提交该字段 */
 let syncing = false;
 let pendingRefresh = false;
 let pollTimer = null;
@@ -114,23 +115,29 @@ function adopt(st) {
     rules: st.rules || [],
     tasks: st.tasks || [],
     watch: st.watch || [],
+    notices: st.notices || [],
     routineMeta: meta,
     members: [],
     intake: []
   };
   S.members = buildMembers();
   S.intake = buildIntake();
+  S.stageIntake = buildStageIntake();
+  S.noticeGroups = buildNoticeGroups();
   REV = st.rev || 0;
   SNAP = signatures();
 }
 
-/* 自有数据签名：用于「改了才发」 */
+/* 自有数据签名：用于「改了才发」。
+   只算 owner 是我的行——发布人接出去之后是只读，承接台里的动作走专用接口，
+   把别人的行塞进 /api/sync 只会换来一句"这条任务已经交出去了"。 */
 function ownRows() {
   const me = S.me.no;
   const tasks = S.tasks
-    .filter(t => t.ownerNo === me || t.assigneeNo === me)
+    .filter(t => t.ownerNo === me)
     .map(t => ({
       id: t.id, type: t.type, title: t.title, ownerNo: t.ownerNo, assigneeNo: t.assigneeNo,
+      dueDate: t.dueDate || t.end,
       start: t.start, end: t.end, time: t.time || '', std: t.std || '', status: t.status,
       cat1: t.cat1 || null, cat2: t.cat2 || null,
       imp: t.imp == null ? null : t.imp, urg: t.urg == null ? null : t.urg,
@@ -155,10 +162,15 @@ function ownRows() {
 function signatures() {
   const own = ownRows();
   const out = {};
+  const obs = {};
   for (const k of Object.keys(own)) {
     out[k] = {};
-    own[k].forEach(r => { out[k][r.id] = JSON.stringify(r); });
+    own[k].forEach(r => {
+      out[k][r.id] = JSON.stringify(r);
+      if (k === 'tasks') obs[r.id] = JSON.stringify((r.observers || []).slice().sort());
+    });
   }
+  obsSign = obs;
   return out;
 }
 
@@ -183,13 +195,24 @@ async function persist() {
     for (const k of Object.keys(own)) {
       const cur = {};
       own[k].forEach(r => { cur[r.id] = JSON.stringify(r); });
-      for (const id of Object.keys(cur)) if (SNAP[k][id] !== cur[id]) body[k].push(own[k].find(r => r.id === id));
+      for (const id of Object.keys(cur)) {
+        if (SNAP[k][id] === cur[id]) continue;
+        const payload = Object.assign({}, own[k].find(r => r.id === id));
+        /* 知情人名单只在「这份副本自己动过名单」时才提交。
+           服务端是整体替换，所以打开得更早的那个标签页一保存，就会把别人刚加的人冲掉——
+           而它其实只改了标题。没动名单就别带这个字段，服务端按「没提交 ≠ 清空」处理。 */
+        if (k === 'tasks') {
+          const now = JSON.stringify((payload.observers || []).slice().sort());
+          if (obsSign[id] === now) delete payload.observers;
+        }
+        body[k].push(payload);
+      }
       for (const id of Object.keys(SNAP[k])) if (!(id in cur)) body.del[k].push(id);
     }
     const changed = body.tasks.length + body.rules.length + body.cats.length + body.watch.length +
       body.del.tasks.length + body.del.rules.length + body.del.cats.length + body.del.watch.length;
     if (changed) {
-      /* 服务端可能拒收某一条（比如下派给一个从没登录过工作台的人）。
+      /* 服务端可能拒收某一条（比如发布给一个从没登录过工作台的人）。
          拒了就把原因原话端出来——默默失败会让人以为派出去了。 */
       const r = await api('/api/sync', { method: 'POST', body: JSON.stringify(body) });
       if (r && r.errors && r.errors.length) toast(r.errors[0]);
@@ -294,7 +317,9 @@ function buildMembers() {
       const c = r.nodes.find(n => !n.done);
       return c && c.date < TODAY;
     }).length;
-    const lateTask = S.tasks.filter(t => t.type === 'assign' && t.assigneeNo === sub.no && t.status !== 'done' && t.end < TODAY).length;
+    /* 逾期的不只是「派给我但还没接」的：承接过来的专项才算他真在推的活 */
+    const lateTask = S.tasks.filter(t => t.ownerNo === sub.no && t.type !== 'routine'
+      && t.status !== 'done' && t.end < TODAY).length;
     const alerts = [];
     if (lateRoutine) alerts.push(`常规逾期 ${lateRoutine} 项`);
     if (lateTask) alerts.push(`任务逾期 ${lateTask} 项`);
@@ -307,19 +332,47 @@ function buildMembers() {
   });
 }
 
-/* 承接台：上级派给我、还没被我承接的 assign 任务。
-   已经在推进（不再是待开展）的视为已接手，不再列出来让人重复点确定。 */
+/* 承接台三块，装的是三件不同的事，别混：
+   ① 等你立项：整件事派给你、还没接 —— 接收 = 所有权转移，一条任务不会变成两条；
+   ② 分给你的子任务：承接人理完计划、点了「派发」之后才出现 —— 派发前指定等于没说；
+   ③ 有变动：派发之后改期/换人/删除，靠 stage_notice 兜住，没有推送也得让人看见。 */
 function buildIntake() {
   return S.tasks
     .filter(t => t.type === 'assign' && t.assigneeNo === S.me.no
-      && t.intakeStatus === 'pending' && t.status === 'todo')
+      && t.intakeStatus === 'pending' && t.ownerNo !== S.me.no)
     .map(t => ({
-      id: t.id, task: t, title: t.title, from: nameOf(t.ownerNo),
-      due: t.end, std: t.std, note: '', status: 'pending'
+      id: t.id, task: t, title: t.title, from: nameOf(t.publisherNo || t.ownerNo),
+      due: t.dueDate || t.end, std: t.std
     }));
 }
+/* 按父任务聚合：一次派 5 段给同一个人，5 张卡是噪音 */
+function buildStageIntake() {
+  const g = {};
+  for (const t of S.tasks) {
+    for (const s of (t.stages || [])) {
+      if (!s.pid || s.who !== S.me.no || !s.whoAt || s.joinedAt) continue;
+      if (!g[t.id]) g[t.id] = { id: t.id, task: t, from: nameOf(t.ownerNo), stages: [] };
+      g[t.id].stages.push(s);
+    }
+  }
+  return Object.values(g).map(x => Object.assign(x, {
+    earliest: x.stages.map(s => s.start || s.date).filter(Boolean).sort()[0] || x.task.start
+  })).sort((a, b) => (a.earliest < b.earliest ? -1 : 1));
+}
+function buildNoticeGroups() {
+  const g = {};
+  for (const n of (S.notices || [])) {
+    if (!g[n.taskId]) g[n.taskId] = { taskId: n.taskId, items: [] };
+    g[n.taskId].items.push(n);
+  }
+  return Object.values(g).map(x => Object.assign(x, {
+    title: (S.tasks.find(t => t.id === x.taskId) || {}).title || '一条任务'
+  }));
+}
+/* 已经移交到我名下的（含 0.5/0.6 时代的派生副本） */
 function acceptedList() {
-  return S.tasks.filter(t => t.sourceId && t.ownerNo === S.me.no);
+  return S.tasks.filter(t => t.ownerNo === S.me.no &&
+    ((t.publisherNo && t.publisherNo !== S.me.no) || t.sourceId));
 }
 
 /* ============ 数据查询 ============ */
@@ -353,7 +406,7 @@ const isMineTask = t => {
 };
 
 /* 日历上出现的应该是一件大事的「哪一段」，不是父任务的名字。
-   有阶段的任务（专项 / 下派 / 带节点的常规）按阶段展开：常规节点是单日，
+   有阶段的任务（专项 / 发布 / 带节点的常规）按阶段展开：常规节点是单日，
    专项阶段是区间，落在这一段里就显示这一段的名字。
    非工作日（周末 / 法定假日）不铺区间型条目：阶段跨周末只说明计划是连着的，
    不等于周末要干活；明确落在这一天的单日节点照常显示。 */
@@ -559,10 +612,13 @@ function viewToday() {
         ${statCard('paused', '暂缓', cnt.paused)}
       </div>
       <div class="card" style="margin-top:14px">
-        <div class="card-h"><h2>待接收上级任务</h2><div class="spacer"></div>
-          <span class="pill warn">${pending.length} 项</span></div>
-        ${pending.length ? pending.map(i => `<div class="kv"><span>${esc(i.title)}</span><b>${fmt(i.due)} 前</b></div>`).join('')
-      : '<div class="empty">暂无待接收任务</div>'}
+        <div class="card-h"><h2>等你处理</h2><div class="spacer"></div>
+          <span class="pill warn">${pending.length + (S.stageIntake || []).length} 项</span></div>
+        ${pending.length || (S.stageIntake || []).length || (S.noticeGroups || []).length ? `
+          ${pending.length ? `<div class="kv"><span>等你立项的整件事</span><b>${pending.length} 项</b></div>` : ''}
+          ${(S.stageIntake || []).length ? `<div class="kv"><span>分给你的子任务</span><b>${S.stageIntake.length} 条任务</b></div>` : ''}
+          ${(S.noticeGroups || []).length ? `<div class="kv"><span>有变动</span><b>${S.noticeGroups.length} 条任务</b></div>` : ''}`
+        : '<div class="empty">暂无待处理事项</div>'}
         <button class="btn sm" style="margin-top:10px;width:100%" data-act="go" data-view="intake">进入任务承接台</button>
       </div>
       <div class="card">
@@ -573,7 +629,7 @@ function viewToday() {
       <div class="card">
         <div class="card-h"><h2>快捷入口</h2></div>
         <div class="stack">
-          <button class="btn" data-act="new" data-type="assign">下派新任务给组员</button>
+          <button class="btn" data-act="new" data-type="assign">发布新任务给组员</button>
           <button class="btn" data-act="new" data-type="special">新建专项（含阶段计划）</button>
           <button class="btn" data-act="new-rule">新建常规工作规则</button>
         </div>
@@ -582,13 +638,21 @@ function viewToday() {
   </div>`;
 }
 
-/* ============ 视图：下派任务 ============ */
+/* ============ 视图：发布任务 ============ */
 /* 这一页回答四个问题：
    ① 我派出去的活干到哪了  ② 下属的常规工作推得怎么样
    ③ 下属的专项项目推得怎么样  ④ 我在关注的事现在怎么样
-   四块各管各的，别把「我关注」和「我下派」混在一起——同一件事出现在两块里，人会以为出 bug 了。 */
+   四块各管各的，别把「我关注」和「我发布」混在一起——同一件事出现在两块里，人会以为出 bug 了。 */
 function viewAssign() {
-  const list = S.tasks.filter(t => t.type === 'assign' && t.ownerNo === S.me.no);
+  /* 「我发布的」= 派出去的东西，无论对方接没接。
+     自派的（选承接人=自己）不在这里——它落成一条专项，归「专项工作」，
+     同一件事只出现在一个地方，否则用户会以为系统重了。 */
+  const list = S.tasks.filter(t => {
+    const pub = t.publisherNo || t.ownerNo;
+    if (pub !== S.me.no) return false;
+    if (t.type === 'assign') return true;        /* 还没被接收 */
+    return t.ownerNo !== S.me.no;                /* 已经移交出去 */
+  }).sort((a, b) => (a.end < b.end ? -1 : 1));
   const doing = list.filter(t => t.status === 'doing').length;
   const late = list.filter(overdue).length;
   const spMembers = buildSpecialMembers();
@@ -596,42 +660,41 @@ function viewAssign() {
   const following = buildFollowing();
   return `
   <div class="grid-4">
-    ${statCard('', '已下派任务', list.length)}
+    ${statCard('', '我发布的', list.length)}
     ${statCard('doing', '进行中', doing)}
     ${statCard('done', '已完成', list.filter(t => t.status === 'done').length)}
     ${statCard('paused', '逾期未完成', late)}
   </div>
   <div class="card" style="margin-top:14px">
-    <div class="card-h"><h2>我下派的任务</h2><span class="hint">执行人是组员，因此不进你的日历；在这里看阶段进度与达成标准</span>
+    <div class="card-h"><h2>我发布的任务</h2><span class="hint">派出去之后归承接人管，你在这里看进度；给自己建的活不在这里，在「专项工作」里</span>
       <div class="spacer"></div>
-      <button class="btn primary sm" data-act="new" data-type="assign">+ 新建下派任务</button></div>
+      <button class="btn primary sm" data-act="new" data-type="assign">+ 发布任务</button></div>
     ${list.length ? `<table>
-      <thead><tr><th style="width:30%">任务</th><th>承接人</th><th>起止</th><th>阶段进度</th><th>达成标准</th><th>状态</th><th></th></tr></thead>
+      <thead><tr><th style="width:28%">任务</th><th>承接人</th><th>截止</th><th>阶段进度</th><th>达成标准</th><th>状态</th><th></th></tr></thead>
       <tbody>
       ${list.map(t => {
         const p = taskProg(t);
-        /* 对方选了「规划并承接」，会在他名下新建一条任务并指回这条；展开挂在下面，
-           否则上级这里永远停在「已接收」，看不到后续 */
+        /* 0.5/0.6 时代的派生副本还留在库里：照旧挂在下面，标清楚是旧版，
+           新流程不再产生这种东西。 */
         const carried = S.tasks.filter(x => x.sourceId === t.id);
-        /* 承接人现在可以是全公司任何人：不是自己直接下属的，标一句「跨级」，
-           否则「他怎么不给我回进度」这种误会会一直冒出来 */
         const cross = t.assigneeNo !== S.me.no && !S.subs.some(m => m.no === t.assigneeNo);
+        const pending = t.type === 'assign' && t.intakeStatus === 'pending';
         return `<tr>
           <td style="max-width:250px"><b>${esc(t.title)}</b><div class="mini">${catName(t.cat1, t.cat2)} ${prioLabel(t) ? '· ' + prioLabel(t) : ''}</div>
             ${carried.map(x => `<div class="mini carry" data-act="open" data-id="${x.id}"
-                title="点开看承接后这条任务的详情"><span class="carry-ar">↳</span>${esc(nameOf(x.ownerNo))} 承接为「${esc(x.title)}」
+                title="旧版承接生成的副本"><span class="carry-ar">↳</span>旧版承接 · ${esc(nameOf(x.ownerNo))} 拆出「${esc(x.title)}」
                 <b>${taskProg(x)}%</b> · ${ST[x.status] ? ST[x.status].name : ''}${overdue(x) ? ' · <span style="color:#dc2626">已逾期</span>' : ''}</div>`).join('')}</td>
-          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${cross ? ' <span class="tag">跨级</span>' : ''}${t.intakeStatus === 'pending' && t.status === 'todo' ? ' <span class="tag">待接收</span>'
-            : (t.intakeStatus === 'accepted' && !carried.length ? ' <span class="tag">已接收</span>' : '')}</td>
-          <td class="mini" style="white-space:nowrap">${fmt(t.start)} → ${fmt(t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
-          <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>
+          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${cross ? ' <span class="tag">跨级</span>' : ''}${pending ? ' <span class="tag">待接收</span>'
+            : ` <span class="tag done">已移交</span>`}</td>
+          <td class="mini" style="white-space:nowrap">${fmt(t.dueDate || t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
+          <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${leavesOf(t.stages).filter(s => s.done).length}/${leavesOf(t.stages).length} 段` : ''}</span></div></td>
           <td class="mini" style="max-width:200px;min-width:140px">${esc(cut(t.std || '未填写', 26))}</td>
           <td>${stTag(t.status)}</td>
           <td><button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button></td>
         </tr>`;
       }).join('')}
       </tbody>
-    </table>` : '<div class="empty">还没有下派过任务</div>'}
+    </table>` : '<div class="empty">还没有发布过任务</div>'}
   </div>
 
   <div class="card">
@@ -660,7 +723,7 @@ function viewAssign() {
       <div class="spacer"></div><span class="mini">${following.length} 条</span></div>
     ${following.length ? following.map(followRowHTML).join('')
       : '<div class="empty">还没有关注的事。在上面两块里点「☆ 关注」，或者让别人把你设成知情人，这里就会列出来。</div>'}
-    <div class="note" style="margin-top:2px">自己下发的任务不在这里，仍在上面的「我下派的任务」里；同一件事只出现在一个地方。</div>
+    <div class="note" style="margin-top:2px">自己发布的任务不在这里，仍在上面的「我发布的任务」里；同一件事只出现在一个地方。</div>
   </div>`;
 }
 
@@ -713,7 +776,10 @@ function specialLineHTML(m, t) {
    ① 我主动关注的下属常规     —— watch.kind = 'routine'
    ② 我主动关注的下属专项     —— watch.kind = 'special'
    ③ 别人让我知情的专项       —— task_observer 里有我（越级关注的入口）
-   自己下发的任务不在这里，它在「我下派的任务」里。 */
+   自己发布的任务不在这里，它在「我发布的任务」里。
+   ② 和 ③ 会撞车：同一名下属的专项，我既关注了、他又把我设成知情人。
+   那时只出一行（按「主动关注」算）——不然「我关注的任务」里同一件事出现两次，
+   而这块的标题就是「同一件事只出现在一个地方」。 */
 function buildFollowing() {
   const out = [];
   (S.watch || []).filter(w => (w.kind || 'routine') === 'routine' && w.ruleId).forEach(w => {
@@ -721,11 +787,14 @@ function buildFollowing() {
     const r = m && (m.routines || []).find(x => x.id === w.ruleId);
     if (r) out.push({ kind: 'routine', who: m.name, m, r });
   });
+  const seenT = new Set();
   (S.watch || []).filter(w => w.kind === 'special' && w.taskId).forEach(w => {
     const t = S.tasks.find(x => x.id === w.taskId);
-    if (t) out.push({ kind: 'special', who: nameOf(t.ownerNo), t });
+    if (t && !seenT.has(t.id)) { seenT.add(t.id); out.push({ kind: 'special', who: nameOf(t.ownerNo), t }); }
   });
   S.tasks.filter(t => t.observer && t.type === 'special').forEach(t => {
+    if (seenT.has(t.id)) return;
+    seenT.add(t.id);
     out.push({ kind: 'informed', who: nameOf(t.ownerNo), t });
   });
   return out;
@@ -934,35 +1003,68 @@ function viewSpecial() {
 /* ============ 视图：任务承接台 ============ */
 function viewIntake() {
   const pending = S.intake;
+  const subIn = S.stageIntake || [];
+  const groups = S.noticeGroups || [];
   const accepted = acceptedList();
   return `
   <div class="grid-2">
-    <div class="card">
-      <div class="card-h"><h2>待接收的上级任务</h2><span class="hint">接收 → 规划 → 拆分 → 移入专项 / 临时</span>
-        <div class="spacer"></div><span class="pill warn">${pending.length} 项待处理</span></div>
-      ${pending.length ? pending.map(i => `<div class="rule-card">
-        <div class="card-h" style="margin-bottom:6px"><h2>${esc(i.title)}</h2>
-          <span class="tag">${esc(i.from)}</span><div class="spacer"></div><span class="tag red">${fmt(i.due)} 前</span></div>
-        <div class="mini" style="margin-bottom:4px">达成标准：${esc(i.std || '未填写')}</div>
-        <div class="split"><button class="btn primary sm" data-act="intake-plan" data-id="${i.id}">规划并承接</button>
-          <button class="btn sm" data-act="intake-done" data-id="${i.id}">直接办理（留在当前任务里）</button></div>
-      </div>`).join('') : '<div class="empty">没有待接收任务，去干自己的事吧</div>'}
-    </div>
     <div>
       <div class="card">
-        <div class="card-h"><h2>已承接</h2><span class="hint">${accepted.length} 项</span></div>
-        ${accepted.length ? accepted.map(t => `<div style="padding:8px 0;border-bottom:1px dashed var(--line2)">
-          <div class="split"><b style="font-size:12.5px">${esc(t.title)}</b><span class="tag done">${TYPES[t.type].name}</span></div>
-          <div class="mini" style="margin-top:4px">来源：${esc((S.tasks.find(x => x.id === t.sourceId) || {}).title || '上级任务')}（${esc(nameOf((S.tasks.find(x => x.id === t.sourceId) || {}).ownerNo))}）<br/>${fmt(t.start)} → ${fmt(t.end)}</div>
-        </div>`).join('') : '<div class="empty">还没有承接记录</div>'}
+        <div class="card-h"><h2>等你立项的任务</h2><span class="hint">接收 = 这条活归你管；接过来之后先理计划，理完再派发</span>
+          <div class="spacer"></div><span class="pill warn">${pending.length} 项</span></div>
+        ${pending.length ? pending.map(i => `<div class="rule-card">
+          <div class="card-h" style="margin-bottom:6px"><h2>${esc(i.title)}</h2>
+            <span class="tag">${esc(i.from)} 发布</span><div class="spacer"></div><span class="tag red">${fmt(i.due)} 前</span></div>
+          <div class="mini" style="margin-bottom:4px">达成标准：${esc(i.std || '未填写')}</div>
+          <div class="split"><button class="btn primary sm" data-act="intake-accept" data-id="${i.id}">接收</button></div>
+          <div class="mini" style="margin-top:6px;line-height:1.5">接收后它会进「专项工作」，你可以改阶段、派人、排期，但总截止是发布人定的。</div>
+        </div>`).join('') : '<div class="empty">没有等你立项的任务</div>'}
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h2>分给你的子任务</h2><span class="hint">承接人已经派发，你接了就进自己的待办</span>
+          <div class="spacer"></div><span class="pill warn">${subIn.length} 条任务</span></div>
+        ${subIn.length ? subIn.map(g => `<div class="rule-card">
+          <div class="card-h" style="margin-bottom:6px"><h2>${esc(g.task.title)}</h2>
+            <span class="tag">${esc(g.from)} 分给你 ${g.stages.length} 段</span>
+            <div class="spacer"></div><span class="tag red">最早 ${fmt(g.earliest)}</span></div>
+          ${g.stages.map(s => `<div class="kv"><span>${esc(s.name || '子任务')} · ${fmt(s.start || s.date)} → ${fmt(s.end || s.date)}</span>
+            <b><button class="btn sm ghost" data-act="stage-join" data-id="${g.id}" data-sid="${esc(s.id)}">加入待办</button></b></div>`).join('')}
+          <div class="mini" style="margin-top:6px;line-height:1.5">加入后变成一条临时任务，日期跟着上面走，你改不了期——要调找承接人。</div>
+        </div>`).join('') : '<div class="empty">没有分给你的子任务</div>'}
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h2>有变动的任务</h2><span class="hint">派发之后改期、换人、删除，都会记在这里</span>
+          <div class="spacer"></div><span class="pill warn">${groups.length} 条</span></div>
+        ${groups.length ? groups.map(g => `<div class="rule-card">
+          <div class="card-h" style="margin-bottom:6px"><h2>${esc(g.title)}</h2>
+            <div class="spacer"></div><button class="btn sm ghost" data-act="notice-seen" data-tid="${g.taskId}">知道了</button></div>
+          ${g.items.map(n => `<div class="mini" style="padding:3px 0"><span class="tag ${n.kind === 'removed' ? 'red' : n.kind === 'moved' ? 'warn' : ''}">${
+            n.kind === 'removed' ? '已移除' : n.kind === 'moved' ? '改期' : n.kind === 'reassigned' ? '换人' : '新派'}</span> ${esc(n.summary || '')}</div>`).join('')}
+        </div>`).join('') : '<div class="empty">没有变动</div>'}
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-h"><h2>我接的任务</h2><span class="hint">${accepted.length} 项</span></div>
+        ${accepted.length ? accepted.map(t => {
+          const pub = t.publisherNo || t.ownerNo;
+          return `<div style="padding:8px 0;border-bottom:1px dashed var(--line2)">
+          <div class="split"><b style="font-size:12.5px">${esc(t.title)}</b><span class="tag done">${TYPES[t.type] ? TYPES[t.type].name : ''}</span></div>
+          <div class="mini" style="margin-top:4px">${pub === S.me.no ? '我自己建的' : `${esc(nameOf(pub))} 发布`} · 截止 ${fmt(t.dueDate || t.end)}<br/>${fmt(t.start)} → ${fmt(t.end)}</div>
+        </div>`;
+        }).join('') : '<div class="empty">还没有接过来的活</div>'}
       </div>
       <div class="card">
-        <div class="card-h"><h2>为什么要有这一页</h2></div>
+        <div class="card-h"><h2>这一页在管什么</h2></div>
         <div class="note">
-          上级下派的任务不直接变成待办，先落到承接台做一次「规划动作」：<br/>
-          · 判断这件事是我的专项（长期、要自己推进），还是临时任务（一次性、当天处理）；<br/>
-          · 需要组员参与时，直接转成下派任务并指定承接人；<br/>
-          · 承接后保留与上级任务的关联，进展可回溯，不用在群里反复问。
+          接收和派发是两件事，别混：<br/>
+          · <b>接收</b> = 这条活归你管，进你的专项工作；<br/>
+          · <b>派发</b> = 你理完计划后，把其中的子任务分出去，对方才收得到；<br/>
+          · 对方点「加入待办」，那一段才会变成他今天的活；<br/>
+          · 派发之后再改期、换人、删除，他这里都会出现一条提醒。
         </div>
       </div>
     </div>
@@ -1059,7 +1161,7 @@ function viewCalendar() {
       </div>
       <div class="cal-legend">
         <span class="lg-cap">来源</span>
-        <span><i class="lgsrc assign"></i>下派</span>
+        <span><i class="lgsrc assign"></i>发布</span>
         <span><i class="lgsrc routine"></i>常规</span>
         <span><i class="lgsrc special"></i>专项</span>
         <span><i class="lgsrc temp"></i>临时</span>
@@ -1097,7 +1199,7 @@ function viewCalendar() {
         <div class="note" style="margin-top:12px">
           拖到某一天 = 改这一段的计划日期，不是把活交给别人：<br/>
           · 没拆阶段的活：整段一起平移，工期天数不变<br/>
-          · 专项 / 下派任务：拖的是当前这一个阶段，保持阶段长短，且不能压到前后阶段上<br/>
+          · 专项 / 发布任务：拖的是当前这一个阶段，保持阶段长短，且不能压到前后阶段上<br/>
           · 常规工作：只改这一次，规则本身不动，仍只能落在工作日
         </div>
       </div>
@@ -1131,11 +1233,11 @@ function viewSettings() {
       <div><span>部门 / 岗位</span><b>${S.me ? esc(S.me.dept) + ' · ' + esc(S.me.role) : '—'}</b></div>
       <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置</span>'}</b></div>
       <div><span>我的下属</span><b>直接下属 ${S.subs.length} 人（向下 1 层）</b></div>
-      <div><span>下派对象</span><b>全公司 ${(S.roster || []).length - 1} 位同事（不限于下属）</b></div>
+      <div><span>发布对象</span><b>全公司 ${(S.roster || []).length - 1} 位同事（不限于下属）</b></div>
       <div><span>能否派活</span><b>${S.me && empActivated(S.me.no) ? '已开通，可以派活' : '<span style="color:#b45309">你还没登录过工作台，先自己登录一次</span>'}</b></div>
     </div>
-    <div class="note" style="margin-top:10px">上级不是必填项：不设上级照样能下派任务、承接任务。只是不设上级的人不会出现在别人的「下属」名单里，上级也就看不到你的常规工作与专项进展。</div>
-    <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下派的任务仍保留原上级可见，新增任务只对新上级可见。</div>
+    <div class="note" style="margin-top:10px">上级不是必填项：不设上级照样能发布任务、承接任务。只是不设上级的人不会出现在别人的「下属」名单里，上级也就看不到你的常规工作与专项进展。</div>
+    <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已发布的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
   <div class="grid-2">
     <div class="card">
@@ -1189,7 +1291,8 @@ function render() {
   const wd = isWorkday(TODAY);
   $('#workdayPill').textContent = `${fmtFull(TODAY)} · ${wd ? '工作日' : '非工作日'}`;
   $('#workdayPill').className = 'pill ' + (wd ? 'green' : 'warn');
-  const n = S.intake.length;
+  /* 角标算三样：等你立项的、分给你的子任务、派发后有变动的 */
+  const n = S.intake.length + (S.stageIntake || []).length + (S.noticeGroups || []).length;
   const badge = $('#intakeBadge');
   badge.style.display = n ? 'inline-block' : 'none';
   badge.textContent = n;
@@ -1239,9 +1342,14 @@ function viewTaskDetail() {
 function taskDetailHTML(t) {
   const isRoutine = t.type === 'routine';
   const rule = S.rules.find(r => r.id === t.routineId) || null;
-  const isMine = t.ownerNo === S.me.no || t.assigneeNo === S.me.no;
-  const canEdit = isMine;
+  /* 编辑权只看 owner。发布人把活交出去之后是只读，只剩总截止能动；
+     子任务责任人更窄：只能勾自己那一段。 */
+  const canEdit = t.ownerNo === S.me.no;
+  const pub = t.publisherNo || t.ownerNo;
+  const imPublisher = pub === S.me.no;
   const stages = t.stages || [];
+  const mySubs = stages.filter(s => s.pid && s.who === S.me.no && s.whoAt);
+  const toDispatch = stages.filter(s => s.pid && s.who && !s.whoAt);
   const leaves = leavesOf(stages);
   const doneN = leaves.filter(s => s.done).length;
   const prog = taskProg(t);
@@ -1261,15 +1369,16 @@ function taskDetailHTML(t) {
         <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
           class="td-title${canEdit ? '' : ' ro'}"/>
         <div class="split" style="margin-top:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
-          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} ${t.sourceId ? '承接' : '下派'}</span>` : ''}
-          ${canEdit ? '' : '<span class="tag">只读</span>'}
+          ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} 承接</span>` : ''}
+          ${imPublisher && t.ownerNo !== S.me.no ? '<span class="tag">你发布</span>' : ''}
+          ${canEdit ? '' : (mySubs.length ? '<span class="tag">你负责其中一段</span>' : '<span class="tag">只读</span>')}
         </div>
       </div>
     </div>
     <div class="td-kpis">
       <div><span>进度</span><b>${prog}%</b><div class="prog" style="margin-top:8px"><i style="width:${prog}%"></i></div></div>
       <div><span>${isRoutine ? '当天节点' : '阶段'}</span><b>${leaves.length ? `${doneN} / ${leaves.length}` : '—'}</b></div>
-      <div><span>时间</span><b style="font-size:15px">${leftText}</b></div>
+      <div><span>${t.ownerNo === S.me.no ? '距截止' : '总截止'}</span><b style="font-size:15px">${t.ownerNo === S.me.no ? leftText : fmt(t.dueDate || t.end)}</b></div>
       <div><span>承接人</span><b style="font-size:15px">${t.assigneeNo === S.me.no ? '我' : esc(nameOf(t.assigneeNo))}</b></div>
     </div>`;
 
@@ -1289,15 +1398,19 @@ function taskDetailHTML(t) {
       </div>`
     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
         <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
+        ${canEdit && toDispatch.length ? `<div class="note" style="margin-bottom:10px">
+          <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之前，对方那边什么都看不到。
+          <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}">派发</button></div>` : ''}
         ${stages.length ? stageTreeHTML(t, canEdit) : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
         ${canEdit ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
-          <input id="sName" placeholder="阶段名称，例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
+          <div class="sec-title" style="margin:0 0 7px">再加一段 <span class="mini">名称写清这一段交付什么</span></div>
+          <input id="sName" placeholder="例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
           <div class="row">
             <input type="date" id="sStart" value="${t.start}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
-            <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加阶段</button>
+            <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加</button>
           </div>
-          <div class="mini" style="margin-top:7px;line-height:1.5">名称或日期写错了，点那一行的「改」就地调整，不用删了重建；要再拆细点「+子」，子任务最多再分一级。</div>
+          <div class="mini" style="margin-top:7px;line-height:1.5">改哪一段，点它右边的「改」；某一段要别人做，点「+ 子任务」拆一层，选上谁做。子任务只能再拆一层。</div>
         </div>` : ''}
       </div>`;
 
@@ -1305,7 +1418,7 @@ function taskDetailHTML(t) {
   const assigneeField = t.type === 'assign'
     ? `<select data-field="assigneeNo">${whoOpts}</select>`
     : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
-       <div class="mini" style="margin-top:5px;line-height:1.4">只有「下派任务」能换人；要交给组员，请新建一条下派任务。</div>`;
+       <div class="mini" style="margin-top:5px;line-height:1.5">整件事要交给别人，去「发布任务」新建一条；只想把其中一段分给同事，在左边的阶段里拆子任务、选上谁做就行。</div>`;
 
   const infoCard = canEdit
     ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
@@ -1313,7 +1426,9 @@ function taskDetailHTML(t) {
         <div class="field"><label>起止时间</label><div class="row">
           <input type="date" value="${t.start}" data-field="start"/>
           <input type="date" value="${t.end}" data-field="end"/>
-        </div></div>
+        </div>
+        ${!isRoutine && imPublisher ? `<div class="mini" style="margin-top:5px;line-height:1.5">总截止 ${fmt(t.dueDate || t.end)}：这是你对发布对象的承诺，改它要单独确认</div>` : ''}
+        </div>
         ${isRoutine ? '' : `<div class="field"><label>时间点（可选）</label><input type="time" value="${t.time || ''}" data-field="time"/></div>
         <div class="field"><label>承接人</label>${assigneeField}</div>
         <div class="field"><label>达成标准</label><textarea data-field="std" placeholder="写清楚什么算完成">${esc(t.std || '')}</textarea></div>
@@ -1326,21 +1441,25 @@ function taskDetailHTML(t) {
     : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
         <div class="kv"><span>状态</span><b>${ST[t.status] ? ST[t.status].name : '—'}</b></div>
         <div class="kv"><span>承接人</span><b>${esc(nameOf(t.assigneeNo))}</b></div>
-        <div class="kv"><span>起止</span><b>${fmt(t.start)}${t.time ? ' ' + t.time : ''} → ${fmt(t.end)}</b></div>
+        <div class="kv"><span>发布人</span><b>${esc(nameOf(pub))}</b></div>
+        <div class="kv"><span>总截止</span><b>${fmt(t.dueDate || t.end)}${
+          imPublisher ? ` <button class="btn sm ghost" data-act="due-set" data-id="${t.id}">改</button>` : ''
+        }</b></div>
+        <div class="kv"><span>计划起止</span><b>${fmt(t.start)}${t.time ? ' ' + t.time : ''} → ${fmt(t.end)}</b></div>
         <div class="kv"><span>达成标准</span><b style="font-weight:500;text-align:right">${esc(t.std || '未填写')}</b></div>
         <div class="kv"><span>分类</span><b>${catName(t.cat1, t.cat2)}</b></div>
         <div class="kv"><span>优先级</span><b>${prioLabel(t) || '未设置'}</b></div>
-        <div class="kv"><span>下派人</span><b>${esc(nameOf(t.ownerNo))}</b></div>
       </div>`;
 
   /* ---- 底部：来源链路 + 删除 ---- */
   const srcLine = src
-    ? (src.ownerNo === S.me.no
-      ? `承接人：${esc(nameOf(t.ownerNo))} · 承接自你下派的「${esc(src.title || '')}」`
-      : `来源：${esc(nameOf(t.ownerNo))} 下派的任务「${esc(src.title || '')}」`)
-    : (t.ownerNo !== S.me.no ? `下派人：${esc(nameOf(t.ownerNo))}` : '');
+    ? (imPublisher ? `这是你发布的「${esc(src.title || '')}」的旧版承接副本` : `来源：${esc(nameOf(src.ownerNo))} 发布的「${esc(src.title || '')}」`)
+    : (imPublisher && t.ownerNo !== S.me.no ? `你发布的，已移交 ${esc(nameOf(t.ownerNo))}——之后怎么干由他定，你只看进度` : '');
+  const roWhy = mySubs.length
+    ? `你负责其中 ${mySubs.length} 段，只能勾自己那段的完成；计划由 ${esc(nameOf(t.ownerNo))} 排`
+    : (imPublisher ? '这条已经交出去了，你只能看进度；要改总截止点「改」' : '你没有这条任务的编辑权');
   const foot = `<div class="td-foot">
-      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? '' : ' · 你对这条任务只有查看权限，改动请找下派人'}</div>
+      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? '' : ' · ' + roWhy}</div>
       ${!isRoutine && canEdit ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
     </div>`;
 
@@ -1348,7 +1467,7 @@ function taskDetailHTML(t) {
   const obsList = t.observers || [];
   const obsCard = (t.type === 'special' && (obsList.length || canEdit))
     ? `<div class="card">
-        <div class="card-h"><h2>知情人</h2><span class="hint">${canEdit ? '他们能在「下派任务」页看到这条专项的进度' : '你只能看进度'}</span></div>
+        <div class="card-h"><h2>知情人</h2><span class="hint">${canEdit ? '他们能在「发布任务」页看到这条专项的进度' : '你只能看进度'}</span></div>
         ${obsList.length ? obsList.map(no => `<div class="kv"><span>${esc(nameOf(no))}</span>${
           canEdit ? `<b><button class="btn sm ghost" data-act="obs-del" data-id="${t.id}" data-no="${no}">移除</button></b>` : '<b>知情</b>'}</div>`).join('')
           : '<div class="mini">还没有指定知情人</div>'}
@@ -1365,10 +1484,26 @@ function taskDetailHTML(t) {
   return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}${obsCard}</div></div>` + foot;
 }
 /* 阶段树：一级阶段带序号，子任务缩进一级。
-   父阶段有子任务时不给勾选框——点了就是「全勾/全不勾」，容易误解；它的完成态由子任务决定。 */
+   父阶段有子任务时不给勾选框——点了就是「全勾/全不勾」，容易误解；它的完成态由子任务决定。
+   责任人只挂在子任务上：阶段是「一段时间」，子任务才是「一件能勾的活」。 */
 function stageTreeHTML(t, canEdit) {
   const stages = t.stages || [];
   const tops = stages.filter(s => !s.pid);
+  const myTick = s => canEdit || (s.who === S.me.no && s.whoAt);
+  const whoSel = (s, idx) => {
+    const cur = s.who || '';
+    const opts = [`<option value="" ${cur ? '' : 'selected'}>承接人自己做（${esc(nameOf(t.assigneeNo))}）</option>`]
+      .concat((S.roster || [])
+        .filter(e => e.no !== t.assigneeNo && e.activated)
+        .map(e => `<option value="${e.no}" ${cur === e.no ? 'selected' : ''}>${esc(e.name)}${S.subs.some(x => x.no === e.no) ? '' : ' · 非下属'}</option>`));
+    return `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}" title="这段由谁负责">${opts.join('')}</select>`;
+  };
+  const joinTag = s => {
+    if (!s.who) return '';
+    if (!s.whoAt) return '<span class="tag warn">未派发</span>';
+    if (!s.joinedAt) return '<span class="tag">已派发 · 待加入</span>';
+    return '<span class="tag done">已加入待办</span>';
+  };
   let n = 0;
   return tops.map(p => {
     n++;
@@ -1380,14 +1515,17 @@ function stageTreeHTML(t, canEdit) {
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
       <div class="t ${pDone ? 'done' : ''}"><span style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
-      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务">+子</button>` : ''}
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务，子任务才能指定责任人">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
     </div>`;
-    const sub = kids.map(k => {
+    const sub = kids.map((k, order) => {
       const ki = stages.indexOf(k);
+      const tick = myTick(k);
       return `<div class="stage sub ${k.done ? 'on' : ''}">
-        <div class="n" ${canEdit ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : ''}>${k.done ? '✓' : ''}</div>
-        <div class="t ${k.done ? 'done' : ''}"><span style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
+        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : 'title="这段由别人负责"'} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
+        <div class="t ${k.done ? 'done' : ''}"><span style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}
+          ${k.who ? `<small>· ${esc(nameOf(k.who))}</small>` : ''}${joinTag(k)}</div>
+        ${canEdit ? whoSel(k, ki) : ''}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="改这一段的名称和日期">改</button>` : ''}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
       </div>`;
@@ -1506,12 +1644,12 @@ function closeModal() {
   if (pendingRefresh) { pendingRefresh = false; refresh(true).catch(() => { }); }
 }
 
-/* 承接人：只有「下派任务」能指定给别人。
+/* 承接人：只有「发布任务」能指定给别人。
    专项、临时一律是本人——这两个页面不是派活入口，锁住才不会让人以为能给他人派活。 */
 function canAssignOthers(type) { return type === 'assign'; }
 
 /* 承接人下拉：全员可选，分「我的下属 / 其他同事」两组。
-   下派是点名派的活，本来就不靠汇报关系，所以不再只列直接下属；
+   发布是点名派的活，本来就不靠汇报关系，所以不再只列直接下属；
    从没登录过工作台的人标出来——派给他他收不到，别让人以为派出去就有人接了。 */
 function empActivated(no) {
   const e = (S.roster || []).find(x => x.no === no);
@@ -1542,7 +1680,7 @@ function assigneeFieldInner(type, sel) {
   }
   return `<div class="field"><label>承接人</label>
     <div class="locked">我（本人）<span class="mini">不可改</span></div>
-    <div class="mini" style="margin-top:5px;line-height:1.4">${TYPES[type].name}归自己办；要交给组员，请用「下派任务」。</div>
+    <div class="mini" style="margin-top:5px;line-height:1.5">这类事归自己办。整件事要交给别人，用「发布任务」；只想把其中一段分出去，建好之后在阶段里拆子任务、选上谁做。</div>
     <input type="hidden" id="f_assignee" value="${S.me.no}"/>
   </div>`;
 }
@@ -1552,10 +1690,10 @@ function assigneeFieldHTML(type, sel) {
 }
 
 /* ============ 知情人（专项任务） ============ */
-/* 知情人＝知道这个项目在推进、但不是执行人。他们能在「下派任务」页的「我关注的任务」里看到进度。
+/* 知情人＝知道这个项目在推进、但不是执行人。他们能在「发布任务」页的「我关注的任务」里看到进度。
    现在按自由选择做：全员可选、可搜索、多选。
    没登录过工作台的人照样能选——知情是「知会一声」，不依赖对方账号；
-   真正依赖对方能不能收得到的是「下派」，那个才拦。 */
+   真正依赖对方能不能收得到的是「发布」，那个才拦。 */
 let obsPicked = [];
 function observerCandidates(kw) {
   const k = String(kw || '').trim().toLowerCase();
@@ -1585,7 +1723,7 @@ function renderObserverList(kw) {
 }
 function observerFieldHTML(type) {
   return `<div class="field" id="fObsWrap" style="display:${type === 'special' ? '' : 'none'}">
-    <label>知情人 <span class="mini">可多选；他们能在「下派任务」页看到这条专项的进度</span></label>
+    <label>知情人 <span class="mini">可多选；他们能在「发布任务」页看到这条专项的进度</span></label>
     <input id="f_obs_kw" placeholder="搜索工号、姓名、岗位或部门" autocomplete="off"/>
     <div id="f_obs_list" class="obs-list"></div>
     <div class="mini" id="f_obs_picked">还没选人</div>
@@ -1599,7 +1737,7 @@ function taskModalBody(type, preset) {
   const base = `
   <div class="field"><label>任务名称</label><input id="f_title" placeholder="例如：季度经营分析报告" value="${preset && preset.title ? esc(preset.title) : ''}"/></div>
   <div class="field"><label>任务类型</label>
-    <div class="locked" id="f_type_lock">${TYPES[type].name}<span class="mini">由入口决定，不可改</span></div>
+    <div class="locked" id="f_type_lock">${TYPES[type].name}<span class="mini">按你从哪个页面点「新建」自动定，不用选</span></div>
   </div>
   ${assigneeFieldHTML(type, preset && preset.assigneeNo)}
   <div class="field"><label>起止时间 / 时间点（可选）</label><div class="row">
@@ -1615,35 +1753,64 @@ function taskModalBody(type, preset) {
   </div></div>
   ${observerFieldHTML(type)}`;
 
-  if (type !== 'special') {
-    return base + `<div class="note">${type === 'temp' ? '临时任务默认归入「其他 / 临时事项」，起止可只选今天。' : '下派后组员登录即可在「承接台」看到并承接；可后续在详情里加阶段目标。'}</div>`;
+  if (type === 'temp') {
+    return base + `<div class="note">临时任务默认归入「其他 / 临时事项」，起止可只选今天。</div>`;
   }
+  /* 发布时就该能拆完、点完人——领导发一个任务，其中很多子任务要别人做，
+     等他接过来再派人，这条链就长了。所以 assign 和 special 共用这套阶段区。 */
   return `<div class="form-grid">
     <div class="form-col">
       <div class="sec-title">基本信息</div>
       ${base}
     </div>
     <div class="form-col">
-      <div class="sec-title">阶段计划 <span class="mini">可留空，之后再补</span></div>
+      <div class="sec-title">阶段与分工 <span class="mini">可留空，之后再补</span></div>
+      <div class="mini" style="margin:-4px 0 9px;line-height:1.55">按时间把这件事分成几段（阶段）；某一段要别人做，点那段的「+子」拆成子任务，选上谁做。</div>
       <div id="stageRows">${stageRowHTML(today, today)}</div>
       <button class="btn sm" data-act="mstage-add" style="width:100%">+ 添加阶段</button>
-      <div class="note" style="margin-top:10px">每个阶段独立设开始与结束时间；要给某个阶段再拆细，点那一行的「+子」，最多再分一级。进度按最细一级自动算。</div>
+      <div class="note" style="margin-top:10px">子任务选上人之后，还要点任务上的「派发」，对方才会在承接台收到；派发之前随便改，他那边什么都看不到。</div>
     </div>
   </div>`;
 }
 /* 弹窗里的阶段行：pid 为空是一级阶段，有值是它的子任务。
-   data-tmp 是这一行的临时 id，保存时直接当节点 id 用（uid 保证唯一），这样子任务才有父可指。 */
+   data-tmp 是这一行的临时 id，保存时直接当节点 id 用（uid 保证唯一），这样子任务才有父可指。
+   每行前面那个编号是后填的（renumberStageRows）：两个名字框长一样，只有编号能让人一眼分清
+   这是第几段、还是第几段下面的第几个子任务。 */
 function stageRowHTML(s, e, pid) {
   const isSub = !!pid;
   return `<div class="mrow${isSub ? ' sub' : ''}" data-tmp="${uid('s')}" data-pid="${pid || ''}">
-    <input class="sname" placeholder="${isSub ? '子任务名称，例如：取数并核对口径' : '阶段名称，例如：数据口径确认与取数'}"/>
+    <div class="mrow-h">
+      <span class="sno"></span>
+      <input class="sname" placeholder="${isSub ? '这段具体做什么，例如：取数并核对口径' : '这一段做什么，例如：数据口径确认与取数'}"/>
+    </div>
     <div class="row2">
       <input type="date" class="sst" value="${s}"/>
       <input type="date" class="sen" value="${e}"/>
-      ${isSub ? '' : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+子</button>`}
+      ${isSub ? `<span class="lbl2">谁做</span><select class="swho" title="这段由谁做；不选就是承接人自己做">
+        <option value="">承接人自己做</option>
+        ${(S.roster || []).filter(x => x.activated).map(x => `<option value="${x.no}">${esc(x.name)}</option>`).join('')}
+      </select>` : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
       <button class="del" data-act="mstage-del" title="删除">✕</button>
     </div>
   </div>`;
+}
+/* 编号只跟 DOM 顺序走，不存库：删掉一段、调一次顺序，重新数一遍就行。 */
+function renumberStageRows() {
+  const marks = new Map();
+  let n = 0;
+  $$('#stageRows .mrow').forEach(r => {
+    const badge = r.querySelector('.sno');
+    if (!badge) return;
+    if (!r.dataset.pid) {
+      n++;
+      marks.set(r.dataset.tmp, { n, k: 0 });
+      badge.textContent = n;
+    } else {
+      const p = marks.get(r.dataset.pid);
+      if (p) badge.textContent = `${p.n}.${++p.k}`;
+      else badge.textContent = String(++n);   /* 父行已被删掉的孤儿，按一级显示 */
+    }
+  });
 }
 /* 从弹窗读回阶段树，父阶段日期按子任务并集重算。
    父行名字没填被丢掉时，挂在它下面的子任务不能变孤儿，一律按一级处理。 */
@@ -1654,7 +1821,8 @@ function readStageRows(fallback) {
     const st = r.querySelector('.sst').value || fallback;
     let en = r.querySelector('.sen').value || st;
     if (en < st) en = st;
-    return { id: r.dataset.tmp || uid('s'), pid: r.dataset.pid || null, name, start: st, end: en, done: false };
+    const whoEl = r.querySelector('.swho');
+    return { id: r.dataset.tmp || uid('s'), pid: r.dataset.pid || null, name, start: st, end: en, done: false, who: whoEl ? (whoEl.value || null) : null };
   }).filter(Boolean);
   const tops = new Set(out.filter(x => !x.pid).map(x => x.id));
   out.forEach(x => { if (x.pid && !tops.has(x.pid)) x.pid = null; });
@@ -1663,13 +1831,10 @@ function readStageRows(fallback) {
 }
 function openNewTask(type, preset) {
   const t = type || 'temp';
-  /* 类型不再在弹窗里改：建什么由入口决定（下派页=下派、专项页=专项、待办/日历=临时）。
-     以前这里能切类型，切一次就相当于换了条业务线，承接人、阶段计划、知情人全跟着变，
-     表单却是按打开时的类型生成的，切完只剩半套字段——所以从入口钉死。
-     承接台里「这件活算什么」那个下拉是另一回事，那里本来就要用户自己选。 */
-  /* 下派不再要求下派人自己有直属上级、也不要求有直接下属：
-     承接人下拉里是全公司的人，点名派给谁都行。没设上级的人照样能派活。 */
-  openModal(`新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
+  /* 类型不再在弹窗里改，但「承接人决定它是什么」：
+     派给别人 = 发布任务（等他接收），派给自己 = 一条专项（直接进我的专项工作）。
+     两者其实是同一件事的两种归属，所以只留一个入口，别做两套几乎一样的表单。 */
+  openModal(t === 'assign' ? '发布任务' : `新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
     const title = $('#f_title').value.trim();
     if (!title) { toast('先填任务名称'); return false; }
     const s = $('#f_start').value, e = $('#f_end').value || s;
@@ -1677,38 +1842,45 @@ function openNewTask(type, preset) {
     if (e < s) { toast('结束时间不能早于开始时间'); return false; }
     const stages = readStageRows(s);
     const typeVal = t;
-    // 专项、临时只归自己（界面已锁），这里再兜一层，避免切换类型后残留别人的工号
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
-    /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。
-       所以在这里拦住，不让它建出来。知情人没有这道限制（知情不依赖对方账号）。 */
+    /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。 */
     if (typeVal === 'assign' && assigneeNo !== S.me.no && !empActivated(assigneeNo)) {
       const e2 = (S.roster || []).find(x => x.no === assigneeNo);
       toast(`${e2 ? e2.name : '这个人'} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。`);
       return false;
     }
-    const observers = typeVal === 'special' ? obsPicked.slice() : [];
-    const task = {
-      id: uid('t'), type: typeVal, title,
-      ownerNo: S.me.no, assigneeNo,
+    /* 子任务责任人也一样要拦：他只在承接台收到，没有别的渠道 */
+    for (const st of stages) {
+      if (!st.pid || !st.who) continue;
+      if (!empActivated(st.who)) {
+        toast(`${nameOf(st.who)} 还没有登录过工作台，子任务派过去他收不到。`);
+        return false;
+      }
+    }
+    const realType = (typeVal === 'assign' || typeVal === 'special')
+      ? (assigneeNo === S.me.no ? 'special' : 'assign') : typeVal;
+    const observers = realType === 'special' ? obsPicked.slice() : [];
+    S.tasks.push({
+      id: uid('t'), type: realType, title,
+      ownerNo: S.me.no, publisherNo: S.me.no, assigneeNo,
+      dueDate: e,
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
       start: s, end: e, time: $('#f_time').value || '',
       std: $('#f_std').value.trim(), status: 'todo',
       cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       imp: Number($('#f_imp').value) || null, urg: Number($('#f_urg').value) || null,
-      stages, sourceId: preset && preset.sourceId ? preset.sourceId : null,
-      intakeStatus: (typeVal === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null,
+      stages, sourceId: null,
+      intakeStatus: realType === 'assign' ? 'pending' : null,
       routineId: null, planDate: null, detached: false, observers
-    };
-    S.tasks.push(task);
-    if (preset && preset.sourceId) {
-      const src = S.tasks.find(i => i.id === preset.sourceId);
-      if (src) src.intakeStatus = 'accepted';
-    }
-    S.intake = buildIntake(); S.members = buildMembers();
+    });
+    S.intake = buildIntake(); S.stageIntake = buildStageIntake(); S.members = buildMembers();
     save(); render(); closeModal();
-    toast(observers.length ? `已创建：${title}（知情人 ${observers.length} 人）` : '已创建：' + title);
-  }, '创建');
-  if (t === 'special') $('#modal').classList.add('wide');
+    if (realType === 'assign') toast(`已发布给 ${nameOf(assigneeNo)}，等他在承接台接收`);
+    else if (typeVal === 'assign') toast('承接人是你自己，已放入你的专项工作');
+    else toast(observers.length ? `已创建：${title}（知情人 ${observers.length} 人）` : '已创建：' + title);
+  }, t === 'assign' ? '发布' : '创建');
+  if (t !== 'temp') $('#modal').classList.add('wide');
+  renumberStageRows();
   obsPicked = [];
   renderObserverList('');
   /* 知情人列表是在 openModal 之后才填进去的，里面有一堆复选框。
@@ -1826,55 +1998,41 @@ function openRuleModal(rule) {
   }
 }
 
-function openIntakeModal(id) {
-  const it = S.intake.find(i => i.id === id);
-  if (!it) return;
-  openModal('规划并承接：' + it.title, `
-    <div class="note" style="margin-bottom:12px">来源：${esc(it.from)} · 要求 ${fmt(it.due)} 前 · 标准：${esc(it.std || '未填写')}</div>
-    <div class="field"><label>这件事在你这儿算什么</label><select id="f_type" data-prev="special">
-      <option value="special">专项任务（需要自己持续推进，可拆阶段）</option>
-      <option value="temp">临时任务（一次性，尽快处理）</option>
-      <option value="assign">下派任务（交给组员办）</option>
-    </select></div>
-    <div class="field"><label>任务名称</label><input id="f_title" value="${esc(it.title)}"/></div>
-    ${assigneeFieldHTML('special', null)}
-    ${observerFieldHTML('special')}
-    <div class="field"><label>起止时间</label><div class="row">
-      <input type="date" id="f_start" value="${TODAY}"/>
-      <input type="date" id="f_end" value="${it.due}"/>
-    </div></div>
-    <div class="field"><label>达成标准</label><textarea id="f_std">${esc(it.std || '')}</textarea></div>
-    ${catInputsHTML(null, null, 'i')}
-  `, () => {
-    const title = $('#f_title').value.trim();
-    if (!title) { toast('先填任务名称'); return false; }
-    const type = $('#f_type').value;
-    const assigneeNo = canAssignOthers(type) ? $('#f_assignee').value : S.me.no;
-    if (type === 'assign' && assigneeNo !== S.me.no && !empActivated(assigneeNo)) {
-      const e2 = (S.roster || []).find(x => x.no === assigneeNo);
-      toast(`${e2 ? e2.name : '这个人'} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。`);
-      return false;
-    }
-    S.tasks.push({
-      id: uid('t'), type, title, ownerNo: S.me.no, assigneeNo,
-      assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
-      start: $('#f_start').value, end: $('#f_end').value, std: $('#f_std').value.trim(),
-      status: 'todo', cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
-      imp: null, urg: null, stages: [], sourceId: it.id,
-      intakeStatus: (type === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null,
-      observers: type === 'special' ? obsPicked.slice() : []
-    });
-    const src = S.tasks.find(x => x.id === it.id);
-    if (src) src.intakeStatus = 'accepted';
-    S.intake = buildIntake(); S.members = buildMembers();
-    save(); closeModal(); render();
-    toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下派组员');
-  }, '承接');
-  obsPicked = [];
-  renderObserverList('');
-  /* 同上：知情人列表填完再拍一次快照，否则这个弹窗一打开就算「改过了」 */
-  modalSnap = modalSnapshot();
+/* 接收：一步所有权转移——这条活从此归我，进我的专项工作。
+   这里刻意不派发、不通知：接过来先自己理一遍，理完再点「派发」才把活交出去。 */
+async function acceptTask(id) {
+  try {
+    const r = await api('/api/task/accept', { method: 'POST', body: JSON.stringify({ me: S.me.no, id }) });
+    if (!r.ok) { toast(r.msg || '接收没成功'); return; }
+    await refresh(true); render();
+    toast('已接收，进「专项工作」里了。理完计划再点「派发」');
+  } catch (e) { toast('接收失败：' + e.message); }
 }
+/* 加入待办：把分给我的一段收进自己的待办，落成一条临时任务（幂等） */
+async function joinStage(taskId, stageId) {
+  try {
+    const r = await api('/api/stage/join', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: taskId, stageId }) });
+    if (!r.ok) { toast(r.msg || '加入没成功'); return; }
+    await refresh(true); render();
+    toast(r.existed ? '这一段已经在你的待办里了' : '已加入待办，进「今日待办」了');
+  } catch (e) { toast('加入失败：' + e.message); }
+}
+/* 派发：把已指定的责任人一次性交出去。派发之前，对方那边什么都没有。 */
+async function dispatchTask(id) {
+  try {
+    const r = await api('/api/task/dispatch', { method: 'POST', body: JSON.stringify({ me: S.me.no, id }) });
+    if (!r.ok) { toast(r.msg || '派发没成功'); return; }
+    await refresh(true); render();
+    toast(r.n ? `已派发 ${r.n} 段，责任人会在承接台看到` : (r.msg || '没有待派发的子任务'));
+  } catch (e) { toast('派发失败：' + e.message); }
+}
+/* 变更提醒「知道了」：按任务一次清掉 */
+async function markSeen(taskId) {
+  const ids = (S.notices || []).filter(n => n.taskId === taskId).map(n => n.id);
+  try { await api('/api/notice/seen', { method: 'POST', body: JSON.stringify({ me: S.me.no, ids }) }); } catch (e) { }
+  await refresh(true); render();
+}
+
 /* ============ 交互动作 ============ */
 function toast(msg) {
   const el = $('#toast');
@@ -1890,7 +2048,7 @@ function toast(msg) {
 function dragCheck(t, date, si) {
   if (!t) return { ok: false, why: '找不到这条任务' };
   if (t.ownerNo !== S.me.no && t.assigneeNo !== S.me.no) {
-    return { ok: false, why: '这不是你的任务，改期请找下派人' };
+    return { ok: false, why: '这不是你的任务，改期请找发布人' };
   }
   const stage = si >= 0 ? (t.stages || [])[si] : null;
   if (stage && stage.done) {
@@ -1910,7 +2068,7 @@ function dragCheck(t, date, si) {
       }
       return { ok: true };
     }
-    /* 专项/下派任务的阶段是区间：整体平移，保持阶段长短，且不能压到前后阶段 */
+    /* 专项/发布任务的阶段是区间：整体平移，保持阶段长短，且不能压到前后阶段 */
     const span = stage.end ? diffDays(stage.end, stage.start || stage.end) : 0;
     const newEnd = addDays(date, span);
     /* 相邻关系按同层算：子任务只和同父的兄弟比，顶层阶段只和顶层比。
@@ -2061,7 +2219,7 @@ function authRender(msg) {
       <button class="btn ghost" data-act="skip-mgr">暂时跳过</button>
       <button class="btn primary" data-act="confirm-mgr">确定</button>
     </div>
-    <div class="auth-hint">暂不设置也能用：下派任务、任务承接台、今日待办、常规、专项、临时任务、日历都正常。
+    <div class="auth-hint">暂不设置也能用：发布任务、任务承接台、今日待办、常规、专项、临时任务、日历都正常。
       只是你不设上级，别人就看不到你的常规工作和专项进展。
       ${S && S.me ? `<br/><span style="color:#7b8a9d">当前身份：${esc(S.me.name)} · ${esc(S.me.no)}</span>
       <span class="btn link" data-act="close-auth" style="margin-left:6px">返回工作台</span>` : ''}</div>`;
@@ -2125,7 +2283,7 @@ document.addEventListener('click', e => {
       break;
     }
     case 'skip-mgr':
-      finishAuth('已跳过。不设上级照样能下派任务，只是你不会出现在别人的「下属」名单里。可随时在设置里补。');
+      finishAuth('已跳过。不设上级照样能发布任务，只是你不会出现在别人的「下属」名单里。可随时在设置里补。');
       break;
     case 'switch-user':
     case 'open-mgr':
@@ -2248,14 +2406,23 @@ document.addEventListener('click', e => {
       if (p.pid) { toast('子任务下面不能再拆了'); break; }
       const row = el.closest('.stage');
       if (row.nextElementSibling && row.nextElementSibling.classList.contains('subadd')) break;
+      /* 编号按一级阶段的实际位置算，和左边那段圆标对得上 */
+      const no = (t.stages || []).filter(x => !x.pid).indexOf(p) + 1;
       row.insertAdjacentHTML('afterend', `<div class="subadd">
-        <input class="sname" placeholder="子任务名称，例如：取数并核对口径" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit"/>
+        <div class="subadd-h">在第 <b>${no}</b> 段「${esc(p.name)}」下面加一个子任务</div>
+        <input class="sname" placeholder="这段具体做什么，例如：取数并核对口径" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit"/>
         <div class="row">
-          <input type="date" class="sst" value="${p.start || t.start}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px"/>
-          <input type="date" class="sen" value="${p.end || t.end}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px"/>
+          <input type="date" class="sst" value="${p.start || t.start}"/>
+          <input type="date" class="sen" value="${p.end || t.end}"/>
+          <span class="lbl2">谁做</span>
+          <select class="swho" title="这段由谁做；不选就是承接人自己做">
+            <option value="">承接人自己做</option>
+            ${(S.roster || []).filter(x => x.activated).map(x => `<option value="${x.no}">${esc(x.name)}</option>`).join('')}
+          </select>
           <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
           <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
         </div>
+        <div class="mini" style="margin-top:6px;line-height:1.5">选上别人之后，点上面的「派发」，他才会在承接台收到。</div>
       </div>`);
       break;
     }
@@ -2273,8 +2440,14 @@ document.addEventListener('click', e => {
       const kids = kidsOf(t.stages, s.id);
       const from = s.start || s.date || t.start;
       const to = s.end || s.date || from;
+      /* 编号和左边那圈数字对得上，用户才知道自己在改哪一行 */
+      const tops = (t.stages || []).filter(x => !x.pid);
+      const lbl = s.pid
+        ? `${tops.findIndex(x => x.id === s.pid) + 1}.${(t.stages || []).filter(x => x.pid === s.pid).indexOf(s) + 1}`
+        : String(tops.indexOf(s) + 1);
       row.insertAdjacentHTML('afterend', `<div class="sedit" data-idx="${i}">
-        <input class="sname" value="${esc(s.name || '')}" placeholder="阶段名称"/>
+        <div class="sedit-h">改第 <b>${lbl}</b> ${s.pid ? '个子任务' : '段'}「${esc(s.name || '')}」</div>
+        <input class="sname" value="${esc(s.name || '')}" placeholder="${s.pid ? '子任务名称' : '阶段名称'}"/>
         <div class="row">
           <input type="date" class="sst" value="${from}" ${kids.length ? 'disabled' : ''}/>
           <input type="date" class="sen" value="${to}" ${kids.length ? 'disabled' : ''}/>
@@ -2345,9 +2518,18 @@ document.addEventListener('click', e => {
       const s = box.querySelector('.sst').value || p.start || t.start;
       let e2 = box.querySelector('.sen').value || s;
       if (e2 < s) e2 = s;
-      t.stages.push({ id: uid('s'), pid: p.id, name, start: s, end: e2, done: false });
+      const whoEl = box.querySelector('.swho');
+      const who = whoEl ? (whoEl.value || null) : null;
+      /* 选了具体的人先记下 who，但不写 whoAt：要等这一页上的「派发」按下去，
+         对方那边才看得到。和新建任务时的口径完全一致。 */
+      if (who && !empActivated(who)) {
+        toast(`${nameOf(who)} 还没有登录过工作台，子任务派过去他收不到。`);
+        break;
+      }
+      t.stages.push({ id: uid('s'), pid: p.id, name, start: s, end: e2, done: false, who });
       recalcParent(t.stages, p.id);
-      save(); openTaskPage(t.id); render(); toast('子任务已添加');
+      save(); openTaskPage(t.id); render();
+      toast(who ? `子任务已加，${nameOf(who)} 这一段还等你点「派发」` : '子任务已添加');
       break;
     }
     case 'stage-toggle': {
@@ -2356,6 +2538,18 @@ document.addEventListener('click', e => {
       const s = t.stages[i];
       if (!s) break;
       if (hasKids(t.stages, s)) { toast('这个阶段下面有子任务，勾子任务就行'); break; }
+      /* 不是自己的任务（我只是一段的责任人）：本地改完 save() 也发不上去，
+         因为 /api/sync 只收 owner 是我的行。走专用接口，两边同一个真相。 */
+      if (t.ownerNo !== S.me.no) {
+        (async () => {
+          try {
+            const r = await api('/api/stage/toggle', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: t.id, stageId: s.id, done: !s.done }) });
+            if (!r.ok) { toast(r.msg || '没勾上'); return; }
+            await refresh(true); openTaskPage(t.id); render();
+          } catch (e) { toast('没勾上：' + e.message); }
+        })();
+        break;
+      }
       s.done = !s.done;
       if (allLeavesDone(t)) t.status = 'done';
       else if (t.status === 'done') t.status = 'doing';
@@ -2363,8 +2557,42 @@ document.addEventListener('click', e => {
       save(); openTaskPage(t.id); render();
       break;
     }
-    case 'stage-del': {
+    case 'stage-who': {
       if (!t) break;
+      const s = t.stages[Number(el.dataset.idx)];
+      if (!s) break;
+      const no = el.value || null;
+      if (no && !empActivated(no)) {
+        toast(`${nameOf(no)} 还没有登录过工作台，子任务派过去他收不到。`);
+        el.value = s.who || '';
+        break;
+      }
+      /* 换人必须重新派发、重新加入待办：服务端也会清，这里同步清一遍，
+         否则界面上会显示「已派发」其实那边什么都没收到。 */
+      if ((s.who || null) !== no) { s.who = no; s.whoAt = null; s.joinedAt = null; }
+      save(); openTaskPage(t.id); render();
+      toast(no ? `这段已指定 ${nameOf(no)}，点「派发」他才会收到` : '已改回跟随承接人');
+      break;
+    }
+    case 'task-dispatch': dispatchTask(id); break;
+    case 'stage-join': joinStage(id, el.dataset.sid); break;
+    case 'notice-seen': markSeen(el.dataset.tid); break;
+    case 'due-set': {
+      if (!t) break;
+      const d = prompt('这条任务的总截止（YYYY-MM-DD）', t.dueDate || t.end);
+      if (!d) break;
+      (async () => {
+        try {
+          const r = await api('/api/task/due', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: t.id, date: d }) });
+          if (!r.ok) { toast(r.msg || '改不了'); return; }
+          await refresh(true); openTaskPage(t.id); render();
+          toast('总截止已改为 ' + fmt(d));
+        } catch (e) { toast('改不了：' + e.message); }
+      })();
+      break;
+    }
+    case 'intake-accept': acceptTask(id); break;
+    case 'stage-del': {      if (!t) break;
       const s = t.stages[Number(el.dataset.idx)];
       if (!s) break;
       const kids = s.id ? t.stages.filter(x => x.pid === s.id) : [];
@@ -2378,15 +2606,6 @@ document.addEventListener('click', e => {
       if (!t || !t.planDate) break;
       t.start = t.planDate; t.end = t.planDate;
       save(); openTaskPage(t.id); render(); toast('已恢复为规则日期');
-      break;
-    }
-    case 'intake-plan': openIntakeModal(id); break;
-    case 'intake-done': {
-      const it = S.tasks.find(x => x.id === id);
-      if (!it) break;
-      it.intakeStatus = 'accepted';
-      S.intake = buildIntake();
-      save(); render(); toast('已接收，留在「今日待办」里直接做');
       break;
     }
     case 'cal-nav': {
@@ -2423,6 +2642,7 @@ document.addEventListener('click', e => {
       const st = ($('#f_start') || {}).value || TODAY;
       const en = ($('#f_end') || {}).value || st;
       $('#stageRows').insertAdjacentHTML('beforeend', stageRowHTML(st, en));
+      renumberStageRows();
       break;
     }
     case 'mstage-sub': {
@@ -2435,6 +2655,7 @@ document.addEventListener('click', e => {
       while (anchor.nextElementSibling && anchor.nextElementSibling.classList.contains('sub')
         && anchor.nextElementSibling.dataset.pid === pid) anchor = anchor.nextElementSibling;
       anchor.insertAdjacentHTML('afterend', stageRowHTML(st, en, pid));
+      renumberStageRows();
       break;
     }
     case 'mstage-del': {
@@ -2450,6 +2671,7 @@ document.addEventListener('click', e => {
         }
       }
       row.remove();
+      renumberStageRows();
       break;
     }
     case 'toggle-step': {
@@ -2607,7 +2829,7 @@ document.addEventListener('change', e => {
     const prev = e.target.dataset.prev || 'special';
     const next = e.target.value;
     e.target.dataset.prev = next;
-    // 类型一换，承接人就跟着换：只有下派任务能选人，其余锁回本人
+    // 类型一换，承接人就跟着换：只有发布任务能选人，其余锁回本人
     const wrap = $('#fAssigneeWrap');
     if (wrap) wrap.innerHTML = assigneeFieldInner(next, null);
     /* 知情人只在专项任务上有意义：类型切走就把这块收起来 */

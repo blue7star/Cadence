@@ -21,11 +21,13 @@ public/changelog.js ────────┘              │
 | 模块 | 管什么（OWNED） | 不变量（坏了会怎样） |
 |---|---|---|
 | `version.js` | 版本号、每版更新内容、人读 `CHANGELOG.md` 生成、自检 | `SEMVER` 是唯一版本源且必须是 `CHANGELOG` 里最新的键；分组只能用四类；`CHANGELOG.md` 必须与 `--write` 输出逐字一致（`verify.mjs` 会比对） |
-| `server.js` 数据层 | 建表、`emp`、`task`、`rule`、`cat`、`task_observer`、`watch`、操作日志 | 表结构变更必须兼容已有 `data/workbench.db`；加字段给默认值，不改已有列含义 |
-| `server.js` 实例引擎 | `ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`：常规规则 → 当期实例 | **幂等**：同一 owner、同一规则、同一周期只能有一条实例；重复跑 `maintain` 不产生新行 |
-| `server.js` 同步 | `/api/sync`：前端提交整棵树，服务端按 id 增改删 | 只接受本人有权的任务；**后写覆盖**（已知边界）；返回新 `rev`，前端据此判断是否要重取；**下派给 `activated=0` 的人必须拒收并回 `errors`**（前端也会拦，两处文案一致） |
-| `server.js` 可见性 | `stateFor()`：本人 + 下属（常规/专项）+ 已承接 + 我作为知情人的专项 | 上级只能看到下属的常规与专项、以及下属承接后派生的任务；**下派/临时不因「他是我下属」就摊开**；知情人只多一条只读任务，不扩大别的可见范围 |
-| `public/app.js` 状态层 | 拉取 → 本地 `S` → 快照 diff → `save()` | 不直接写库；任何会改数据的交互最终都走 `save()` → `/api/sync`；`ownRows()` 只提交 `owner_no` 或 `assignee_no` 是我的行，别人的任务不会被顺手写回去 |
+| `server.js` 数据层 | 建表、`emp`、`task`、`rule`、`cat`、`task_observer`、`stage_notice`、`watch`、操作日志 | 表结构变更必须兼容已有 `data/workbench.db`；加字段给默认值，不改已有列含义。`task` 上三列各有明确归属：`publisher_no` 永不改、`owner_no` 随接收转移、`due_date` 只有发布人能改 |
+| `server.js` 实例引擎 | `ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`：常规规则 → 当期实例 | **幂等**：同一 owner、同一规则、同一周期只能有一条实例；重复跑 `maintain` 不产生新行。`INSERT` 的列名与 `run()` 参数必须成对改——加列忘补参数只能等运行时炸 |
+| `server.js` 同步 | `/api/sync`：前端提交整棵树，服务端按 id 增改删 | 只接受**编辑权在我**的任务（`owner_no=我`，或发布人在「还没被接收」时）；**后写覆盖**（已知边界）；返回新 `rev`；**下派给 `activated=0` 的人必须拒收并回 `errors`**；请求里缺的字段一律沿用库里的值（只改标题不该把日期冲掉），`stages` 缺了就整段沿用 |
+| `server.js` 动作接口 | `/api/task/accept`、`/api/task/dispatch`、`/api/stage/join`、`/api/stage/toggle`、`/api/task/due`、`/api/notice/seen` | 这六个都动「不属于我的那一行」，走不了 `/api/sync` 的归属校验，**必须各自判权**：接收只看 `assignee_no`、派发与改总截止只看 `owner_no`/`publisher_no`、加入待办与勾选只看 `stages[].who`（且必须已 `whoAt`）。生成 temp 必须带 `stage_ref` 反指，且幂等 |
+| `server.js` 可见性 | `stateFor()`：本人 + 下属（常规/专项）+ **我发布的** + 派生老数据 + 我负责某一段 + 我作为知情人的专项 | 五来源缺一就会出现「派完就断线」；子任务责任人挂在 `stages` JSON 里，SQL 过滤不到，所以整表取回再筛；`stageWhoMe` 必须要求 `whoAt` 非空——只指定不派发等于没这回事；知情人只多一条只读任务，不扩大别的可见范围 |
+| `public/app.js` 状态层 | 拉取 → 本地 `S` → 快照 diff → `save()` | 不直接写库；任何会改数据的交互最终都走 `save()` → `/api/sync`，或上面六个动作接口之一。`ownRows()` **只提交 `owner_no` 是我的行**——发布人对我已交出的任务是只读，把别人的行塞进 sync 只会换来一条 `errors`；`save()` 有 `errors` 时必须把原话告诉人，不能默默失败 |
+| `public/app.js` 阶段与分工 UI | 新建弹窗 `stageRowHTML` + `renumberStageRows`、详情页 `stageTreeHTML`、就地编辑 `sedit`、新增子任务 `subadd` | **两份 UI 各写各的，改一处必须改另一处**（issues #47：弹窗有「谁做」，详情页漏了，用户当场配不了人）。每行必须有可辨认身份：编号 `1` / `1.1` + 子行缩进竖线，不能靠两个一样的 placeholder 区分（#48）。新增子任务先写 `who` 不写 `whoAt`，等「派发」 |
 | `public/app.js` 日历 | `occOn` / `calChipHTML` / `chipLate` / `sortOcc` / `calCells` | 日历与清单**同源**（同一个 `occOn`）；月历固定上月 26 日起、排到当月最后一天；已完成不算逾期 |
 | `public/index.html` | 全部样式与三套视觉通道 | 来源=底色字色、状态=左侧色条+短文字、逾期=红框；三者互不覆盖；图例必须与卡片同形 |
 | `import-emp.js` | CSV → `emp`，含干跑与校验 | 不带 `--apply` 绝不写库；重复工号只更新不新增 |

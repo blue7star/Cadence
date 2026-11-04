@@ -1,16 +1,28 @@
 # 实践台账：ai-native-engineering @ Cadence
 
-> 本文件是 Cadence 对这套方法的**唯一实践台账**（skill 要求 exactly one）。
-> 只记「方法在这个项目上跑出了什么教训」，**不复制项目事实**——事实在下面这些指针里。
+> Cadence 对这套方法的**唯一活台账**。只记「方法在这个项目上跑出了什么教训」，不复制项目事实。
 > 观察不自动等于提案；同类观察累计 ≥2 次才提 proposal，且要独立 verdict + Human 批准。
 
 schema_version: 1
 practice_id: PRACTICE-20261104-cadence-gate-and-review
 project_id: Cadence
+task_id: TASK-20261104-cadence-review-loop
 status: EVIDENCE_READY
 created_at: 2026-11-04
+updated_at: 2026-11-04
+recorder: Planner（AI 助手）
 owner: Planner
+project_fact_owner: 由下表各指针文件各自持有；本文件只持方法层观察，不持项目事实
 prior_practice: PRACTICE-20261103-ai-native-engineering-cadence
+
+## 与旧台账的关系（exactly one）
+
+`D:\ai_project\ai-skills\practice\ai-native-engineering-cadence.md` 是**上一轮采纳的历史观察**，
+写在方法仓库里，`project_id` 同样是 Cadence。那份自本文件创建起**转为只读**，不再更新；
+Cadence 的方法层观察只写在这里。两者不是并行真相：那份是 2026-11-03 的快照，本文件是活台账。
+
+> 为什么没有物理搬迁：那份还带着「对 skill 提出的 5 条修正」和 skill 方的复验结果，
+> 属于方法仓库自己的证据链。搬走会让它断链。这里明确声明边界，比复制一份更难漂移。
 
 ## 指向的事实（只写指针）
 
@@ -19,34 +31,62 @@ prior_practice: PRACTICE-20261103-ai-native-engineering-cadence
 | 开发规矩、G 分级、提交纪律、fail_source 口径 | `AGENTS.md` |
 | 模块边界与不变量 | `docs/modules.md` |
 | 采纳了什么、拒绝什么、实测数字 | `docs/adoption-log.md` |
-| 问题归因（23 条，7 类） | `issues.md` |
+| 问题归因与分类口径 | `issues.md` |
 | 契约与复核记录 | `docs/contracts/` |
 | 复核清单 | `docs/review-checklist.md` |
 | 门禁实现与证据 | `_dev/verify.mjs`、`_dev/verify-report.json`、`.githooks/pre-commit` |
 
-## 观察（现象 + 证据位置，不下结论）
+## 观察（现象 + 根因假设，不下结论）
 
-1. **门禁会重复它要禁止的错误。** 第一版「契约状态」检查只判「有没有写 `PASS`」，于是
-   「永远不写 `PASS`」成了一条合规通道——所有契约停在 `READY_FOR_REVIEW`，门禁全绿。
-   这正是它想禁止的「没有证据算 pass」，只是换了一层皮。证据：`issues.md` #17。
+### 1. 门禁会重复它要禁止的错误
 
-2. **「摘要排除文档」和「复核记录绑树」是两条互相拉扯的要求。**
-   把 `docs/` 排除出树摘要解决了自指（契约写摘要 → 摘要变），但复核记录本身就在 `docs/contracts/`，
-   于是可以在 `--full` 之后任意改写复核记录而不触发重跑。实测：一次 `AGENTS.md` 改动发生在报告落盘 9 秒后，
-   摘要仍然匹配。解法不是二选一，而是加一条「复核对象必须等于报告里的摘要」。证据：`_dev/verify.mjs` 的 `contracts()`。
+第一版「契约状态」检查只判「有没有写 `PASS`」。结果是一条合规通道被打开：
+**永远不写 `PASS`**，全部停在 `READY_FOR_REVIEW`，门禁全绿。
+这正是它想禁止的「没有证据算 pass」，只是换了一层皮。
 
-3. **独立复核对单人项目是可行且便宜的，前提是给它一个入口。**
-   用独立子代理当 Reviewer，一次 3–5 分钟、只读、只给「契约 + 代码 + 证据报告」，不给实现理由。
-   两轮跑出 13 + 10 条问题，其中 3 条是 P1 且是「证据对不上」级别——是实现者自测不可能发现的类型。
-   证据：`docs/contracts/2026-11-03-下派自由选择与知情人.md` 第 3 段。
+根因假设：任何以「某事已发生」为条件的检查，如果没有定义「X 何时必须发生」，
+就会退化成「没人自称违规」。检查的对象是**声明**，不是**事实**。
 
-4. **契约的「差异及原因」字段可以被编造，且机器无法发现。**
-   因为该字段不要求引用第 1 段原文。实测：第 2 段写「契约原写 X」，而第 1 段根本没有 X，
-   两轮门禁 + 一次自测都没发现，是复核逐句对照原文才抓出来的。证据：`issues.md` #18。
+### 2. 「摘要排除文档」与「复核记录必须绑树」是两条互相拉扯的要求
 
-5. **`fail_source` 从 4 类扩到 7 类之后，历史问题的归类会变。**
-   项目里两条旧问题按旧口径记成 `review_miss`，按新口径应该是 `machine_gate_miss`。
-   分类错了，改的对象就错了：前者改注意力，后者改断言。证据：`issues.md` 的「已解决」表。
+把 `docs/` 排除出树摘要解决了自指（契约写摘要 → 摘要变），但复核记录本身就在 `docs/contracts/`，
+于是可以在 `--full` 之后任意改写复核记录而不触发重跑。
+
+根因假设：**「不改变运行行为的文件」和「不需要证据的文件」不是同一个集合。**
+前者可以排除出代码摘要，后者不能排除出「证据是否新鲜」的判断。需要第二把尺子（evidenceDigest）。
+
+### 3. 独立复核对单人项目可行且便宜，前提是给它一个入口
+
+用独立子代理当 Reviewer：只读、只给「契约 + 代码 + 证据报告」、不给实现理由。
+三轮里两轮打回，抓出的问题里有相当一部分是实现者自测永远发现不了的类型
+（例如「台账把未修的记成已解决」）。
+
+根因假设：实现者检查的是「我改的地方对不对」，复核检查的是「契约说的和你做的对不对得上」。
+后者需要不同的输入集，换个上下文比换个问题有效。
+
+### 4. 契约的「差异及原因」字段可以被编造，且机器无法发现
+
+该字段不要求引用第 1 段原文。实测写过一条「契约原写 X」，而第 1 段根本没有 X；
+两轮门禁 + 一次自测都没发现，是复核逐句对照原文才抓出来的。
+
+根因假设：**自述类字段没有对账物，就等于没有约束。** 要约束它，必须让它可以被机器或人对照。
+
+### 5. `fail_source` 分类变细之后，历史问题的归类会变
+
+项目里有两条旧问题按 4 类口径记成 `review_miss`，按 7 类口径应该是 `machine_gate_miss`。
+分类错了，改的对象就错了：前者改注意力，后者改断言。
+
+根因假设：分类粒度决定修复对象。粒度不够时，不同根因会被折叠成同一个标签，修法必然打偏。
+
+## 证据
+
+| 项 | 位置 |
+|---|---|
+| evidence_uri | `_dev/verify-report.json`（门禁 6 项的原始输出与树摘要） |
+| evidence_digest | DEEPDIGEST（每次 `--full` 后同步更新，内容为 `verify-report.json` 的 sha256 前 16 位） |
+| reproduction_conditions | Node 22、本机 Chromium（`_dev/e2e.mjs` 顶部路径）、服务跑在 8788、`node _dev/verify.mjs --full` |
+| 复核记录 | `docs/contracts/2026-11-03-下派自由选择与知情人.md` 第 3 段 |
+| 问题归因 | `issues.md` |
 
 ## 拟议的方法影响（未提案）
 
@@ -54,31 +94,30 @@ prior_practice: PRACTICE-20261103-ai-native-engineering-cadence
 
 | 候选 | 若成立要改什么 | 还缺什么 |
 |---|---|---|
-| 「必须有 X」类检查，必须同时定义「X 何时必须发生」 | `GATES.md` 断言写法 | 第二个项目的同类观察 |
-| 复核记录的锚点必须绑到**被验的代码摘要**，而不是文件位置 | `templates/verdict.md` | 本条已在 Cadence 验证，需换项目复现 |
-| 单人项目的 Reviewer 可用「独立 Agent 上下文」充当，成本可接受 | `references/quality-and-evidence.md` 的 `REVIEW_NOT_AVAILABLE` 兜底 | 需确认这不是 Cadence 特有（模型能力/项目规模） |
+| 「必须有 X」类断言，必须同时定义「X 何时必须发生」 | `GATES.md` 的断言写法 | 第二个项目的同类观察 |
+| 复核记录的锚点绑到「被验的代码摘要」，而不是文件位置 | `templates/verdict.md` | 已在 Cadence 验证，需换项目复现 |
+| 单人项目的 Reviewer 可用「独立 Agent 上下文」充当 | `references/quality-and-evidence.md` 的 `REVIEW_NOT_AVAILABLE` 兜底 | 需确认不是 Cadence 特有（模型能力 / 项目规模） |
 | 契约「差异段」应要求引用第 1 段原文片段 | `templates/task.md` | 需验证引用会不会变成新的形式主义 |
 
 ## 不晋升的理由
 
 - 全部观察来自同一个项目、同一个执行者，样本量 1。
-- 前两条是**工具实现缺陷**，可能只存在于 Cadence 的自建门禁，不代表方法本身。
+- 前两条是**工具实现缺陷**，只存在于 Cadence 的自建门禁，不代表方法本身。
 - 第 3 条依赖「有独立子代理」这个环境条件，不是所有采纳方都有。
 
 ## 冲突与成本
 
 - **成本**：一份契约走完「写 → 实现 → 跑 full → 复核 → 改 → 再复核 → 填第 3 段」，比原来多约 20–30 分钟。
   对 G2 值得；对 G0/G1 不值，所以契约仍只在 G2 写。
-- **冲突**：`docs/` 排除出摘要让文档改动不需要证据，但「复核记录」也是文档。
-  这是**有意接受的缺口**，缓解手段是把复核对象绑到代码摘要（观察 2）。
-- **维护成本**：`contracts()` 的正则要跟着模板字段走；模板改字段而门禁不改，检查会静默失效。
-  缓解：模板字段名在 `verify.mjs` 里集中成常量，改一处。
+- **冲突**：`docs/` 排除出代码摘要，但「复核记录」也是文档。缓解手段是 evidenceDigest + 复核对象绑代码摘要。
+- **维护成本**：`contracts()` 的字段正则跟着模板走；模板改字段而门禁不改，检查会静默失效。
+  当前没有抽成常量，改模板时要同步搜 `verify.mjs` 里的字段名。
 
 ## 生命周期
 
 ```
-OBSERVED (2026-11-03，首次采纳的记录在 ai-skills/practice/)
-  -> EVIDENCE_READY (2026-11-04，本轮：2 轮独立复核 + 门禁 6 项 + e2e 103 项)
+OBSERVED (2026-11-03，上一轮记录在 ai-skills/practice/，已转只读)
+  -> EVIDENCE_READY (2026-11-04，本轮：三轮独立复核 + 门禁 6 项 + e2e 全绿)
 ```
 
 未进入 `PROPOSED`：proposal_id / proposal_version / proposal_digest 均为空。

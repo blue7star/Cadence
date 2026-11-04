@@ -253,11 +253,21 @@ tbody tr:hover{background:#fafbfd}
 .stage .t small{display:block;color:var(--ink3);font-size:11px}
 /* 子任务：缩进一级、底色压一档、圆圈小一号，一眼看出从属关系 */
 .stage.sub{padding:6px 8px 6px 20px;margin-top:2px;border-bottom:0;border-radius:7px;background:#f7f8fa}
-.stage.sub .n{width:16px;height:16px;flex:0 0 16px;font-size:9px;background:#fff;border:1px solid #b6c2d4;color:#fff}
+/* 子任务的圆圈里写「1.1」这样的编号：光靠缩进，用户分不清它是第几段下面的第几件事 */
+.stage.sub .n{width:26px;height:17px;flex:0 0 26px;border-radius:5px;font-size:9.5px;font-weight:600;
+  background:#fff;border:1px solid #c9d5e6;color:var(--ink3);letter-spacing:-.2px}
 .stage.sub.on .n{background:var(--ok);border-color:var(--ok);color:#fff}
 .stage.sub .t{font-size:12px}
-.subadd{margin:6px 0 10px 20px;padding:8px;border:1px dashed #9dbcff;border-radius:9px;background:#f7faff}
-.subadd .row{display:flex;gap:6px;margin-top:6px}
+.who-sel{font-size:11px;padding:2px 4px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink2);max-width:118px}
+.stage.sub .t .tag{margin-left:6px;font-size:10px}
+.subadd{margin:6px 0 10px 20px;padding:9px 10px;border:1px dashed #9dbcff;border-radius:9px;background:#f7faff}
+.subadd-h{font-size:12px;color:var(--ink2);margin-bottom:7px;line-height:1.45}
+.subadd-h b,.sedit-h b{color:#3b6ef0;font-weight:600}
+.sedit-h{font-size:12px;color:var(--ink2);margin-bottom:7px;line-height:1.45}
+.subadd .row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.subadd .row .lbl2{flex:0 0 auto;font-size:11px;color:var(--ink3)}
+.subadd select.swho{flex:0 0 116px;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
+.subadd input[type=date]{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
 /* 阶段就地编辑：和「+子」的展开框长一个样，用户不用学两套 */
 .sedit{margin:6px 0 8px;padding:9px;border:1px solid #9dbcff;border-radius:9px;background:#f7faff}
 .sedit .sname{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit}
@@ -265,15 +275,22 @@ tbody tr:hover{background:#fafbfd}
 .sedit input[type=date]{border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
 .sedit input:disabled{background:#eef1f6;color:var(--ink3)}
 /* 子任务不做第二层卡片，否则和父行一样重：缩进 + 一道竖线，父子关系更直接 */
-.mrow.sub{margin-left:22px;padding:6px 0 6px 10px;background:transparent;border:0;border-left:2px solid #dbe3ee;border-radius:0}
+.mrow.sub{margin-left:20px;padding:7px 0 7px 11px;background:transparent;border:0;border-left:3px solid #d3e0f2;border-radius:0}
 .mrow .row2 .addsub{flex:0 0 auto;border:0;background:none;color:#3b6ef0;cursor:pointer;font-size:11px;padding:0 4px;line-height:1}
 .mrow .row2 .addsub:hover{text-decoration:underline}
 .mrow{border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px;background:#fff}
-.mrow .sname{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;margin-bottom:6px;font-family:inherit;outline:none}
+/* 编号是这一行的身份：不给它，「阶段名称」和「子任务名称」两个框长得一模一样，用户认不出谁是谁 */
+.mrow-h{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.sno{flex:0 0 auto;min-width:23px;height:19px;display:inline-flex;align-items:center;justify-content:center;
+  padding:0 5px;border-radius:5px;background:#eef4ff;color:#3b6ef0;font-size:11px;font-weight:600;letter-spacing:-.2px}
+.mrow.sub .sno{background:#eef1f6;color:#64748b;border-radius:5px 0 0 5px}
+.mrow .sname{flex:1;min-width:0;width:auto;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;outline:none}
 .mrow .sname:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
 .mrow .row2{display:flex;gap:6px;align-items:center}
+.mrow .row2 .lbl2{flex:0 0 auto;font-size:11px;color:var(--ink3);margin-left:2px}
 .mrow .row2 .del{flex:0 0 20px}
 .mrow .row2 input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit;outline:none}
+.mrow .row2 select.swho{flex:0 0 118px;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
 .mrow .del{border:0;background:none;color:#b6bcc8;cursor:pointer;font-size:14px;padding:0 2px;line-height:1}
 .mrow .del:hover{color:#dc2626}
 .stage.done .t s{color:var(--ink3)}
@@ -413,7 +430,7 @@ tbody tr:hover{background:#fafbfd}
 .noauth-bar{display:flex;align-items:center;gap:8px;font-size:12px;background:#fff7ed;border:1px solid #f4ddc0;
   color:#9a5b12;border-radius:9px;padding:8px 11px;margin-bottom:12px}
 
-/* ---------- 下派任务页：专项推进 / 我关注的任务 / 知情人选择 ---------- */
+/* ---------- 发布任务页：专项推进 / 我关注的任务 / 知情人选择 ---------- */
 .card-h.fold{cursor:pointer;user-select:none}
 .card-h.fold:hover{background:#f6f9fd}
 .follow-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);
@@ -456,11 +473,11 @@ tbody tr:hover{background:#fafbfd}
     <div class="auth-left">
       <div class="mark">C</div>
       <h2>Cadence · 初级管理者工作台</h2>
-      <p class="lead">把下派任务、常规节点、专项拆解和日历待办放在同一个界面，不再靠追问和周会同步进度。</p>
+      <p class="lead">把发布任务、常规节点、专项拆解和日历待办放在同一个界面，不再靠追问和周会同步进度。</p>
       <div class="pt"><i>1</i><div><b>你的今日待办</b>：上级派的、自己的、常规该做的，都在一处</div></div>
-      <div class="pt"><i>2</i><div><b>你下派的任务</b>：只进组员的日历，不占用你的日程</div></div>
+      <div class="pt"><i>2</i><div><b>你发布的任务</b>：交出去之后归对方管，你在这里看进度</div></div>
       <div class="pt"><i>3</i><div><b>下属的常规工作</b>：默认只看汇总，想看细节再「关注」</div></div>
-      <div class="pt"><i>4</i><div><b>承接上级任务</b>：接收 → 拆分 → 转专项或临时</div></div>
+      <div class="pt"><i>4</i><div><b>接别人的活</b>：接收后进你的专项，理完计划再派发</div></div>
       <div class="foot">一期使用<b>工号 + 姓名</b>登录（免密码），工号需与花名册一致。<br/>汇报关系由本人首次登录时选择，一个直属上级。</div>
     </div>
     <div class="auth-right" id="authBody"></div>
@@ -479,7 +496,7 @@ tbody tr:hover{background:#fafbfd}
       <div class="nav-item" data-view="routine"><span class="ic">↻</span>常规工作</div>
       <div class="nav-item" data-view="special"><span class="ic">◆</span>专项工作</div>
       <div class="nav-group">协作</div>
-      <div class="nav-item" data-view="assign"><span class="ic">▤</span>下派任务</div>
+      <div class="nav-item" data-view="assign"><span class="ic">▤</span>发布任务</div>
       <div class="nav-item" data-view="intake"><span class="ic">⌥</span>任务承接台<span class="badge" id="intakeBadge" style="display:none"></span></div>
       <div class="nav-group">配置</div>
       <div class="nav-item" data-view="settings"><span class="ic">⚙</span>设置</div>

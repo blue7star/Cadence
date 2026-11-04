@@ -240,7 +240,7 @@ async function main() {
   /* 导航分组定死：自己的事归「我的工作」，跟组员往来的两件归「协作」 */
   const navShape = await js(`(function(){const out=[];document.querySelectorAll('#nav > div').forEach(d=>{
     out.push(d.classList.contains('nav-group') ? '#'+d.textContent.trim() : d.dataset.view)});return out})()`);
-  check('导航按「我的工作 / 协作 / 配置」分组，日历待办归自己、下派与承接归协作',
+  check('导航按「我的工作 / 协作 / 配置」分组，日历待办归自己、发布与承接归协作',
     JSON.stringify(navShape) === JSON.stringify(['#我的工作', 'today', 'calendar', 'routine', 'special', '#协作', 'assign', 'intake', '#配置', 'settings']),
     JSON.stringify(navShape));
 
@@ -630,12 +630,12 @@ async function main() {
     routine:{bg:'rgb(232, 247, 244)',color:'rgb(11, 122, 109)'},
     special:{bg:'rgb(243, 237, 255)',color:'rgb(109, 40, 217)'},
     temp:{bg:'rgb(255, 244, 227)',color:'rgb(180, 83, 9)'}};
-  check('来源恢复最初的底色和字色：下派蓝、常规青、专项紫、临时橙',
+  check('来源恢复最初的底色和字色：发布蓝、常规青、专项紫、临时橙',
     Object.keys(srcExpected).every(k=>!!srcVis[k]&&srcVis[k].bg===srcExpected[k].bg&&srcVis[k].color===srcExpected[k].color),
     JSON.stringify(srcVis));
   check('图例分开写来源与状态，并列出已逾期',
     cv.legend.includes('来源') && cv.legend.includes('状态') &&
-    ['下派','常规','专项','临时'].every(x=>cv.legend.includes(x)) &&
+    ['发布','常规','专项','临时'].every(x=>cv.legend.includes(x)) &&
     ['待开展','进行中','暂缓','已完成','已逾期'].every(x=>cv.legend.includes(x)),
     JSON.stringify(cv.legend));
 
@@ -936,6 +936,18 @@ async function main() {
       body: JSON.stringify(Object.assign({ me:'${m}' }, ${JSON.stringify(b)})) });
     return (await r.json()).ok === true;
   })()`);
+  /* 同上，但把整个回包带回来：`ok:true` 只代表请求没炸，被拒的条目在 errors 里 */
+  const pushJ = (m, b) => js(`(async()=>{
+    const r = await fetch('/api/sync', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({ me:'${m}' }, ${JSON.stringify(b)})) });
+    return await r.json();
+  })()`);
+  /* 0.7.0 的动作接口：接收 / 派发 / 加入待办 / 勾选 / 改总截止 / 提醒已读 */
+  const act = (p, b) => js(`(async()=>{
+    const r = await fetch('${p}', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(${JSON.stringify(b)}) });
+    return await r.json();
+  })()`);
   await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
   await goto(BASE); await sleep(1200);
   await push('1012', { tasks: [{ id: SRC, ownerNo: '1012', assigneeNo: '1002', type: 'assign',
@@ -952,13 +964,13 @@ async function main() {
 
   const carry = await js(`(function(){const el=document.querySelector('.carry');
     return el ? { id: el.dataset.id, txt: el.innerText.replace(/\\s+/g,' ') } : null})()`);
-  check('上级在下派任务里看到承接后的进展', !!carry && carry.id === CARRIED && carry.txt.includes('50%'),
+  check('上级在发布任务里看到承接后的进展', !!carry && carry.id === CARRIED && carry.txt.includes('50%'),
     JSON.stringify(carry).slice(0, 160));
 
   /* 行尾按钮：说的是「查看」，不是含糊的「管理」 */
   const rowBtn = await js(`(function(){const b=[...document.querySelectorAll('#view table button[data-act="open"]')][0];
     return b ? b.innerText.trim() : ''})()`);
-  check('下派任务行尾按钮叫「查看」而不是「管理」', rowBtn === '查看', rowBtn);
+  check('发布任务行尾按钮叫「查看」而不是「管理」', rowBtn === '查看', rowBtn);
 
   await js(`document.querySelector('.carry').click();'ok'`);
   await sleep(600);
@@ -978,8 +990,8 @@ async function main() {
       tags: [...document.querySelectorAll('.td-head .split .tag')].map(x=>x.innerText.trim()).join('|'),
       formFields: document.querySelectorAll('#view [data-field]').length,
       kv: document.querySelectorAll('#view .kv').length } : null})()`);
-  check('承接任务对上级只读：没有表单控件，改用键值表展示，且标注「承接」而非「下派」',
-    !!ro && ro.readonly === true && String(ro.tags).includes('承接') && !String(ro.tags).includes('下派')
+  check('承接任务对上级只读：没有表单控件，改用键值表展示，且标注「承接」而非「发布」',
+    !!ro && ro.readonly === true && String(ro.tags).includes('承接') && !String(ro.tags).includes('发布')
       && ro.formFields <= 1 && ro.kv >= 5,
     JSON.stringify(ro).slice(0, 200));
   await shot('11-assign-carry');
@@ -989,17 +1001,34 @@ async function main() {
   await push('1012', { del: { tasks: [SRC] } });
   await push('1002', { del: { tasks: [CARRIED, SRC] } });
 
-  /* ---------- 9.3 「待接收」不会挂在已经推进的任务上 ---------- */
+  /* ---------- 9.3 「待接收」只由「接收」解除，不靠改状态顺带 ----------
+     0.7.0 之前：状态一改成进行中，服务端顺手把 intake 也标成已接收。
+     现在接收 = 所有权转移，是一个明确的动作；没接收之前这条根本不归承接人，
+     他连改都改不动——所以「进行中 + 待接收」这种矛盾组合从源头上不可能出现。 */
   const AUTO = 't_e2e_auto';
-  await push('1012', { tasks: [{ id: AUTO, ownerNo: '1012', assigneeNo: '1002', type: 'assign',
-    title: 'E2E自动落定', start: '2026-11-03', end: '2026-11-06', status: 'todo', intakeStatus: 'pending' }] });
-  // 下属在日历/抽屉里把状态改成进行中，此时前端对象里的 intakeStatus 仍是 pending
-  await push('1002', { tasks: [{ id: AUTO, ownerNo: '1012', assigneeNo: '1002', type: 'assign',
-    title: 'E2E自动落定', start: '2026-11-03', end: '2026-11-06', status: 'doing', intakeStatus: 'pending' }] });
+  const AUTO_T = { ownerNo: '1012', assigneeNo: '1002', type: 'assign',
+    title: 'E2E自动落定', start: '2026-11-03', end: '2026-11-06' };
+  await push('1012', { tasks: [Object.assign({ id: AUTO, status: 'todo', intakeStatus: 'pending' }, AUTO_T)] });
+  const autoPre = await pushJ('1002', { tasks: [Object.assign({ id: AUTO, status: 'doing', intakeStatus: 'pending' }, AUTO_T)] });
+  const autoPreDb = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
+    const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo}:null})()`);
+  check('还没接收就想把它推进到进行中：写不进去，仍旧挂在发布人那边等接收',
+    (autoPre.rows | 0) === 0 && (autoPre.errors || []).length >= 1
+      && !!autoPreDb && autoPreDb.status === 'todo' && autoPreDb.intake === 'pending' && autoPreDb.owner === '1012',
+    JSON.stringify({ rows: autoPre.rows, errors: autoPre.errors, db: autoPreDb }));
+
+  const autoAcc = await act('/api/task/accept', { me: '1002', id: AUTO });
+  const autoAccDb = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
+    const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo,type:t.type}:null})()`);
+  check('接收之后才归他：所有权转过去、进他的专项，也没多出第二条任务',
+    !!autoAcc.ok && !!autoAccDb && autoAccDb.owner === '1002' && autoAccDb.type === 'special'
+      && autoAccDb.intake === 'accepted', JSON.stringify(autoAccDb));
+
+  await push('1002', { tasks: [Object.assign({ id: AUTO, status: 'doing', intakeStatus: 'accepted' }, AUTO_T)] });
   const auto = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
     const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus}:null})()`);
-  check('任务一推进到进行中，就不再挂「待接收」',
-    !!auto && auto.status === 'doing' && auto.intake === 'accepted', JSON.stringify(auto));
+  check('接完之后状态才改得动（进行中不会再和「待接收」并存）',
+    !!auto && auto.status === 'doing' && auto.intake !== 'pending', JSON.stringify(auto));
 
   const mixed = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
     return j.tasks.filter(t=>t.intakeStatus==='pending'&&t.status!=='todo').map(t=>t.title)})()`);
@@ -1046,7 +1075,7 @@ async function main() {
     await push('1012', { del: { tasks: [made.id] } });
   }
 
-  /* ---------- 9.41 类型由入口钉死：下派页只能建下派任务 ---------- */
+  /* ---------- 9.41 类型由入口钉死：发布页只能建发布任务 ---------- */
   await nav('assign'); await sleep(500);
   await js(`document.querySelector('[data-act="new"][data-type="assign"]').click();'ok'`);
   await sleep(400);
@@ -1055,35 +1084,40 @@ async function main() {
     return { hasSelect: !!w.querySelector('select'),
       opts: w.querySelector('select') ? w.querySelector('select').options.length : 0,
       typeSelect: !!document.querySelector('#modal #f_type'), typeLock: (tl||{}).innerText||'' }})()`);
-  check('新建下派任务：类型写死为「下派任务」，弹窗里没有可改的下拉',
-    !!lockA && lockA.typeSelect === false && lockA.typeLock.includes('下派任务'), JSON.stringify(lockA).slice(0, 160));
-  check('新建下派任务：承接人下拉还在，能选人', !!lockA && lockA.hasSelect && lockA.opts >= 2, JSON.stringify(lockA));
+  check('新建发布任务：类型写死为「发布任务」，弹窗里没有可改的下拉',
+    !!lockA && lockA.typeSelect === false && lockA.typeLock.includes('发布任务'), JSON.stringify(lockA).slice(0, 160));
+  check('新建发布任务：承接人下拉还在，能选人', !!lockA && lockA.hasSelect && lockA.opts >= 2, JSON.stringify(lockA));
 
   /* 不动类型直接建，落库必须是 assign——哪天有人把下拉加回来，这条会红 */
-  await js(`(function(){document.querySelector('#f_title').value='E2E下派：只能是下派任务';
+  await js(`(function(){document.querySelector('#f_title').value='E2E发布：只能是发布任务';
     const s=document.querySelector('#f_assignee'); if(s) s.value='1002';
     document.querySelector('#modal [data-act="modal-ok"]').click(); return 'ok'})()`);
   await sleep(1000);
   const madeAssign = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
-    const t=j.tasks.filter(x=>x.title==='E2E下派：只能是下派任务').pop();
+    const t=j.tasks.filter(x=>x.title==='E2E发布：只能是发布任务').pop();
     return t?{id:t.id,type:t.type,assignee:t.assigneeNo,intake:t.intakeStatus}:null})()`);
-  check('下派页建出来的就是下派任务，承接人按选的人落库',
+  check('发布页建出来的就是发布任务，承接人按选的人落库',
     !!madeAssign && madeAssign.type === 'assign' && madeAssign.assignee === '1002', JSON.stringify(madeAssign));
   if (madeAssign) {
     await push('1012', { del: { tasks: [madeAssign.id] } });
     await push('1002', { del: { tasks: [madeAssign.id] } });
   }
 
-  /* 界面之外再兜一层：直接写接口把专项塞给别人，也该落回本人 */
+  /* 界面之外再兜一层：直接写接口把「专项 + 别人承接」塞进去。
+     服务端按承接人定类型（决策①）：承接人是别人 → 这条只能是发布任务，
+     不会造出一条「挂在别人名下、我还看不见」的专项。 */
   const GUARD = 't_e2e_guard_special';
   await push('1012', { tasks: [{ id: GUARD, ownerNo: '1012', assigneeNo: '1002', type: 'special',
     title: 'E2E绕过界面塞给别人', start: '2026-11-03', end: '2026-11-06', status: 'todo' }] });
   const guard = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
-    const t=j.tasks.find(x=>x.id==='${GUARD}'); return t?{assignee:t.assigneeNo}:null})()`);
-  check('绕过界面直接写接口，专项也落回本人', !!guard && guard.assignee === '1012', JSON.stringify(guard));
+    const t=j.tasks.find(x=>x.id==='${GUARD}');
+    return t?{assignee:t.assigneeNo,type:t.type,owner:t.ownerNo,intake:t.intakeStatus}:null})()`);
+  check('绕过界面写「专项 + 承接人=别人」：按承接人落成发布任务，不会冒出别人的专项',
+    !!guard && guard.assignee === '1002' && guard.type === 'assign'
+      && guard.owner === '1012' && guard.intake === 'pending', JSON.stringify(guard));
   await push('1012', { del: { tasks: [GUARD] } });
 
-  /* 下派任务换承接人要真正落库（原来抽屉改完刷新就回去） */
+  /* 发布任务换承接人要真正落库（原来抽屉改完刷新就回去） */
   const SWAP = 't_e2e_swap';
   await push('1012', { tasks: [{ id: SWAP, ownerNo: '1012', assigneeNo: '1002', type: 'assign',
     title: 'E2E换承接人', start: '2026-11-03', end: '2026-11-06', status: 'todo', intakeStatus: 'pending' }] });
@@ -1091,20 +1125,20 @@ async function main() {
     title: 'E2E换承接人', start: '2026-11-03', end: '2026-11-06', status: 'todo', intakeStatus: 'pending' }] });
   const swap = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
     const t=j.tasks.find(x=>x.id==='${SWAP}'); return t?{assignee:t.assigneeNo,intake:t.intakeStatus}:null})()`);
-  check('下派任务换承接人真正落库，并重新变成待接收',
+  check('发布任务换承接人真正落库，并重新变成待接收',
     !!swap && swap.assignee === '1003' && swap.intake === 'pending', JSON.stringify(swap));
   await push('1012', { del: { tasks: [SWAP] } });
   await push('1003', { del: { tasks: [SWAP] } });
 
-  /* ---------- 9.45 下派自由选人 + 专项知情人 + 下派页四模块 ---------- */
+  /* ---------- 9.45 发布自由选人 + 专项知情人 + 发布页四模块 ---------- */
   await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
   await goto(BASE); await sleep(1200);
   await nav('assign'); await sleep(500);
 
-  /* 四个模块、顺序固定 */
+  /* 四个模块、顺序固定；第一块 0.7.0 起叫「我发布的任务」——这一页是发布口，不是「我的活」 */
   const blocks = await js(`[...document.querySelectorAll('#view .card-h h2')].map(h=>h.textContent.trim())`);
-  check('下派任务页按「我下派的任务 → 下属常规 → 下属专项 → 我关注的任务」四块排',
-    JSON.stringify(blocks) === JSON.stringify(['我下派的任务', '下属常规工作推进情况', '下属专项工作推进情况', '我关注的任务']),
+  check('发布页按「我发布的任务 → 下属常规 → 下属专项 → 我关注的任务」四块排',
+    JSON.stringify(blocks) === JSON.stringify(['我发布的任务', '下属常规工作推进情况', '下属专项工作推进情况', '我关注的任务']),
     JSON.stringify(blocks));
 
   /* 下属专项默认折叠：收着的时候一条专项都不渲染，点标题才展开 */
@@ -1192,12 +1226,77 @@ async function main() {
     srvBlock.errors.length >= 1 && srvBlock.errors[0].includes('还没有登录过工作台') && srvBlock.exists === false,
     JSON.stringify(srvBlock).slice(0, 200));
 
-  /* 不再要求下派人自己有直属上级：页面上不该再挂「先设直属上级」那条拦截 */
-  const mgrBlock = await js(`(function(){
+  /* 只能在本人名下建任务。
+     老守卫判的是「owner 不是我 且 承接人不是我」——发一条
+     「owner 是别人、承接人是我」的请求就两头都不沾：守卫放行，落库的 owner 却是别人。
+     结果是我能往别人名下塞一条连我自己都看不见的任务，专项「只归自己办」直接破。
+     验法不能只看「有没有报错」，还要看对方名下是不是真的没多出这条。 */
+  const ownGuard = await js(`(async()=>{
+    const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(b)});
+    /* 先清残留：上一轮要是真漏进来了，这条会一直红着，看起来像修复没生效 */
+    await P({me:'1101',del:{tasks:['e2e_owner_guard']}});
+    await P({me:'1012',del:{tasks:['e2e_owner_guard']}});
+    const r=await P({me:'1012',tasks:[{id:'e2e_owner_guard',type:'special',title:'E2E替别人建',
+        ownerNo:'1101',assigneeNo:'1012',start:'2026-11-04',end:'2026-11-06',status:'todo',stages:[]}]});
+    const j=await r.json();
+    const st=await (await fetch('/api/state?me=1101')).json();
+    return {errors:(j.errors||[]).length, rows:j.rows|0,
+      atOther:(st.tasks||[]).some(t=>t.id==='e2e_owner_guard')};})()`);
+  check('替别人建任务被拒：对方名下不会多出一条「我自己都看不见」的活',
+    ownGuard.errors >= 1 && ownGuard.atOther === false, JSON.stringify(ownGuard));
+
+  /* 不再要求发布人自己有直属上级。
+     原来的写法是在 1012 身份下看「页面上有没有那条拦截」——可 1012 有上级（1001），
+     旧版的拦截本来就不会出现，这条断言在修复前也是绿的，等于什么都没验。
+     要验就得换成真的没有上级的人：1001（部门经理，mgr_no 为空）与 1101/1102 都是。 */
+  await js(`localStorage.clear(); sessionStorage.clear(); 'ok'`);
+  await goto(BASE);
+  await js(`(function(){document.querySelector('#a_no').value='1001';
+    document.querySelector('#a_name').value='张启明';
+    document.querySelector('[data-act=do-login]').click();return 'ok'})()`);
+  await sleep(1600);
+  if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+    await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
+  }
+  await nav('assign'); await sleep(600);
+  const noMgr = await js(`(function(){
     const v=document.querySelector('#view');
-    return {bar:!!v.querySelector('.noauth-bar'), blocked:/先设置直属上级|暂不可用/.test(v.innerText)};})()`);
-  check('下派页不再挂「先设直属上级才能下派」的拦截',
-    mgrBlock.bar === false && mgrBlock.blocked === false, JSON.stringify(mgrBlock));
+    const btn=document.querySelector('[data-act="new"][data-type="assign"]');
+    return {bar:!!v.querySelector('.noauth-bar'), blocked:/先设置直属上级|暂不可用/.test(v.innerText),
+      hasBtn:!!btn};})()`);
+  check('没有直属上级的人也能进发布页、创建按钮可用（不再要求先设上级）',
+    noMgr.bar === false && noMgr.blocked === false && noMgr.hasBtn === true, JSON.stringify(noMgr));
+
+  /* 再验一步：真的建得出来。只验「按钮在」等于只验了半条 */
+  const madeByNoMgr = await js(`(async()=>{
+    document.querySelector('[data-act="new"][data-type="assign"]').click();
+    await new Promise(r=>setTimeout(r,450));
+    const t=document.querySelector('#f_title'); if(!t) return {noForm:true};
+    t.value='E2E无上级也能派';
+    const s=document.querySelector('#f_start'), e=document.querySelector('#f_end');
+    if(s) s.value='2026-11-04'; if(e) e.value='2026-11-06';
+    document.querySelector('#modal [data-act="modal-ok"]').click();
+    await new Promise(r=>setTimeout(r,900));
+    const st=await (await fetch('/api/state?me=1001')).json();
+    const row=(st.tasks||[]).find(x=>x.title==='E2E无上级也能派');
+    return {created:!!row, owner:row&&row.ownerNo, blocked:/先设置直属上级/.test(document.body.innerText)};})()`);
+  check('没有上级的人点创建真的能落地一条任务',
+    madeByNoMgr.created === true && madeByNoMgr.owner === '1001' && madeByNoMgr.blocked === false,
+    JSON.stringify(madeByNoMgr));
+  await js(`(async()=>{const st=await (await fetch('/api/state?me=1001')).json();
+    const row=(st.tasks||[]).find(x=>x.title==='E2E无上级也能派');
+    if(row) await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({me:'1001',del:{tasks:[row.id]}})});
+    return 'ok'})()`);
+
+  /* 切回 1012 继续后面的用例 */
+  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
+  await goto(BASE); await sleep(1500);
+  if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+    await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
+  }
+  await nav('assign'); await sleep(500);
 
   /* 专项知情人：可选没登录过的人（知情不依赖对方账号） */
   await nav('special'); await sleep(400);
@@ -1228,6 +1327,43 @@ async function main() {
   check('知情人选没登录过的人也不阻断，专项照常建成并记下名单',
     !!obsSaved && obsSaved.observers.includes('1101'), JSON.stringify(obsSaved).slice(0, 160));
 
+  /* 只改标题时，提交体里到底带不带 observers？
+     这一条必须走**页面自己的保存路径**（`persist()`），不能直接 fetch：
+     原来那条「另一个标签页只改标题、没带名单」是手写的请求体，本来就不带 observers，
+     所以它在修复前也是绿的——只证明了服务端「没提交 ≠ 清空」，没证明前端不再把旧名单捎上去。
+     这里拦住 window.fetch，让用户只改标题，看真正发出去的那份 body 里有没有 observers。 */
+  if (obsSaved) {
+    await js(`openTaskPage(${JSON.stringify(obsSaved.id)});'ok'`); await sleep(500);
+    const capBody = await js(`(async()=>{
+      const orig=window.fetch, seen=[];
+      window.fetch=function(u,o){ try{ if(String(u).includes('/api/sync')&&o&&o.body) seen.push(JSON.parse(o.body)); }catch(e){}
+        return orig.apply(this,arguments); };
+      const inp=document.querySelector('#dTitle');
+      if(!inp) { window.fetch=orig; return {noInput:true}; }
+      inp.value=${JSON.stringify(OBS_TASK + '（改名）')};
+      inp.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,1200));
+      window.fetch=orig;
+      const hit=seen.find(b=>(b.tasks||[]).some(t=>t.id===${JSON.stringify(obsSaved.id)}));
+      const row=hit&&hit.tasks.find(t=>t.id===${JSON.stringify(obsSaved.id)});
+      const st=await (await fetch('/api/state?me=1012')).json();
+      const t=st.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
+      return {sent:!!row, hasObservers:!!(row&&'observers' in row),
+        title:t&&t.title, observers:(t&&t.observers)||[]};})()`);
+    check('只改标题时，提交的那一份 body 里不带 observers（旧副本不会把名单写回去）',
+      capBody.sent === true && capBody.hasObservers === false
+        && capBody.title === OBS_TASK + '（改名）' && capBody.observers.includes('1101'),
+      JSON.stringify(capBody).slice(0, 240));
+    await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`);
+    await sleep(300);
+    /* 名字改回来了，后面按原标题找这条 */
+    await js(`(async()=>{await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({me:'1012',tasks:[{id:${JSON.stringify(obsSaved.id)},type:'special',
+        title:${JSON.stringify(OBS_TASK)},ownerNo:'1012',assigneeNo:'1012',
+        start:'2026-11-03',end:'2026-11-30',status:'doing',stages:[]}]})});return 'ok'})()`);
+    await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
+  }
+
   /* 知情人视角：能在「我关注的任务」里看到这条，且只有查看权 */
   if (obsSaved) {
     await js(`localStorage.setItem('pm_mvp_me','1101');'ok'`);
@@ -1254,6 +1390,18 @@ async function main() {
     check('知情人打开这条专项是只读：改不了、也删不掉知情人',
       obsRo.readonly === true && obsRo.obsDel === 0 && obsRo.obsAdd === false,
       JSON.stringify(obsRo));
+
+    /* 名单本身也是信息：知道「还有谁在知情」等于知道谁在被观察。
+       只验「没有删按钮」不够——接口要是把名单回给知情人，页面照样能渲染出姓名。 */
+    const obsLeak = await js(`(async()=>{
+      const st=await (await fetch('/api/state?me=1101')).json();
+      const t=st.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
+      return {observers:(t&&t.observers)||[], flagged:!!(t&&t.observer),
+        pageHasObsCard:!!document.querySelector('#view [data-act="obs-del"]')};})()`);
+    check('知情人拿不到名单：接口回给他的 observers 是空的，页面上也没有知情人人名',
+      Array.isArray(obsLeak.observers) && obsLeak.observers.length === 0
+        && obsLeak.flagged === true && obsLeak.pageHasObsCard === false,
+      JSON.stringify(obsLeak));
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`);
     await sleep(300);
 
@@ -1274,7 +1422,183 @@ async function main() {
       obsWrite.rows === 0 && obsWrite.errors >= 1
         && obsWrite.title === OBS_TASK && obsWrite.status !== 'done', JSON.stringify(obsWrite));
 
+    /* 服务端语义：请求体里没有这条任务/没有这个字段 ≠ 清空名单。
+       注意这条**不测前端**——它手写的 body 本来就不带 observers，修复前后都绿；
+       前端那半条在上面「只改标题时提交体里不带 observers」里验。 */
+    const keepObs = await js(`(async()=>{
+      await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({me:'1012',tasks:[{id:${JSON.stringify(obsSaved.id)},type:'special',
+          title:${JSON.stringify(OBS_TASK)},ownerNo:'1012',assigneeNo:'1012',
+          start:'2026-11-03',end:'2026-11-30',status:'doing',stages:[]}]})});
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=j.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
+      return {observers:(t&&t.observers)||[],status:t&&t.status};})()`);
+    check('服务端：请求里没带 observers 就原样保留，不当成清空',
+      keepObs.observers.includes('1101') && keepObs.status === 'doing', JSON.stringify(keepObs));
+
+    /* 跨级发布的闭环：派给非直接下属，对方接收后所有权转到他身上，发布人还得看得到。
+       0.6.3 是靠「承接时另建一条 source_id 指回来的副本」解决的，0.7.0 改成所有权转移，
+       副本那条链路退役——但「派给非下属之后不能断线」这条不变量必须继续成立。
+       可见性现在靠 publisher_no：这条任务的 owner 是 1101（不在我的直接下属里），
+       只有发布人这一条路径能把它捡回来，所以这条用例专门走跨级（1012 → 1101）。 */
+    const cross = await js(`(async()=>{
+      const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(b)}).then(r=>r.json());
+      const A=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(b)}).then(r=>r.json());
+      await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({no:'1101',name:'吴敏'})});
+      const mk=await P({me:'1012',tasks:[{id:'e2e_cross_src',type:'assign',title:'E2E跨级发布源',
+        ownerNo:'1012',assigneeNo:'1101',start:'2026-11-03',end:'2026-11-10',status:'todo',
+        intakeStatus:'pending',stages:[]}]});
+      const acc=await A('/api/task/accept',{me:'1101',id:'e2e_cross_src'});
+      /* 承接人接着往自己那边拆阶段，发布人看到的进度要跟着走 */
+      const plan=await P({me:'1101',tasks:[{id:'e2e_cross_src',type:'special',title:'E2E跨级发布源',
+        ownerNo:'1101',assigneeNo:'1101',start:'2026-11-03',end:'2026-11-10',status:'doing',
+        stages:[{id:'cs1',pid:null,name:'跨级第一段',start:'2026-11-03',end:'2026-11-10',done:false}]}]});
+      const st=await (await fetch('/api/state?me=1012')).json();
+      const row=st.tasks.find(x=>x.id==='e2e_cross_src');
+      return {mkErr:(mk.errors||[]).length, accOk:!!acc.ok, planErr:(plan.errors||[]).length,
+        isSub:(st.subs||[]).some(s=>s.no==='1101'),
+        visible:!!row, owner:row&&row.ownerNo, pub:row&&row.publisherNo, type:row&&row.type,
+        stages:row&&row.stages?row.stages.length:0};})()`);
+    check('跨级发布：非下属接收后所有权转给他，发布人照样看得到进度（断线的那条不变量）',
+      cross.mkErr === 0 && cross.accOk === true && cross.planErr === 0 && cross.isSub === false
+        && cross.visible === true && cross.owner === '1101' && cross.pub === '1012'
+        && cross.type === 'special' && cross.stages === 1,
+      JSON.stringify(cross));
+    await js(`(async()=>{
+      const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(b)});
+      await P({me:'1101',del:{tasks:['e2e_cross_src']}});
+      await P({me:'1012',del:{tasks:['e2e_cross_src']}});
+      return 'ok'})()`);
+
     await push('1012', { del: { tasks: [obsSaved.id] } });
+  }
+
+  /* ---------- 9.9 0.7.0 主链路：发布 → 接收 → 派发 → 加入待办 → 变更提醒 ----------
+     这条链路是本版的核心，四步都必须在界面上走通：
+     「接收」和「派发」是两件事（决策⑥），派发之前执行者那边什么都看不到。 */
+  {
+    const FLOW = 't_e2e_flow';
+    const SUBW = '1003';
+    const d = n => addDaysStr('2026-11-10', n);
+    const whoAmI = async no => {
+      await js(`localStorage.setItem('pm_mvp_me','${no}');'ok'`);
+      await goto(BASE); await sleep(1400);
+      if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+        await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(800);
+      }
+    };
+    await push('1012', { del: { tasks: [FLOW] } });
+    /* 提醒不随任务删除而消失（墓碑就是设计成这样），所以每轮开头先把这个人的旧提醒读完。
+       不清的话第二次跑必然红：他没做错什么，只是上轮的「已移除」还挂着。 */
+    await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
+      const ids=(j.notices||[]).map(n=>n.id);
+      if(ids.length) await fetch('/api/notice/seen',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({me:'${SUBW}',ids})});
+      return ids.length;})()`);
+    await pushJ('1012', { tasks: [{ id: FLOW, type: 'assign', title: 'E2E发布：分给两个人干',
+      ownerNo: '1012', assigneeNo: '1002', start: d(0), end: d(6), status: 'todo', intakeStatus: 'pending',
+      stages: [
+        { id: 'f1', pid: null, name: '整段', start: d(0), end: d(6), done: false },
+        { id: 'f2', pid: 'f1', name: '前半段', who: SUBW, start: d(0), end: d(2), done: false }
+      ] }] });
+
+    /* 只指定、没派发 = 对他等于没这回事 */
+    const preWho = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
+      return {has:(j.tasks||[]).some(t=>t.id==='${FLOW}'), notices:(j.notices||[]).filter(n=>n.taskId==='${FLOW}').length};})()`);
+    check('只指定了责任人、还没派发：他那边连这条任务都看不到',
+      preWho.has === false && preWho.notices === 0, JSON.stringify(preWho));
+
+    await whoAmI('1002');
+    await nav('intake'); await sleep(500);
+    const intakeUi = await js(`(function(){
+      const cards=[...document.querySelectorAll('#view .card')];
+      const pick=t=>cards.find(c=>c.textContent.includes(t));
+      const a=pick('等你立项的任务'), b=pick('分给你的子任务');
+      return {pending:a?[...a.querySelectorAll('.rule-card h2')].map(x=>x.textContent.trim()):[],
+        subs:b?[...b.querySelectorAll('.rule-card h2')].map(x=>x.textContent.trim()):[],
+        acceptBtn:!!document.querySelector('#view [data-act="intake-accept"]')};})()`);
+    check('承接台：发布出去还没接的活落在「等你立项」，带一个「接收」按钮',
+      intakeUi.pending.includes('E2E发布：分给两个人干') && intakeUi.acceptBtn === true,
+      JSON.stringify(intakeUi).slice(0, 220));
+    check('承接台：派发之前「分给你的子任务」是空的（决策⑥：指定 ≠ 派发）',
+      intakeUi.subs.length === 0, JSON.stringify(intakeUi.subs));
+
+    await js(`document.querySelector('#view [data-act="intake-accept"][data-id="${FLOW}"]').click();'ok'`);
+    await sleep(1300);
+    const afterAcc = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${FLOW}');
+      const same=(j.tasks||[]).filter(x=>x.id==='${FLOW}').length;
+      return {owner:t&&t.ownerNo,type:t&&t.type,intake:t&&t.intakeStatus,rows:same};})()`);
+    check('点「接收」：活转到自己名下、进专项工作，没有多出第二条任务',
+      afterAcc.owner === '1002' && afterAcc.type === 'special'
+        && afterAcc.intake === 'accepted' && afterAcc.rows === 1, JSON.stringify(afterAcc));
+
+    await js(`openTaskPage('${FLOW}');'ok'`); await sleep(700);
+    const dispatchUi = await js(`(function(){
+      const ti=document.querySelector('#dTitle');
+      return {canEdit:!!ti && ti.readOnly === false,
+        hasBtn:!!document.querySelector('#view [data-act="task-dispatch"]')};})()`);
+    check('接收之后这条归「我」编辑：详情页出现「有子任务还没派发」的提示和派发按钮',
+      dispatchUi.canEdit === true && dispatchUi.hasBtn === true, JSON.stringify(dispatchUi));
+    await js(`document.querySelector('#view [data-act="task-dispatch"]').click();'ok'`);
+    await sleep(1200);
+
+    const postWho = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${FLOW}');
+      return {has:!!t, notices:(j.notices||[]).filter(n=>n.taskId==='${FLOW}').length};})()`);
+    check('点「派发」：负责子任务的人这才看得到，并收到一条提醒',
+      postWho.has === true && postWho.notices === 1, JSON.stringify(postWho));
+
+    await whoAmI(SUBW);
+    await nav('intake'); await sleep(600);
+    const subUi = await js(`(function(){
+      const c=[...document.querySelectorAll('#view .card')].find(x=>x.textContent.includes('分给你的子任务'));
+      return {cards:c?[...c.querySelectorAll('.rule-card h2')].map(x=>x.textContent.trim()):[],
+        joinBtn:!!(c&&c.querySelector('[data-act="stage-join"]')),
+        txt:(c?c.innerText:'').replace(/\\s+/g,' ').slice(0, 160)};})()`);
+    check('承接台：派发给我的那一段出现在「分给你的子任务」，能「加入待办」',
+      subUi.cards.includes('E2E发布：分给两个人干') && subUi.joinBtn === true,
+      JSON.stringify(subUi).slice(0, 220));
+
+    await js(`document.querySelector('#view [data-act="stage-join"][data-id="${FLOW}"]').click();'ok'`);
+    await sleep(1300);
+    const joined = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
+      const t=(j.tasks||[]).find(x=>x.stageRef&&x.stageRef.taskId==='${FLOW}');
+      return {has:!!t,type:t&&t.type,ref:t&&t.stageRef&&t.stageRef.stageId,due:t&&t.dueDate};})()`);
+    check('点「加入待办」：以临时任务进他自己的待办，反指回父任务那一段',
+      joined.has === true && joined.type === 'temp' && joined.ref === 'f2',
+      JSON.stringify(joined));
+
+    /* 派发之后承接人改期 → 责任人这边要有提醒，读完消失 */
+    await pushJ('1002', { tasks: [{ id: FLOW, ownerNo: '1002', assigneeNo: '1002', type: 'special',
+      title: 'E2E发布：分给两个人干', start: d(0), end: d(6), status: 'todo',
+      stages: [
+        { id: 'f1', pid: null, name: '整段', start: d(0), end: d(6), done: false },
+        { id: 'f2', pid: 'f1', name: '前半段', who: SUBW, start: d(1), end: d(3), done: false }
+      ] }] });
+    await whoAmI(SUBW);
+    await nav('intake'); await sleep(600);
+    const noticeUi = await js(`(function(){
+      const c=[...document.querySelectorAll('#view .card')].find(x=>x.textContent.includes('有变动的任务'));
+      return {n:c?c.querySelectorAll('.rule-card').length:0,
+        txt:(c?c.innerText:'').replace(/\\s+/g,' ').slice(0, 200)};})()`);
+    check('派发之后被改期：负责人承接台出现「有变动的任务」，写明从哪天改到哪天',
+      noticeUi.n >= 1 && noticeUi.txt.includes('改期') && noticeUi.txt.includes('前半段'),
+      JSON.stringify(noticeUi).slice(0, 240));
+
+    await js(`document.querySelector('#view [data-act="notice-seen"][data-tid="${FLOW}"]').click();'ok'`);
+    await sleep(1200);
+    const noticeGone = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
+      return (j.notices||[]).filter(n=>n.taskId==='${FLOW}').length;})()`);
+    check('点「知道了」后提醒消失，不反复打扰', noticeGone === 0, '剩 ' + noticeGone);
+
+    await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
+    await push('1002', { del: { tasks: [FLOW] } });
+    await push('1012', { del: { tasks: [FLOW] } });
   }
 
   /* 登录即激活——「派活能不能送到」全靠这一行。
@@ -1300,7 +1624,7 @@ async function main() {
       && loginAct.rows > 0 && loginAct.errs === 0, JSON.stringify(loginAct));
 
   /* 跑完把 1102 还原成「没登录过」。不复位的话，真实库里会留一条测试造的登录记录——
-     下次打开下派下拉，看到的是「测试说他登录过」，不是业务事实。 */
+     下次打开发布下拉，看到的是「测试说他登录过」，不是业务事实。 */
   execFileSync(process.execPath, ['--no-warnings', '-e', `
     const {DatabaseSync}=require('node:sqlite');
     const db=new DatabaseSync('data/workbench.db');
@@ -1327,10 +1651,22 @@ async function main() {
     const k=document.querySelector('#stageRows .mrow.sub');
     if(!k) return {n:0};
     k.querySelector('.sname').value='子任务A';
+    const w=k.querySelector('.swho');
+    if(w) w.value='1002';
     return {n:document.querySelectorAll('#stageRows .mrow').length,
-      subHasAdd: !!k.querySelector('[data-act="mstage-sub"]')};})()`);
+      subHasAdd: !!k.querySelector('[data-act="mstage-sub"]'),
+      snos:[...document.querySelectorAll('#stageRows .sno')].map(x=>x.textContent),
+      phs:[...document.querySelectorAll('#stageRows .sname')].map(x=>x.placeholder),
+      whoSel: !!w};})()`);
   check('阶段行可以加子任务，子行不再有「+子」（三级封顶）',
     subForm.n === 2 && subForm.subHasAdd === false, JSON.stringify(subForm));
+  /* 界面语义：两个名字框长得一模一样，只有编号能分清谁是谁。
+     这条是给人看的验收——「这是什么」都不清楚，功能对不对已经排第二位了。 */
+  check('阶段行自带编号（1 / 1.1），子任务行有「谁做」下拉，不靠 placeholder 猜身份',
+    JSON.stringify(subForm.snos) === JSON.stringify(['1', '1.1'])
+      && subForm.whoSel === true
+      && subForm.phs[0] !== subForm.phs[1],
+    JSON.stringify(subForm.snos) + ' / ' + subForm.whoSel);
   await shot('18-stage-modal');
 
   await js(`document.querySelector('#modal [data-act="modal-ok"]').click();'ok'`);
@@ -1339,9 +1675,14 @@ async function main() {
     const t=j.tasks.filter(x=>x.title==='E2E三级：阶段带子任务').pop();
     if(!t) return null;
     const p=t.stages.filter(s=>!s.pid), k=t.stages.filter(s=>s.pid);
-    return {id:t.id,tops:p.length,subs:k.length,pidOk:p.length&&k.length?k[0].pid===p[0].id:false};})()`);
+    return {id:t.id,tops:p.length,subs:k.length,pidOk:p.length&&k.length?k[0].pid===p[0].id:false,
+      who:k.length?k[0].who:null, whoAt:k.length?k[0].whoAt:null};})()`);
   check('专项能拆到「阶段 → 子任务」，父子挂对并落库',
     !!tree && tree.tops === 1 && tree.subs === 1 && tree.pidOk === true, JSON.stringify(tree));
+  /* 自己建的专项里也能给子任务配人：分一段出去不是「派活」，不转移整条任务，
+     所以不需要先发布。但人记下了先不通知，等「派发」那一下。 */
+  check('自己建的专项里，子任务能直接选责任人：落 who，先不写 whoAt（等派发）',
+    !!tree && tree.who === '1002' && !tree.whoAt, JSON.stringify({ who: tree && tree.who, whoAt: tree && tree.whoAt }));
 
   if (tree) {
     await js(`openTaskPage('${tree.id}');'ok'`); await sleep(500);
@@ -1354,6 +1695,27 @@ async function main() {
       treeUi.tops === 1 && treeUi.subs === 1 && treeUi.subHasAdd === false && treeUi.parentTick === false,
       JSON.stringify(treeUi));
     await shot('17-stage-tree');
+
+    /* 用户就是在这一步卡住的：进到详情页想给子任务配人，只有名字和日期，没有「谁做」。
+       详情页和新建弹窗必须给同一套能力，否则「接了活之后怎么分工」这件事就断了。 */
+    await js(`document.querySelector('#view [data-act="stage-sub"]').click();'ok'`);
+    await sleep(300);
+    const subAddForm = await js(`(function(){const f=document.querySelector('#view .subadd');
+      if(!f) return null;
+      return {head:(f.querySelector('.subadd-h')||{}).innerText||'', who:!!f.querySelector('.swho'),
+        whoOpts:f.querySelectorAll('.swho option').length,
+        whoLabel:f.innerText.includes('谁做'),
+        hasDate:f.querySelectorAll('input[type=date]').length};})()`);
+    check('详情页里也能给子任务选责任人（不只新建弹窗能配）',
+      !!subAddForm && subAddForm.who === true && subAddForm.whoOpts >= 2
+        && subAddForm.whoLabel === true && subAddForm.hasDate === 2,
+      JSON.stringify(subAddForm));
+    check('新增子任务的框写清了「加在哪一段下面」，不是凭空冒出一个输入框',
+      !!subAddForm && /第 \d+ 段/.test(subAddForm.head) && subAddForm.head.includes('下面加'),
+      subAddForm && subAddForm.head);
+    await shot('17b-subadd-form');
+    await js(`(function(){const b=document.querySelector('#view .subadd [data-act="subadd-cancel"]'); if(b) b.click(); return 'ok'})()`);
+    await sleep(200);
 
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`); await sleep(300);
     await nav('calendar'); await sleep(700);

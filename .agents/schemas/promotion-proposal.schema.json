@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-native-engineering/promotion-proposal.schema.json",
+  "title": "Method Promotion Proposal Candidate",
+  "description": "Candidate proposal schema; validation does not approve or promote a method change.",
+  "type": "object",
+  "required": [
+    "proposal_version",
+    "proposal_digest",
+    "practice_ids",
+    "problem",
+    "evidence",
+    "applicability",
+    "proposed_change",
+    "conflicts",
+    "expected_benefit",
+    "maintenance_cost",
+    "alternatives",
+    "migration_effect",
+    "regression_scenarios"
+  ],
+  "properties": {
+    "proposal_version": {"type": ["string", "integer"]},
+    "proposal_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "practice_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "problem": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "applicability": {"type": "string", "minLength": 1},
+    "proposed_change": {"type": "string", "minLength": 1},
+    "conflicts": {"type": "string"},
+    "expected_benefit": {"type": "string", "minLength": 1},
+    "maintenance_cost": {"type": "string", "minLength": 1},
+    "alternatives": {"type": "string", "minLength": 1},
+    "migration_effect": {"type": "string", "minLength": 1},
+    "regression_scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "reviewer_decision": {"type": ["object", "null"]},
+    "human_decision": {"type": ["object", "null"]}
+  },
+  "additionalProperties": false
+}

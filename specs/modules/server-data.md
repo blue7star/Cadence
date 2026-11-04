@@ -1,0 +1,23 @@
+# MOD-server-data · 数据层与实例引擎
+
+## 职责
+建表（`emp/task/rule/cat/task_observer/stage_notice/watch/op_log/meta/holiday`）与常规实例生成引擎（`ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`）。
+
+## 公开行为
+- 首次启动自动建表；表结构变更须兼容已有 `data/workbench.db`（`ALTER TABLE` 前先查 `pragma table_info`，加字段给默认值，不改已有列含义）。
+- `maintain()` 每次取 state 前按 `today-40d ~ today+80d` 补齐常规实例。
+
+## 不变量
+- **实例幂等**：同一 owner + 规则 + 周期只能有一条（`INSERT OR IGNORE`）；重复跑 `maintain` 不产生新行。
+- `task` 三列归属：`publisher_no` 永不改、`owner_no` 随接收转移、`due_date` 只有发布人能改。
+- 常规只按工作日生成；节假日算法服务端为准。
+- `INSERT` 列名与 `run()` 参数必须成对改，加列忘补参数只能等运行时炸。
+
+## 依赖与边界
+- 依赖 `node:sqlite`（零第三方）、`version.js`。
+- 禁止：前端直接写库；`temp`/`routine` 拉平（无 `pid`）。
+
+## 变更历史
+| task_id | commit | verdict_digest | 摘要 |
+|---|---|---|---|
+| — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |

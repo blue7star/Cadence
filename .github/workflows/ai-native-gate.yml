@@ -1,0 +1,44 @@
+name: ai-native gate
+
+# 触发矩阵（刻意如此）：
+#   push          -> 只跑测试类检查，不跑 gate。新项目在第一个 run 之前 gate 必然
+#                    no_evidence（退出 1），每次 push 都跑会让 CI 长期变红，人就会
+#                    学会忽略它。
+#   pull_request  -> 跑 gate --ci --scope project，失败即拦。合并点才是"必须有证据"
+#                    的位置。
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest
+      - name: tests
+        run: |
+          if [ -d tests ]; then
+            python -m pytest -q
+          else
+            echo "no tests directory; skipped"
+          fi
+
+  gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: gate (M1-M6)
+        run: |
+          python .agents/gates/gate.py --ci --scope project \
+            --base "origin/${{ github.base_ref }}"

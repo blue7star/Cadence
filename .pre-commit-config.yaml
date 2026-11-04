@@ -1,0 +1,11 @@
+# ai-native gate：pre-commit 只跑 M1/M3（快），且只判索引区（--staged）——
+# 未 add 的工作区草稿不拦，已 add 的受保护改动必须有契约。完整 M1-M6 在 CI 的
+# pull_request 上按 base...HEAD 跑。
+repos:
+  - repo: local
+    hooks:
+      - id: ai-native-gate-fast
+        name: ai-native gate (M1/M3, staged)
+        entry: python .agents/gates/gate.py --fast --staged
+        language: system
+        pass_filenames: false

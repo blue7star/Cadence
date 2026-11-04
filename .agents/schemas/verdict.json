@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Verdict",
+  "type": "object",
+  "required": [
+    "task_id",
+    "contract_version",
+    "candidate_revision",
+    "candidate_digest",
+    "reviewer",
+    "reviewer_context",
+    "worker_context",
+    "verdict",
+    "max_severity",
+    "evidence_status",
+    "not_run_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{8}-[a-z0-9-]+$" },
+    "contract_version": { "type": "integer", "minimum": 1 },
+    "candidate_revision": { "type": "integer", "minimum": 1 },
+    "candidate_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "base_revision": { "type": "string", "minLength": 7 },
+    "reviewer": { "type": "string", "enum": ["Reviewer"] },
+    "reviewer_context": { "type": "string", "minLength": 1 },
+    "worker_context": { "type": "string", "minLength": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL_IMPLEMENTATION", "FAIL_DESIGN", "NEEDS_BUSINESS_DECISION", "BLOCKED"]
+    },
+    "max_severity": { "type": "string", "enum": ["NONE", "P0", "P1", "P2", "P3"] },
+    "evidence_status": { "type": "string", "enum": ["COMPLETE", "PARTIAL", "NOT_RUN", "BLOCKED"] },
+    "not_run_count": { "type": "integer", "minimum": 0 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "supersedes": { "type": "string" },
+    "business_decision": { "type": "string", "description": "仅 G3：业务语义与风险接受" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "class", "evidence"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+          "class": {
+            "type": "string",
+            "enum": [
+              "requirement_gap",
+              "contract_gap",
+              "testcase_gap",
+              "impl_bug",
+              "machine_gate_miss",
+              "review_miss",
+              "walkthrough_gap"
+            ]
+          },
+          "evidence": { "type": "string" },
+          "route": { "type": "string" }
+        }
+      }
+    }
+  }
+}

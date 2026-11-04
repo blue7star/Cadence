@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-native-engineering/practice-record.schema.json",
+  "title": "Practice Record Candidate",
+  "description": "Candidate schema for method-learning summaries and stable evidence references.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "practice_id",
+    "project_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "recorder",
+    "current_owner",
+    "trigger_context",
+    "observed_method_problem",
+    "evidence",
+    "project_fact_owner",
+    "applicability_conditions",
+    "reasons_not_to_promote"
+  ],
+  "properties": {
+    "schema_version": {"type": ["string", "integer"]},
+    "practice_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": ["string", "null"]},
+    "finding_id": {"type": ["string", "null"]},
+    "proposal_id": {"type": ["string", "null"]},
+    "status": {
+      "enum": [
+        "OBSERVED",
+        "EVIDENCE_READY",
+        "PROPOSED",
+        "REVIEW_PENDING",
+        "REVIEW_PASSED",
+        "REVIEW_FAILED",
+        "BLOCKED",
+        "REVISION_REQUIRED",
+        "HUMAN_APPROVED",
+        "REJECTED",
+        "KEEP_OBSERVING",
+        "CHANGE_AUTHORIZED",
+        "METHOD_CANDIDATE_READY",
+        "REGRESSION_VERIFIED",
+        "REGRESSION_FAILED",
+        "REWORK",
+        "ROLLED_BACK",
+        "PROMOTED"
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "recorder": {"type": "string", "minLength": 1},
+    "current_owner": {"type": "string", "minLength": 1},
+    "trigger_context": {"type": "string", "minLength": 1},
+    "observed_method_problem": {"type": "string", "minLength": 1},
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["uri", "summary", "digest", "reproduction_conditions"],
+        "properties": {
+          "uri": {"type": "string", "minLength": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "digest": {"type": "string", "minLength": 1},
+          "reproduction_conditions": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "reusable_pattern_hypothesis": {"type": ["string", "null"]},
+    "project_fact_owner": {"type": "string", "minLength": 1},
+    "proposed_method_impact": {"type": ["string", "null"]},
+    "applicability_conditions": {"type": "string", "minLength": 1},
+    "conflicts_and_maintenance_cost": {"type": ["string", "null"]},
+    "reasons_not_to_promote": {"type": "string", "minLength": 1},
+    "proposal_version": {"type": ["string", "integer", "null"]},
+    "proposal_digest": {"type": ["string", "null"]},
+    "reviewer_decision": {"type": ["object", "null"]},
+    "human_decision": {"type": ["object", "null"]},
+    "regression_result": {"type": ["object", "null"]}
+  },
+  "additionalProperties": false
+}

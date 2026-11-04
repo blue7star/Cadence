@@ -78,6 +78,24 @@ Cadence 的方法层观察只写在这里。两者不是并行真相：那份是
 
 根因假设：分类粒度决定修复对象。粒度不够时，不同根因会被折叠成同一个标签，修法必然打偏。
 
+### 6. 完全落实：三个实测盲区被 skill 3.0.0 修复
+
+2026-11-03 是「选择性采纳」——只取方法层（事实单一归属、契约、独立复核、fail_source），
+**拒绝工具层**（`gate.py`、`agent_workflow.py`、`scaffold_project.py` 一律不用，见 `docs/adoption-log.md` 第 3/4 节）。
+2026-11-04 转「完全落实」：工具层也接入，`.agents/gates/gate.py` 成为双轨门禁里的契约门禁。
+
+当时拒绝 `gate.py` 的三个实测盲区，全部由 skill 3.0.0 修复，本项目已逐条对上：
+
+| 当时的盲区 | 当时的实测现象 | 现在的修复 |
+|---|---|---|
+| ① 只比 `HEAD~1...HEAD` | M1/M3 看不见工作区与暂存区，门禁接错入口 | 新增 `--staged` 判 `git diff --cached`（索引区），pre-commit 拦「已 add 的受保护路径缺契约」 |
+| ② 0 PASS 算通过 | `check_m2` 在 `checked==0` 时返回 `0 PASS events bound` 且 ok=true | `NOT_RUN`/`no_evidence` 一律退出 1，与「`NOT_RUN != PASS`」自洽 |
+| ③ 只认 `VERSION` 文件 | 18 个版本的记录被读成 `0 version declaration(s)` | M4 支持 `version_authority: <path>`，本项目声明 `version_authority: version.js` 后 M4 PASS |
+
+根因假设：这三条不是「用错了」而是「工具层没长全」——第一版只覆盖了「有账本、有契约的仓库」这条主线，
+没覆盖「还没建账本 / 用自定义版本源 / 工作区有改动」这些真实分支。反馈把分支补上，skill 才从
+「只能演示」变成「能真跑」。这是「反馈推动 skill 演进」的直接证据，留在账本里。
+
 ## 证据
 
 | 项 | 位置 |

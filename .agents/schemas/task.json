@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Task Contract",
+  "type": "object",
+  "required": [
+    "task_id",
+    "contract_version",
+    "base_revision",
+    "gate_level",
+    "status",
+    "owner",
+    "modules"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^TASK-[0-9]{8}-[a-z0-9-]+$" },
+    "contract_version": { "type": "integer", "minimum": 1 },
+    "base_revision": { "type": "string", "minLength": 7 },
+    "gate_level": { "type": "string", "enum": ["G0", "G1", "G2", "G3"] },
+    "status": { "type": "string", "enum": ["PLANNED", "IN_PROGRESS", "READY_FOR_REVIEW", "PASS", "ACCEPTED"] },
+    "owner": { "type": "string", "enum": ["Planner", "Worker", "Reviewer", "Human"] },
+    "modules": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "空数组表示 none；M3 按此列表追加蓝图变更历史"
+    },
+    "sibling_tasks": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^TASK-[0-9]{8}-[a-z0-9-]+$" },
+      "description": "并行分派的同批任务；单任务为空数组"
+    },
+    "parallel_group": { "type": "string" },
+    "blueprint_impact": { "type": "string", "enum": ["pending", "none", "required"] },
+    "out_of_scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "G2 起必填；无此声明不得进入 G2"
+    },
+    "rollback": { "type": "string", "description": "G3 必填" }
+  }
+}

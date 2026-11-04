@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai-native-engineering/agent-run.schema.json",
+  "title": "Agent Workflow Ledger Event",
+  "description": "Schema for each JSONL event emitted by scripts/agent_workflow.py; an adopting project owns its executable ledger contract.",
+  "type": "object",
+  "required": [
+    "seq",
+    "previous_hash",
+    "event_hash",
+    "state",
+    "role",
+    "metadata",
+    "evidence"
+  ],
+  "properties": {
+    "seq": {"type": "integer", "minimum": 1},
+    "previous_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "event_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "state": {
+      "enum": [
+        "PLANNED",
+        "IN_PROGRESS",
+        "READY_FOR_REVIEW",
+        "PASS",
+        "FAIL_IMPLEMENTATION",
+        "FAIL_DESIGN",
+        "NEEDS_BUSINESS_DECISION",
+        "BLOCKED",
+        "ACCEPTED",
+        "ACTIVE"
+      ]
+    },
+    "role": {"enum": ["Planner", "Worker", "Reviewer", "Human"]},
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1},
+        "contract_version": {"type": "integer", "minimum": 1},
+        "base_revision": {"type": "string", "minLength": 1},
+        "contract_path": {"type": "string", "minLength": 1},
+        "contract_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "rule_epoch": {"type": "integer", "minimum": 0},
+        "candidate_source_path": {"type": "string", "minLength": 1},
+        "candidate_snapshot_path": {"type": "string", "minLength": 1},
+        "candidate_snapshot_identity": {"type": "string", "minLength": 1},
+        "candidate_revision": {"type": "string", "minLength": 1},
+        "candidate_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "candidateMetadata": {
+      "type": "object",
+      "required": [
+        "candidate_source_path",
+        "candidate_snapshot_path",
+        "candidate_snapshot_identity",
+        "candidate_revision",
+        "candidate_digest"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "PLANNED"}}},
+      "then": {
+        "properties": {
+          "metadata": {
+            "required": ["task_id", "contract_version", "base_revision", "contract_digest"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "READY_FOR_REVIEW",
+              "PASS",
+              "FAIL_IMPLEMENTATION",
+              "FAIL_DESIGN",
+              "NEEDS_BUSINESS_DECISION",
+              "BLOCKED",
+              "ACCEPTED",
+              "ACTIVE"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "metadata": {"$ref": "#/$defs/candidateMetadata"}
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

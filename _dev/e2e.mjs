@@ -385,17 +385,27 @@ async function main() {
     JSON.stringify({ restDay, restPanel }));
 
   /* ---------- 6.2 阶段能就地改名称和日期，不用删了重建 ---------- */
+  /* 挑一个「至少有一段没子任务、没勾完成、够缩两天」的专项：有子任务的阶段日期是派生的、
+     输入框 disabled；勾完完成的阶段日期被锁（已经发生的计划不能再挪）；不足两天的阶段缩不了。 */
   const stOpen = await js(`(function(){
-    const t=S.tasks.find(x=>x.type==='special'&&x.ownerNo===S.me.no&&(x.stages||[]).length>=2&&(x.stages||[]).every(s=>s.start&&s.end));
+    const pick = ss => ss.findIndex(s => !s.done && s.start && s.end && s.end >= addDays(s.start, 2)
+      && !ss.some(k => k.pid === s.id));
+    const t=S.tasks.find(x=>{const ss=x.stages||[];
+      return x.type==='special'&&x.ownerNo===S.me.no&&ss.length>=2&&ss.every(s=>s.start&&s.end)
+        && pick(ss) >= 0;});
     if(!t) return {err:'没有可编辑阶段的专项'};
     openTaskPage(t.id);
-    const row=[...document.querySelectorAll('#view .stage')].find(r=>r.querySelector('[data-act=stage-edit]'));
+    const ss=t.stages;
+    const idx=pick(ss);
+    const row=[...document.querySelectorAll('#view .stage')].find(r=>{
+      const b=r.querySelector('[data-act=stage-edit]');
+      return b&&Number(b.dataset.idx)===idx;});
     if(!row) return {err:'阶段行没有「改」入口'};
     row.querySelector('[data-act=stage-edit]').click();
     const box=document.querySelector('#view .sedit');
     if(!box) return {err:'点了「改」没展开编辑框'};
-    const i=Number(box.dataset.idx), s=t.stages[i];
-    return {id:t.id, idx:i, oldName:s.name, oldStart:s.start, oldEnd:s.end,
+    const s=ss[idx];
+    return {id:t.id, idx, oldName:s.name, oldStart:s.start, oldEnd:s.end,
       shown:(box.querySelector('.sname')||{}).value||'', fields:box.querySelectorAll('input').length};
   })()`);
   await sleep(400); await shot('16b-stage-edit');
@@ -413,7 +423,7 @@ async function main() {
   })()`);
   await sleep(300);
   check('结束早于开始时拦下并说明原因，改动不落库',
-    !stOpen.err && stBad.msg.includes('结束日期不能早于开始日期') && stBad.name === stOpen.oldName,
+    !stOpen.err && stBad.msg.includes('早于开始') && stBad.name === stOpen.oldName,
     JSON.stringify(stBad));
 
   const stFix = stOpen.err ? {err: 'skip'} : await js(`(function(){
@@ -432,7 +442,7 @@ async function main() {
   check('改完立刻落库：名称、开始、结束三样都按新值存下来',
     !!stAfter && stAfter.name === '改名后的阶段' &&
     stAfter.start === addDaysStr(stOpen.oldStart, 1) && stAfter.end === addDaysStr(stOpen.oldEnd, -1),
-    JSON.stringify({ before: { name: stOpen.oldName, start: stOpen.oldStart, end: stOpen.oldEnd }, after: stAfter }));
+    JSON.stringify({ before: { name: stOpen.oldName, start: stOpen.oldStart, end: stOpen.oldEnd }, after: stAfter, msg: stFix.msg }));
   /* 还原，后面几条用例还要用这份数据 */
   if (!stOpen.err) {
     await js(`(function(){const t=S.tasks.find(x=>x.id==='${stOpen.id}');const s=t.stages[${stOpen.idx}];
@@ -1783,7 +1793,45 @@ async function main() {
       !!subAddForm && /第 \d+ 段/.test(subAddForm.head) && subAddForm.head.includes('下面加'),
       subAddForm && subAddForm.head);
     await shot('17b-subadd-form');
+    /* 默认日期不再抄父阶段整段。这一段的窗口已经被「子任务A」占满了，
+       新加的那条必须落在后面，并且框里要写清楚阶段会被撑到哪天。 */
+    const subDefault = await js(`(function(){const f=document.querySelector('#view .subadd');
+      if(!f) return null;
+      const t=S.tasks.find(x=>x.id==='${tree.id}');
+      const p=t.stages.find(s=>!s.pid), k=t.stages.find(s=>s.pid);
+      return {sst:f.querySelector('.sst').value, sen:f.querySelector('.sen').value,
+        pStart:p.start, pEnd:p.end, kEnd:k.end||k.start, tip:f.innerText};})()`);
+    check('加子任务的默认日期不再抄父阶段整段（以前抄整段 = 保证第二条必和第一条重叠）',
+      !!subDefault && !(subDefault.sst === subDefault.pStart && subDefault.sen === subDefault.pEnd),
+      JSON.stringify(subDefault));
+    check('占满时把「这一段已经排满了、会跟着变长」写出来，不当场硬塞',
+      !!subDefault && /排满|变长|接在/.test(subDefault.tip), subDefault && subDefault.tip);
+
+    /* 同阶段重名：两条同名子任务在进度里算成两件独立的事，分母直接虚高 */
+    const subDup = await js(`(function(){const f=document.querySelector('#view .subadd');
+      f.querySelector('.sname').value='子任务A';
+      f.querySelector('[data-act="stage-add-sub"]').click();
+      return {msg:(document.querySelector('#toast')||{}).textContent||''};})()`);
+    await sleep(300);
+    check('同一阶段下重名子任务被拦下，并问清是改还是另起一条',
+      subDup.msg.includes('已经有') && subDup.msg.includes('子任务A'), JSON.stringify(subDup));
+
     await js(`(function(){const b=document.querySelector('#view .subadd [data-act="subadd-cancel"]'); if(b) b.click(); return 'ok'})()`);
+    await sleep(200);
+
+    /* 有子任务的阶段：日期是派生的，直接改会被 recalcParent 打回，
+       所以必须给一个「拉长到」的入口——否则「这一段排满了」就是绝路。 */
+    const parEdit = await js(`(function(){
+      document.querySelector('#view .stage:not(.sub) [data-act="stage-edit"]').click();
+      const box=document.querySelector('#view .sedit');
+      if(!box) return null;
+      return {hasExtend:!!box.querySelector('.sext'), hasBtn:!!box.querySelector('[data-act="stage-extend"]'),
+        stDisabled:box.querySelector('.sst').disabled, tip:box.innerText};})()`);
+    check('有子任务的阶段：日期框锁住，但给「拉长到」这个入口，不是一句「请改子任务」了事',
+      !!parEdit && parEdit.stDisabled === true && parEdit.hasExtend === true && parEdit.hasBtn === true,
+      JSON.stringify(parEdit));
+    await shot('17c-stage-extend');
+    await js(`(function(){const b=document.querySelector('#view .sedit [data-act="sedit-cancel"]'); if(b) b.click(); return 'ok'})()`);
     await sleep(200);
 
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`); await sleep(300);

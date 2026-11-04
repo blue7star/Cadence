@@ -488,6 +488,183 @@ function siblingsOf(stages, si) {
   const pid = s.pid || null;
   return stages.map((x, i) => ({ x, i })).filter(o => (o.x.pid || null) === pid);
 }
+const dayOf = (s, k) => (s && (s[k] || s.date)) || '';
+const topNo = (stages, p) => stages.filter(x => !x.pid).indexOf(p) + 1;
+const dateSpan = s => {
+  const a = dayOf(s, 'start'), b = dayOf(s, 'end') || a;
+  return a ? (a === b ? fmt(a) : `${fmt(a)}–${fmt(b)}`) : '';
+};
+
+/* 同层重叠时的说法：谁占着哪天、这一段最早能排到哪天、存进去之后父阶段会变成什么。
+   最后半句是关键——父阶段是子任务并集，会自己变长，不写出来用户会以为「11/6 超出了阶段范围」。 */
+function overlapMsg(stages, a, b, pid) {
+  const ae = dayOf(a, 'end') || dayOf(a, 'start');
+  const who = a.who ? `（${nameOf(a.who)}）` : '';
+  const scope = pid ? '这一段' : '这一阶段';
+  let tail = '';
+  if (pid) {
+    const p = stages.find(x => x.id === pid);
+    const ks = stages.filter(k => k.pid === pid);
+    const pe = ks.map(k => dayOf(k, 'end')).filter(Boolean).sort().slice(-1)[0];
+    const ps = ks.map(k => dayOf(k, 'start')).filter(Boolean).sort()[0];
+    if (p && ps && pe && (pe > (p.end || '') || ps < (p.start || '')))
+      tail = `；存进去之后第 ${topNo(stages, p)} 段会变成 ${fmt(ps)}–${fmt(pe)}`;
+  }
+  return `「${a.name || '上一段'}」${who}占着到 ${fmt(ae)}，${scope}最早只能从 ${fmt(addDays(ae, 1))} 起${tail}`;
+}
+
+/* ============ 阶段校验：唯一入口 ============
+   这套规则以前散在 dragCheck 和 stage-save 里，五个写入口（拖拽改期 / 阶段表单 /
+   加子任务 / 加顶层阶段 / 删节点）各自只记住了一部分。后果是「没校验的入口能造脏数据，
+   有校验的入口改不动」——同一个阶段下两条同名同期的子任务就是这么进来的。
+   现在所有入口一律：先把改完之后的完整 stages 算出来（父阶段回算过），交到这里，
+   通过了才写回 t.stages。返回 {ok, code, msg}，msg 直接给人看。
+   软约束（不排过去、不排周末）留在 dragCheck：那是拖拽的手势才有的问题，
+   在表单里填过去的日期是正常操作，不该报错。 */
+function validateStages(t, next, ctx) {
+  ctx = ctx || {};
+  const prev = (t && t.stages) || [];
+  const was = {};
+  for (const s of prev) if (s && s.id) was[s.id] = s;
+  const bad = (code, msg) => ({ ok: false, code, msg });
+
+  /* 只拦「这次改动新造成的问题」。库里可能早就躺着违规数据（比如某次老版本写进去的两段重叠），
+     拿它去拦一个与之无关的改名/改期，人看到的是「我什么都没动，你说我错了」，而且怎么改都过不去。
+     所以先算清楚这次到底动了谁：新增的、起止变了的、换了父的。判断重叠等约束时，只有涉及到
+     这些节点的配对才算数——存量问题留给「数据体检」，不在这儿当路障。 */
+  const changed = new Set();
+  for (const s of next) {
+    const o = s.id && was[s.id];
+    if (!o) { changed.add(s); continue; }
+    if (dayOf(o, 'start') !== dayOf(s, 'start') || dayOf(o, 'end') !== dayOf(s, 'end')
+      || (o.pid || '') !== (s.pid || '')) changed.add(s.id);
+  }
+  const isChanged = s => changed.has(s) || changed.has(s.id);
+
+  /* 1. 起止不能倒 */
+  for (const s of next) {
+    const a = dayOf(s, 'start'), b = dayOf(s, 'end');
+    if (a && b && b < a) return bad('dates', `「${s.name || '未命名'}」结束 ${fmt(b)} 早于开始 ${fmt(a)}`);
+  }
+
+  /* 2. 只允许两级：子任务的父必须还在 */
+  const topIds = new Set(next.filter(s => !s.pid && s.id).map(s => s.id));
+  for (const s of next) {
+    if (s.pid && !topIds.has(s.pid)) return bad('depth', `「${s.name || '未命名'}」挂的上级阶段已经不在了`);
+  }
+
+  /* 3. 已经勾过完成的，日期不能再挪：已经发生的计划不该被悄悄改写 */
+  for (const s of next) {
+    const o = s.id && was[s.id];
+    if (!o || !o.done) continue;
+    if (dayOf(o, 'start') !== dayOf(s, 'start') || dayOf(o, 'end') !== dayOf(s, 'end'))
+      return bad('done', `「${s.name || '未命名'}」已经勾了完成，日期不能再改`);
+  }
+
+  /* 4. 新增的节点不许和同层重名。两条同名子任务在进度里会算成两件独立的事，
+        分母虚高一倍——「客户清单初稿」重复两次，进度就成了 4 个叶子各 25%。
+        改存量时不查重名：库里已有的重名得让人改得动，不能一保存就被自己的数据卡死。 */
+  if (ctx.checkDupAll) {
+    const seen = new Set();
+    for (const s of next) {
+      const nm = (s.name || '').trim();
+      if (!nm) continue;
+      const k = (s.pid || '') + '\u0000' + nm;
+      if (seen.has(k)) return bad('dup', `同一个${s.pid ? '阶段' : '任务'}下面有两个「${nm}」；改掉一个名字，或者只留一条`);
+      seen.add(k);
+    }
+  } else if (ctx.newName) {
+    const pid = ctx.newPid || '';
+    const dup = next.some(s => s !== ctx.newNode && (s.pid || '') === pid
+      && (s.name || '').trim() === ctx.newName.trim());
+    if (dup) return bad('dup', `这个${pid ? '阶段' : '任务'}下面已经有「${ctx.newName}」了；是想改那一条，还是换个不同的名字？`);
+  }
+
+  /* 5. 同层不重叠、顺序不能倒。只算涉及到「这次动过的节点」的配对：
+        两条都没动过还重叠着，那是历史遗留，拦它等于让人为一个自己没做的事背锅。 */
+  const groups = new Map();
+  for (const s of next) {
+    const k = s.pid || '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  for (const [pid, list] of groups) {
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1], b = list[i];
+      if (!isChanged(a) && !isChanged(b)) continue;
+      const ae = dayOf(a, 'end') || dayOf(a, 'start');
+      const bs = dayOf(b, 'start') || dayOf(b, 'end');
+      if (ae && bs && bs <= ae) return bad('overlap', overlapMsg(next, a, b, pid));
+    }
+  }
+
+  /* 6. 子任务把父阶段撑开之后，父阶段不能压到相邻的阶段。
+        同样只在「这个阶段的子任务动过」时才判，否则存量数据里两段压着会挡住所有编辑。 */
+  const tops = next.filter(s => !s.pid);
+  for (const p of tops) {
+    const kids = next.filter(k => k.pid === p.id);
+    if (!kids.length) continue;
+    const kidsMoved = isChanged(p) || kids.some(isChanged);
+    const ps = kids.map(k => dayOf(k, 'start')).filter(Boolean).sort()[0];
+    const pe = kids.map(k => dayOf(k, 'end')).filter(Boolean).sort().slice(-1)[0];
+    const pi = tops.indexOf(p);
+    const pp = pi > 0 ? tops[pi - 1] : null;
+    const pn = pi < tops.length - 1 ? tops[pi + 1] : null;
+    if (!kidsMoved) continue;
+    if (pp) {
+      const ppe = dayOf(pp, 'end');
+      if (ppe && ps && ps <= ppe)
+        return bad('parent-prev', `「${p.name || '这一段'}」的子任务排到 ${fmt(ps)}，会压到上一段「${pp.name || ''}」（到 ${fmt(ppe)}）`);
+    }
+    if (pn) {
+      const pns = dayOf(pn, 'start');
+      if (pns && pe && pe >= pns)
+        return bad('parent-next', `「${p.name || '这一段'}」的子任务排到 ${fmt(pe)}，会压到下一段「${pn.name || ''}」（${fmt(pns)} 开始）`);
+    }
+  }
+
+  /* 7. 不超发布时定的总截止。这条以前只在服务端拦，人看到的是「保存失败」——
+        改完了才告诉人不行，等于白干一次。
+        只锁「别人发布给我」的活：自己建的专项，截止本来就是自己的计划结束日，
+        服务端那边没主动改截止时也会自动跟着计划走（upsertTask 里的 !dueChanged 分支），
+        前端要是也拦就成了「自己的活挪不动」。存量就超截止的，只在这次把结束日又往后推时才拦。 */
+  const ends = tops.map(s => dayOf(s, 'end')).filter(Boolean).sort();
+  const taskEnd = ends.length ? ends[ends.length - 1] : '';
+  const prevEnds = prev.filter(s => !s.pid).map(s => dayOf(s, 'end')).filter(Boolean).sort();
+  const prevTaskEnd = prevEnds.length ? prevEnds[prevEnds.length - 1] : '';
+  const due = (t && t.dueDate) || '';
+  const dueLocked = !!(t && t.publisherNo && t.publisherNo !== t.ownerNo);
+  if (due && dueLocked && taskEnd && taskEnd > due && taskEnd !== prevTaskEnd)
+    return bad('due', `这样排到 ${fmt(taskEnd)}，超过发布时定的截止 ${fmt(due)}；要往后排，先让发布人改总截止`);
+
+  return { ok: true, code: '', msg: '' };
+}
+
+/* 在父阶段的窗口里找第一个塞得下的空档。加子任务时默认用它，
+   而不是把父阶段整段抄下来——抄整段等于保证「第二条一定和第一条重叠」。 */
+function freeSlot(p, kids, len) {
+  len = len || 1;
+  const winS = p.start || p.date || TODAY;
+  const winE = p.end || p.date || winS;
+  const used = kids
+    .map(k => ({ s: k.start || k.date, e: k.end || k.date || k.start }))
+    .filter(x => x.s)
+    .sort((a, b) => (a.s < b.s ? -1 : 1));
+  let cur = winS;
+  for (const u of used) {
+    if (u.s > cur) {
+      const room = diffDays(addDays(u.s, -1), cur) + 1;
+      if (room >= len) return { start: cur, end: addDays(cur, len - 1), overflow: false };
+    }
+    if (u.e >= cur) cur = addDays(u.e, 1);
+  }
+  if (cur <= winE && diffDays(winE, cur) + 1 >= len)
+    return { start: cur, end: addDays(cur, len - 1), overflow: false };
+  /* 窗口满了：默认接在最晚那条后面，并让调用方把「阶段会被撑到哪天」写出来 */
+  const lastE = used.length ? used[used.length - 1].e : winE;
+  const ns = addDays(lastE, 1);
+  return { start: ns, end: addDays(ns, len - 1), overflow: true };
+}
 const allLeavesDone = t => {
   const leaves = leavesOf(t.stages);
   return leaves.length ? leaves.every(s => s.done) : t.status === 'done';
@@ -1911,6 +2088,11 @@ function openNewTask(type, preset) {
     if (!s) { toast('请选择开始时间'); return false; }
     if (e < s) { toast('结束时间不能早于开始时间'); return false; }
     const stages = readStageRows(s);
+    /* 新建弹窗读回阶段树之后也走同一套校验：这里的「阶段」以前只重算父阶段并集，
+       同层重叠、重名、超截止统统放过，等于绕开后面所有入口。 */
+    const draft = { stages: [], type: t, dueDate: e };
+    const vStage = validateStages(draft, stages, { action: 'new', checkDupAll: true });
+    if (!vStage.ok) { toast(vStage.msg); return false; }
     const typeVal = t;
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
     /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。 */
@@ -2186,7 +2368,24 @@ function dragCheck(t, date, si) {
     if (!isWorkday(date)) {
       return { ok: false, why: '专项阶段不排到周末或节假日：那两天日历不显示阶段，拖过去会看不见' };
     }
+    /* 拖过了发布时定的总截止：服务端最后会拒，但那时候人已经看到日期变了，白折腾一次。
+       只锁「别人发布给我」的活——自己建的专项，截止跟着计划走，不该拦自己。 */
+    const due = t.dueDate || '';
+    const dueLocked = !!(t.publisherNo && t.publisherNo !== t.ownerNo);
+    if (due && dueLocked && newEnd > due) {
+      return { ok: false, why: `拖到这儿最晚是 ${fmt(newEnd)}，超过发布时定的截止 ${fmt(due)}；要往后排，先让发布人改总截止` };
+    }
     return { ok: true };
+  }
+  /* 整条任务平移：同样不能把结束日推到总截止之后 */
+  if (t.type !== 'routine') {
+    const span = (t.start && t.end) ? diffDays(t.end, t.start) : 0;
+    const ne = addDays(date, span);
+    const due = t.dueDate || '';
+    const dueLocked = !!(t.publisherNo && t.publisherNo !== t.ownerNo);
+    if (due && dueLocked && ne > due) {
+      return { ok: false, why: `整条挪过去最晚是 ${fmt(ne)}，超过发布时定的截止 ${fmt(due)}；要往后排，先让发布人改总截止` };
+    }
   }
   if (t.type === 'routine' && !isWorkday(date)) {
     return { ok: false, why: '常规工作只在工作日发生；要改到周末请编辑规则' };
@@ -2464,8 +2663,14 @@ document.addEventListener('click', e => {
       const name = $('#sName').value.trim();
       if (!name) { toast('先填阶段名称'); break; }
       const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
-      t.stages = t.stages || [];
-      t.stages.push({ id: uid('s'), pid: null, name, start: s, end: e2 < s ? s : e2, done: false });
+      /* 新段永远排在数组最后，所以它得比当前最后一段更晚起。以前这里直接 push，
+         能造出「第 4 段比第 3 段还早」的倒序数据，日历上看着就是两段叠在一起。 */
+      const next = (t.stages || []).map(x => Object.assign({}, x));
+      const node = { id: uid('s'), pid: null, name, start: s, end: e2, done: false };
+      next.push(node);
+      const v = validateStages(t, next, { action: 'add-stage', newName: name, newPid: '', newNode: node });
+      if (!v.ok) { toast(v.msg); break; }
+      t.stages = next;
       save(); openTaskPage(t.id); render(); toast('阶段已添加');
       break;
     }
@@ -2478,12 +2683,19 @@ document.addEventListener('click', e => {
       if (row.nextElementSibling && row.nextElementSibling.classList.contains('subadd')) break;
       /* 编号按一级阶段的实际位置算，和左边那段圆标对得上 */
       const no = (t.stages || []).filter(x => !x.pid).indexOf(p) + 1;
+      /* 默认日期以前直接抄父阶段的整段，等于保证「第二条子任务一定和第一条重叠」。
+         现在改成在父阶段窗口里找空档；满了就接在后面，并当场说清楚阶段会被撑到哪天。 */
+      const kids = kidsOf(t.stages, p.id);
+      const slot = freeSlot(p, kids, 1);
+      const slotTip = slot.overflow
+        ? `这一段的 ${dateSpan(p)} 已经被 ${kids.length} 个子任务排满了，默认接在 <b>${fmt(slot.start)}</b>；加进来之后第 ${no} 段会跟着变长。想给它留空间，先在上面把这一段「拉长」。`
+        : `默认放进这段的空档里；这一段的窗口是 ${dateSpan(p)}，下面已有 ${kids.length} 个子任务。`;
       row.insertAdjacentHTML('afterend', `<div class="subadd">
         <div class="subadd-h">在第 <b>${no}</b> 段「${esc(p.name)}」下面加一个子任务</div>
         <input class="sname" placeholder="这段具体做什么，例如：取数并核对口径" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit"/>
         <div class="row">
-          <input type="date" class="sst" value="${p.start || t.start}"/>
-          <input type="date" class="sen" value="${p.end || t.end}"/>
+          <input type="date" class="sst" value="${slot.start}"/>
+          <input type="date" class="sen" value="${slot.end}"/>
           <span class="lbl2">谁做</span>
           <select class="swho" title="这段由谁做；不选就是承接人自己做">
             <option value="">承接人自己做</option>
@@ -2492,7 +2704,7 @@ document.addEventListener('click', e => {
           <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
           <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
         </div>
-        <div class="mini" style="margin-top:6px;line-height:1.5">选上别人之后，点上面的「派发」，他才会在承接台收到。</div>
+        <div class="mini" style="margin-top:6px;line-height:1.5">${slotTip}<br/>选上别人之后，点上面的「派发」，他才会在承接台收到。</div>
       </div>`);
       break;
     }
@@ -2526,8 +2738,13 @@ document.addEventListener('click', e => {
           <button class="btn primary sm" data-act="stage-save" data-id="${t.id}" data-idx="${i}">保存</button>
           <button class="btn ghost sm" data-act="sedit-cancel">取消</button>
         </div>
+        ${kids.length ? `<div class="row" style="margin-top:6px">
+          <span class="lbl2">拉长到</span>
+          <input type="date" class="sext" value="${to}" title="把这一段加长到这天，最后一段子任务跟着延长"/>
+          <button class="btn ghost sm" data-act="stage-extend" data-id="${t.id}" data-idx="${i}">延长</button>
+        </div>` : ''}
         <div class="mini" style="margin-top:6px">${kids.length
-          ? `这一阶段的时间由下面 ${kids.length} 个子任务决定，要改时间请改子任务`
+          ? `${dateSpan(s)} 由下面 ${kids.length} 个子任务决定，不能直接改。要给后面的子任务留时间，用上面的「拉长到」。`
           : '结束日期不能早于开始日期，也不能压到前后两段上'}</div>
       </div>`);
       break;
@@ -2535,6 +2752,40 @@ document.addEventListener('click', e => {
     case 'sedit-cancel':
       if (el.closest('.sedit')) el.closest('.sedit').remove();
       break;
+    /* 有子任务的阶段，日期是派生的（= 子任务并集），所以「延长这个阶段」不能靠改父阶段自己的
+       起止——存下去会被 recalcParent 打回原样，人看到的是「点了保存什么都没变」。
+       真正要动的是最后那一段子任务：把它拉长，父阶段自然跟着长。 */
+    case 'stage-extend': {
+      if (!t) break;
+      const i = Number(el.dataset.idx), s = (t.stages || [])[i];
+      const box = el.closest('.sedit');
+      if (!s || !box) break;
+      const nd = box.querySelector('.sext').value;
+      if (!nd) { toast('先选一个日期'); break; }
+      const kids = kidsOf(t.stages, s.id);
+      if (!kids.length) { toast('这一段已经没有子任务了，直接改日期就行'); break; }
+      const last = kids.slice().sort((a, b) => (dayOf(a, 'end') < dayOf(b, 'end') ? 1 : -1))[0];
+      const curEnd = dayOf(last, 'end') || dayOf(last, 'start');
+      if (nd <= curEnd) {
+        toast(`「${last.name || '最后一段'}」已经排到 ${fmt(curEnd)}，只能往后拉；要提前请直接改那一段`);
+        break;
+      }
+      const next = t.stages.map(x => Object.assign({}, x));
+      const target = next.find(x => x.id === last.id);
+      target.end = nd;
+      if (target.date) target.date = nd;   /* 单日节点拉长成区间，date 要跟着挪到新的结束日 */
+      recalcParent(next, s.id);
+      const v = validateStages(t, next, { action: 'extend' });
+      if (!v.ok) { toast(v.msg); break; }
+      t.stages = next;
+      const tops = t.stages.filter(x => !x.pid);
+      const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
+      const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
+      if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
+      save(); openTaskPage(t.id); render();
+      toast(`第 ${topNo(t.stages, t.stages.find(x => x.id === s.id))} 段延长到 ${fmt(nd)}`);
+      break;
+    }
     case 'stage-save': {
       if (!t) break;
       const i = Number(el.dataset.idx), s = (t.stages || [])[i];
@@ -2542,36 +2793,26 @@ document.addEventListener('click', e => {
       if (!s || !box) break;
       const name = box.querySelector('.sname').value.trim();
       if (!name) { toast('阶段名称不能为空'); break; }
+      /* 一律在副本上改，校验通过了才写回。以前是先改内存再发请求，
+         服务端拒了只弹一句「保存失败」——人已经看到界面变了，白高兴一场。 */
+      const next = t.stages.map(x => Object.assign({}, x));
+      const cur = next[i];
+      cur.name = name;
       const kids = kidsOf(t.stages, s.id);
       if (!kids.length) {
         const ns = box.querySelector('.sst').value;
         let ne = box.querySelector('.sen').value;
         if (!ns) { toast('先选开始日期'); break; }
         if (!ne) ne = ns;
-        if (ne < ns) { toast('结束日期不能早于开始日期'); break; }
-        /* 和拖拽同一套口径：同层不能重叠，顺序不能倒 */
-        const sib = siblingsOf(t.stages, i);
-        const pos = sib.findIndex(o => o.i === i);
-        const prev = pos > 0 ? sib[pos - 1].x : null;
-        const next = pos >= 0 && pos < sib.length - 1 ? sib[pos + 1].x : null;
-        const scope = s.pid ? '同一个阶段下的' : '';
-        const pe = prev && (prev.end || prev.date || prev.start);
-        if (pe && ns <= pe) {
-          toast(`不能和${scope}「${prev.name || ''}」重叠：它到 ${fmt(pe)}，开始最早 ${fmt(addDays(pe, 1))}`);
-          break;
-        }
-        const nStart = next && (next.start || next.date || next.end);
-        if (nStart && ne >= nStart) {
-          toast(`不能压到${scope}「${next.name || ''}」：它 ${fmt(nStart)} 开始，结束最晚 ${fmt(addDays(nStart, -1))}`);
-          break;
-        }
-        s.start = ns;
-        s.end = ne;
+        cur.start = ns;
+        cur.end = ne;
         /* 单日节点改成区间时把 date 摘掉，否则日历还按单日取 */
-        if (s.date) { if (ne === ns) s.date = ns; else delete s.date; }
+        if (cur.date) { if (ne === ns) cur.date = ns; else delete cur.date; }
       }
-      s.name = name;
-      if (s.pid) recalcParent(t.stages, s.pid);
+      if (cur.pid) recalcParent(next, cur.pid);
+      const v = validateStages(t, next, { action: 'stage-save' });
+      if (!v.ok) { toast(v.msg); break; }
+      t.stages = next;
       const tops = t.stages.filter(x => !x.pid);
       const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
       const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
@@ -2589,10 +2830,6 @@ document.addEventListener('click', e => {
       if (!name) { toast('先填子任务名称'); break; }
       const i = Number(el.dataset.idx), p = t.stages[i];
       if (!p || p.pid) { toast('这一级不能再拆了'); break; }
-      if (!p.id) p.id = uid('s');   /* 老数据里的阶段没有 id，第一次挂子任务时补上 */
-      const s = box.querySelector('.sst').value || p.start || t.start;
-      let e2 = box.querySelector('.sen').value || s;
-      if (e2 < s) e2 = s;
       const whoEl = box.querySelector('.swho');
       const who = whoEl ? (whoEl.value || null) : null;
       /* 选了具体的人先记下 who，但不写 whoAt：要等这一页上的「派发」按下去，
@@ -2601,8 +2838,18 @@ document.addEventListener('click', e => {
         toast(`${nameOf(who)} 还没有登录过工作台，子任务派过去他收不到。`);
         break;
       }
-      t.stages.push({ id: uid('s'), pid: p.id, name, start: s, end: e2, done: false, who });
-      recalcParent(t.stages, p.id);
+      /* 这条入口以前一句校验都没有，日期默认又是父阶段整段——两条同名同期的子任务
+         就是从这儿进来的。现在先在副本上拼好、过统一校验，通过了才落库。 */
+      const next = t.stages.map(x => Object.assign({}, x));
+      if (!next[i].id) next[i].id = uid('s');   /* 老数据里的阶段没有 id，第一次挂子任务时补上 */
+      const s = box.querySelector('.sst').value || p.start || t.start;
+      const e2 = box.querySelector('.sen').value || s;
+      const node = { id: uid('s'), pid: next[i].id, name, start: s, end: e2, done: false, who };
+      next.push(node);
+      recalcParent(next, next[i].id);
+      const v = validateStages(t, next, { action: 'add-sub', newName: name, newPid: next[i].id, newNode: node });
+      if (!v.ok) { toast(v.msg); break; }
+      t.stages = next;
       save(); openTaskPage(t.id); render();
       toast(who ? `子任务已加，${nameOf(who)} 这一段还等你点「派发」` : '子任务已添加');
       break;
@@ -2657,6 +2904,11 @@ document.addEventListener('click', e => {
       if (kids.length && !confirm(`「${s.name}」下面还有 ${kids.length} 个子任务，一起删掉？`)) break;
       t.stages = t.stages.filter(x => x !== s && !(s.id && x.pid === s.id));
       if (s.pid) recalcParent(t.stages, s.pid);
+      /* 删掉最后一段之后总区间要收回来，不然卡片上还挂着已经不存在的那一段的结束日 */
+      const tops = t.stages.filter(x => !x.pid);
+      const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
+      const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
+      if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
       save(); openTaskPage(t.id); render();
       break;
     }

@@ -21,11 +21,11 @@ public/changelog.js ────────┘              │
 | 模块 | 管什么（OWNED） | 不变量（坏了会怎样） |
 |---|---|---|
 | `version.js` | 版本号、每版更新内容、人读 `CHANGELOG.md` 生成、自检 | `SEMVER` 是唯一版本源且必须是 `CHANGELOG` 里最新的键；分组只能用四类；`CHANGELOG.md` 必须与 `--write` 输出逐字一致（`verify.mjs` 会比对） |
-| `server.js` 数据层 | 建表、`emp`、`task`、`rule`、`cat`、操作日志 | 表结构变更必须兼容已有 `data/workbench.db`；加字段给默认值，不改已有列含义 |
+| `server.js` 数据层 | 建表、`emp`、`task`、`rule`、`cat`、`task_observer`、`watch`、操作日志 | 表结构变更必须兼容已有 `data/workbench.db`；加字段给默认值，不改已有列含义 |
 | `server.js` 实例引擎 | `ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`：常规规则 → 当期实例 | **幂等**：同一 owner、同一规则、同一周期只能有一条实例；重复跑 `maintain` 不产生新行 |
-| `server.js` 同步 | `/api/sync`：前端提交整棵树，服务端按 id 增改删 | 只接受本人有权的任务；**后写覆盖**（已知边界）；返回新 `rev`，前端据此判断是否要重取 |
-| `server.js` 可见性 | `stateFor()`：本人 + 下属 + 已承接 | 上级只在**下属承接后**可见；可见范围是只读，写操作永远回落到本人校验 |
-| `public/app.js` 状态层 | 拉取 → 本地 `S` → 快照 diff → `save()` | 不直接写库；任何会改数据的交互最终都走 `save()` → `/api/sync` |
+| `server.js` 同步 | `/api/sync`：前端提交整棵树，服务端按 id 增改删 | 只接受本人有权的任务；**后写覆盖**（已知边界）；返回新 `rev`，前端据此判断是否要重取；**下派给 `activated=0` 的人必须拒收并回 `errors`**（前端也会拦，两处文案一致） |
+| `server.js` 可见性 | `stateFor()`：本人 + 下属（常规/专项）+ 已承接 + 我作为知情人的专项 | 上级只能看到下属的常规与专项、以及下属承接后派生的任务；**下派/临时不因「他是我下属」就摊开**；知情人只多一条只读任务，不扩大别的可见范围 |
+| `public/app.js` 状态层 | 拉取 → 本地 `S` → 快照 diff → `save()` | 不直接写库；任何会改数据的交互最终都走 `save()` → `/api/sync`；`ownRows()` 只提交 `owner_no` 或 `assignee_no` 是我的行，别人的任务不会被顺手写回去 |
 | `public/app.js` 日历 | `occOn` / `calChipHTML` / `chipLate` / `sortOcc` / `calCells` | 日历与清单**同源**（同一个 `occOn`）；月历固定上月 26 日起、排到当月最后一天；已完成不算逾期 |
 | `public/index.html` | 全部样式与三套视觉通道 | 来源=底色字色、状态=左侧色条+短文字、逾期=红框；三者互不覆盖；图例必须与卡片同形 |
 | `import-emp.js` | CSV → `emp`，含干跑与校验 | 不带 `--apply` 绝不写库；重复工号只更新不新增 |

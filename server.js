@@ -72,6 +72,36 @@ CREATE INDEX IF NOT EXISTS idx_task_routine ON task(routine_id);
 CREATE INDEX IF NOT EXISTS idx_rule_owner ON rule(owner_no);
 `);
 
+/* ============ 迁移：老库直接可用，不重建 ============ */
+/* SQLite 的 ADD COLUMN 没有 IF NOT EXISTS，只能先查列在不在。
+   所有新增列都给默认值，老行的含义不变——这是 data/workbench.db 不重建的前提。 */
+function ensureColumn(table, col, decl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+}
+/* emp.activated：这个人有没有登录过工作台过。
+   没有它就没法判断「派下去他收不收得到」——只能事后等人来问。 */
+ensureColumn('emp', 'activated', 'INTEGER DEFAULT 0');
+ensureColumn('emp', 'last_login', 'TEXT');
+/* watch.kind：'routine' = 关注下属的一条常规；'special' = 关注下属的一条专项。 */
+ensureColumn('watch', 'kind', "TEXT DEFAULT 'routine'");
+ensureColumn('watch', 'task_id', 'TEXT');
+
+/* 知情人用独立关联表，不在 task 里塞 JSON 列：
+   要问的是「我知道情了哪些专项」，按人反查，JSON 列查不动。 */
+db.exec(`
+CREATE TABLE IF NOT EXISTS task_observer(
+  task_id TEXT NOT NULL, emp_no TEXT NOT NULL, created_at TEXT,
+  PRIMARY KEY(task_id, emp_no)
+);
+CREATE INDEX IF NOT EXISTS idx_obs_emp ON task_observer(emp_no);
+`);
+
+/* 老数据回填：登录过的人（op_log 里有 login 记录）置为已激活。
+   不回填的话，升级当天所有老同事都会被当成「从没登录过」，下派会被全部拦死。 */
+db.exec(`UPDATE emp SET activated=1
+  WHERE activated=0 AND no IN (SELECT DISTINCT actor_no FROM op_log WHERE action='login')`);
+
 /* ============ 初始化：花名册与节假日 ============ */
 const SEED_EMP = [
   ['1012', '王磊', '产品组组长', '产品部', '1001'],
@@ -289,10 +319,31 @@ function stateFor(meNo) {
   const placeholders = ownerNos.map(() => '?').join(',');
   const rows = db.prepare(`SELECT * FROM task WHERE owner_no IN (${placeholders}) OR assignee_no=?`)
     .all(...ownerNos, meNo)
-    .filter(r => r.owner_no === meNo || r.assignee_no === meNo || r.type === 'routine'
+    /* 常规：下属的实例要看（看板要用）；
+       专项：下属的专项也要看，否则「下属专项工作推进情况」永远是空的。
+       下派/临时：只认自己经手的那条——别人自己的活不因为「他是我下属」就全摊开。 */
+    .filter(r => r.owner_no === meNo || r.assignee_no === meNo
+      || r.type === 'routine' || r.type === 'special'
       || (r.source_id && delegatedSrc.has(r.source_id)));
 
-  const tasks = rows.map(r => ({
+  /* 别人让我知情的专项：我只看进度，不进任何执行链路。
+     这一条不扩大别的可见范围——知情人只在「下派任务」页的「我关注的任务」里出现。 */
+  const obsMine = new Set(
+    db.prepare('SELECT task_id FROM task_observer WHERE emp_no=?').all(meNo).map(r => r.task_id)
+  );
+  const obsRows = obsMine.size
+    ? db.prepare(`SELECT * FROM task WHERE id IN (${[...obsMine].map(() => '?').join(',')})`).all(...obsMine)
+    : [];
+  const seen = new Set(rows.map(r => r.id));
+  const allRows = rows.concat(obsRows.filter(r => !seen.has(r.id)));
+
+  /* 每条可见任务的知情人名单（只给自己可见的任务挂，不泄露别人的名单） */
+  const obsMap = {};
+  for (const r of db.prepare('SELECT task_id, emp_no FROM task_observer').all()) {
+    (obsMap[r.task_id] = obsMap[r.task_id] || []).push(r.emp_no);
+  }
+
+  const tasks = allRows.map(r => ({
     id: r.id, type: r.type, title: r.title, ownerNo: r.owner_no, assigneeNo: r.assignee_no,
     assignee: r.assignee_no === meNo ? '我' : (names[r.assignee_no] || ''),
     start: r.start_date, end: r.end_date, time: r.time || '', std: r.std || '',
@@ -301,7 +352,9 @@ function stateFor(meNo) {
     stages: JSON.parse(r.stages || '[]'),
     routineId: r.routine_id || null, planDate: r.plan_date || null,
     sourceId: r.source_id || null, detached: !!r.detached,
-    intakeStatus: r.intake_status || null, auto: !!r.routine_id
+    intakeStatus: r.intake_status || null, auto: !!r.routine_id,
+    observers: obsMap[r.id] || [],
+    observer: obsMine.has(r.id)
   }));
 
   const rules = db.prepare('SELECT * FROM rule WHERE owner_no=?').all(meNo).map(r => ({
@@ -316,15 +369,15 @@ function stateFor(meNo) {
   }));
 
   const watch = db.prepare('SELECT * FROM watch WHERE mgr_no=?').all(meNo)
-    .map(w => ({ id: w.id, subNo: w.sub_no, ruleId: w.rule_id }));
+    .map(w => ({ id: w.id, subNo: w.sub_no, ruleId: w.rule_id, kind: w.kind || 'routine', taskId: w.task_id || null }));
 
   /* 可见范围内的常规规则元信息（下属的实例要显示标题与周期） */
   const routines = db.prepare(`SELECT id,owner_no,title,cycle FROM rule WHERE owner_no IN (${placeholders})`)
     .all(...ownerNos)
     .map(r => ({ id: r.id, ownerNo: r.owner_no, title: r.title, cycle: r.cycle }));
 
-  const roster = db.prepare('SELECT no,name,role,dept,mgr_no FROM emp WHERE active=1 ORDER BY no').all()
-    .map(e => ({ no: e.no, name: e.name, role: e.role, dept: e.dept, mgrNo: e.mgr_no }));
+  const roster = db.prepare('SELECT no,name,role,dept,mgr_no,activated FROM emp WHERE active=1 ORDER BY no').all()
+    .map(e => ({ no: e.no, name: e.name, role: e.role, dept: e.dept, mgrNo: e.mgr_no, activated: !!e.activated }));
 
   const holidays = db.prepare('SELECT date,kind,name FROM holiday').all();
 
@@ -371,16 +424,31 @@ function normalizeStages(raw, type) {
   return out;
 }
 
-function upsertTask(meNo, t) {
+function upsertTask(meNo, t, opts) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
-  if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) return false;
+  if (exist && exist.owner_no !== meNo && exist.assignee_no !== meNo) return { ok: false };
 
   /* 承接人：只有「下派任务」存在换人这回事，且只有下发人能换。
      专项、临时一律归本人——页面不给入口，这里兜底，避免脏数据绕过界面写进来。 */
   const type = exist ? exist.type : (t.type || 'temp');
+  const prevAssignee = exist ? exist.assignee_no : null;
   let assigneeNo = exist ? exist.assignee_no : (t.assigneeNo || meNo);
   if (type !== 'assign') assigneeNo = exist ? exist.assignee_no : (t.ownerNo || meNo);
   else if (exist && exist.owner_no === meNo && t.assigneeNo) assigneeNo = t.assigneeNo;
+
+  /* 承接人必须是花名册里、并且登录过工作台的人。
+     派给一个从没开通过账号的人 = 派了个寂寞：他收不到，活就躺在那里假装有进展。
+     只在「新派」或「换人」时拦——老任务的承接人后来离职停用，不该让我连改个标题都改不动。
+     示例数据是刻意造出来的场景，不走这道拦（opts.demo）。 */
+  if (!opts || !opts.demo) {
+    if (type === 'assign' && assigneeNo && assigneeNo !== meNo && assigneeNo !== prevAssignee) {
+      const emp = db.prepare('SELECT no,name,activated FROM emp WHERE no=? AND active=1').get(assigneeNo);
+      if (!emp) return { ok: false, msg: `花名册里没有工号「${assigneeNo}」，不能派给他` };
+      if (!emp.activated) {
+        return { ok: false, msg: `${emp.name} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。` };
+      }
+    }
+  }
 
   /* 「待接收」只在「待开展」时有意义。承接方一旦把任务推进到进行中/暂缓/已完成，
      就等于人已经接手了，不能继续挂着待接收——否则页面上会同时出现
@@ -396,19 +464,33 @@ function upsertTask(meNo, t) {
         t.urg == null || t.urg === '' ? null : Number(t.urg),
         JSON.stringify(normalizeStages(t.stages, type)), t.detached ? 1 : 0,
         assigneeNo, intake, nowStr(), t.id);
-    return true;
+  } else {
+    if (t.ownerNo !== meNo && t.assigneeNo !== meNo) return { ok: false };
+    const now = nowStr();
+    insTaskStmt.run(
+      t.id, t.ownerNo || meNo, assigneeNo, type, t.title, t.std || '',
+      t.start, t.end, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
+      t.imp == null || t.imp === '' ? null : Number(t.imp),
+      t.urg == null || t.urg === '' ? null : Number(t.urg),
+      JSON.stringify(normalizeStages(t.stages, type)), t.routineId || null, t.planDate || null,
+      t.sourceId || null, t.detached ? 1 : 0, intake, now, now
+    );
   }
-  if (t.ownerNo !== meNo && t.assigneeNo !== meNo) return false;
-  const now = nowStr();
-  insTaskStmt.run(
-    t.id, t.ownerNo || meNo, assigneeNo, type, t.title, t.std || '',
-    t.start, t.end, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
-    t.imp == null || t.imp === '' ? null : Number(t.imp),
-    t.urg == null || t.urg === '' ? null : Number(t.urg),
-    JSON.stringify(normalizeStages(t.stages, type)), t.routineId || null, t.planDate || null,
-    t.sourceId || null, t.detached ? 1 : 0, intake, now, now
-  );
-  return true;
+
+  /* 知情人：只有任务 owner 能定。整体替换——payload 里带了 observers 就以它为准，
+     不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。 */
+  if (Array.isArray(t.observers)) {
+    const ownerNo = exist ? exist.owner_no : (t.ownerNo || meNo);
+    if (ownerNo === meNo) {
+      db.prepare('DELETE FROM task_observer WHERE task_id=?').run(t.id);
+      const insObs = db.prepare('INSERT OR IGNORE INTO task_observer(task_id,emp_no,created_at) VALUES(?,?,?)');
+      const now = nowStr();
+      for (const no of t.observers) {
+        if (no && no !== meNo && getEmp(no)) insObs.run(t.id, no, now);
+      }
+    }
+  }
+  return { ok: true };
 }
 
 function upsertRule(meNo, r) {
@@ -463,15 +545,22 @@ function applySync(meNo, body) {
   }
   for (const c of body.cats || []) if (upsertCat(meNo, c)) n++;
   for (const r of body.rules || []) if (upsertRule(meNo, r)) n++;
-  for (const t of body.tasks || []) if (upsertTask(meNo, t)) n++;
+  /* 任务可能被拒（例如下派给一个从没登录过工作台的人）。
+     被拒的那条不写库，但要把原因带回去——前端要原话告诉人，不能默默失败。 */
+  const errors = [];
+  for (const t of body.tasks || []) {
+    const r = upsertTask(meNo, t);
+    if (r.ok) n++;
+    else if (r.msg) errors.push(r.msg);
+  }
   for (const w of body.watch || []) {
     if (w.mgrNo && w.mgrNo !== meNo) continue;
-    db.prepare('INSERT OR IGNORE INTO watch(id,mgr_no,sub_no,rule_id) VALUES(?,?,?,?)')
-      .run(w.id, meNo, w.subNo, w.ruleId);
+    db.prepare('INSERT OR REPLACE INTO watch(id,mgr_no,sub_no,rule_id,kind,task_id) VALUES(?,?,?,?,?,?)')
+      .run(w.id, meNo, w.subNo, w.ruleId || null, w.kind || 'routine', w.taskId || null);
     n++;
   }
   if (n) bumpRev();
-  return n;
+  return { n, errors };
 }
 
 /* ============ 示例数据 ============ */
@@ -538,7 +627,7 @@ function seedDemo(meNo) {
       stages: stages.map(s => ({ name: s[0], start: s[1], end: s[2], done: !!s[3] })),
       /* 已经推进到「进行中」的就不该再挂「待接收」：演示数据也必须自洽 */
       intakeStatus: type === 'assign' && who !== meNo ? (status === 'todo' ? 'pending' : 'accepted') : null
-    });
+    }, { demo: true });
   }
   /* 下属自己的常规工作，让管理者看板有真实数据可看（每人都有，避免看板出现「今日无节点」的空壳） */
   const SUB_ROUTINE = {
@@ -559,6 +648,30 @@ function seedDemo(meNo) {
       { name: '归档与复盘', day: 25, time: '16:00', policy: 'prev' }
     ] });
   }
+  /* 下属自己的专项任务：没有的话，「下属专项工作推进情况」永远是空的，
+     使用者会以为这个模块坏了。给两个人各立一条，阶段进度一眼看得出差别。 */
+  const SUB_SPECIAL = [
+    ['客户画像标签体系重建', 0, d(-8), d(12), 'doing', [
+      ['标签口径对齐', d(-8), d(-3), 1], ['历史数据回刷', d(-2), d(4), 0], ['灰度验证', d(5), d(12), 0]]],
+    ['月度活动复盘模板化', 2, d(-4), d(9), 'todo', [
+      ['复盘框架确定', d(-4), d(0), 1], ['模板试填', d(1), d(9), 0]]]
+  ];
+  for (const [title, idx, start, end, status, stages] of SUB_SPECIAL) {
+    if (!subs.length) break;
+    const owner = subs[idx % subs.length];
+    upsertTask(owner.no, {
+      id: owner.no + '_sp1', type: 'special', title, ownerNo: owner.no, assigneeNo: owner.no,
+      start, end, std: '', status, cat1: null, cat2: null, imp: 2, urg: 1,
+      stages: stages.map(s => ({ name: s[0], start: s[1], end: s[2], done: !!s[3] })),
+      intakeStatus: null
+    }, { demo: true });
+  }
+  /* 演示里这些下属的常规工作已经在被勾、派给他们的活也已经在推——
+     说明他们本来就是这台工作台的使用者，激活标记要跟着一起给，否则
+     「我下派的任务」会挂着一批「这个人从没登录过」，自己跟自己打架。 */
+  const markActive = db.prepare('UPDATE emp SET activated=1 WHERE no=?');
+  markActive.run(meNo);
+  for (const s of subs) markActive.run(s.no);
   bumpRev();
   /* 演示数据里，过去周期的常规实例直接视为已完成，避免首屏一片「逾期」 */
   const t0 = todayStr();
@@ -639,6 +752,9 @@ const server = http.createServer(async (req, res) => {
       const emp = getEmp(no);
       if (!emp) return sendJSON(res, 200, { ok: false, msg: `花名册里没有工号「${no}」，请与管理员核对` });
       if (emp.name !== name) return sendJSON(res, 200, { ok: false, msg: `工号「${no}」对应的姓名不是「${name}」，请核对后再登录` });
+      /* 登录过一次就打上激活标记：以后下派任务时能判断「这个人到底收不收得到」。
+         没有这个标记就没法在派之前拦住"派给一个从没开通过账号的人"。 */
+      db.prepare('UPDATE emp SET activated=1, last_login=? WHERE no=?').run(nowStr(), emp.no);
       logOp(no, 'login', '', ip);
       return sendJSON(res, 200, { ok: true, me: { no: emp.no, name: emp.name, role: emp.role, dept: emp.dept, mgrNo: emp.mgr_no || null } });
     }
@@ -659,9 +775,9 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       const me = String(b.me || '');
       if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
-      const n = applySync(me, b);
-      logOp(me, 'sync', 'rows=' + n, ip);
-      return sendJSON(res, 200, { ok: true, rows: n, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
+      const r = applySync(me, b);
+      logOp(me, 'sync', 'rows=' + r.n, ip);
+      return sendJSON(res, 200, { ok: true, rows: r.n, errors: r.errors, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
 
     if (p === '/api/setmgr' && req.method === 'POST') {
@@ -694,6 +810,8 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       const me = String(b.me || '');
       if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      /* 先清知情人名单再删任务：反过来删就找不到指向哪条任务了 */
+      db.prepare('DELETE FROM task_observer WHERE task_id IN (SELECT id FROM task WHERE owner_no=?)').run(me);
       db.prepare('DELETE FROM task WHERE owner_no=?').run(me);
       db.prepare('DELETE FROM rule WHERE owner_no=?').run(me);
       db.prepare('DELETE FROM cat WHERE owner_no=?').run(me);

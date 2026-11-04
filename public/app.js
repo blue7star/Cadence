@@ -67,6 +67,7 @@ let pollTimer = null;
 let view = 'today', calCursor = monthStart(TODAY), calMode = 'month', selDay = TODAY;
 let routineTab = 'month';
 let openMembers = {};
+let openSpecialBlock = false;   /* 「下属专项工作推进情况」整块默认收起 */
 let modalOk = null;
 let authStep = 'login', authPick = null, authKw = '';
 
@@ -134,7 +135,8 @@ function ownRows() {
       cat1: t.cat1 || null, cat2: t.cat2 || null,
       imp: t.imp == null ? null : t.imp, urg: t.urg == null ? null : t.urg,
       stages: t.stages || [], routineId: t.routineId || null, planDate: t.planDate || null,
-      sourceId: t.sourceId || null, detached: !!t.detached, intakeStatus: t.intakeStatus || null
+      sourceId: t.sourceId || null, detached: !!t.detached, intakeStatus: t.intakeStatus || null,
+      observers: t.observers || []
     }));
   const rules = S.rules.map(r => ({
     id: r.id, title: r.title, cycle: r.cycle, policy: r.policy || 'prev',
@@ -145,7 +147,9 @@ function ownRows() {
     cats.push({ id: c.id, name: c.name, level: 1 });
     (c.children || []).forEach(k => cats.push({ id: k.id, name: k.name, level: 2, parentId: c.id }));
   });
-  const watch = (S.watch || []).map(w => ({ id: w.id, subNo: w.subNo, ruleId: w.ruleId }));
+  const watch = (S.watch || []).map(w => ({
+    id: w.id, subNo: w.subNo, ruleId: w.ruleId, kind: w.kind || 'routine', taskId: w.taskId || null
+  }));
   return { tasks, rules, cats, watch };
 }
 function signatures() {
@@ -184,7 +188,12 @@ async function persist() {
     }
     const changed = body.tasks.length + body.rules.length + body.cats.length + body.watch.length +
       body.del.tasks.length + body.del.rules.length + body.del.cats.length + body.del.watch.length;
-    if (changed) await api('/api/sync', { method: 'POST', body: JSON.stringify(body) });
+    if (changed) {
+      /* 服务端可能拒收某一条（比如下派给一个从没登录过工作台的人）。
+         拒了就把原因原话端出来——默默失败会让人以为派出去了。 */
+      const r = await api('/api/sync', { method: 'POST', body: JSON.stringify(body) });
+      if (r && r.errors && r.errors.length) toast(r.errors[0]);
+    }
     SNAP = signatures();
     /* 连续操作时先别刷新，避免把还没推上去的改动冲掉 */
     if (!saveQueued) {
@@ -574,12 +583,18 @@ function viewToday() {
 }
 
 /* ============ 视图：下派任务 ============ */
+/* 这一页回答四个问题：
+   ① 我派出去的活干到哪了  ② 下属的常规工作推得怎么样
+   ③ 下属的专项项目推得怎么样  ④ 我在关注的事现在怎么样
+   四块各管各的，别把「我关注」和「我下派」混在一起——同一件事出现在两块里，人会以为出 bug 了。 */
 function viewAssign() {
   const list = S.tasks.filter(t => t.type === 'assign' && t.ownerNo === S.me.no);
   const doing = list.filter(t => t.status === 'doing').length;
   const late = list.filter(overdue).length;
+  const spMembers = buildSpecialMembers();
+  const spCount = spMembers.reduce((a, m) => a + m.specials.length, 0);
+  const following = buildFollowing();
   return `
-  ${noMgrBar('下派任务')}
   <div class="grid-4">
     ${statCard('', '已下派任务', list.length)}
     ${statCard('doing', '进行中', doing)}
@@ -598,12 +613,15 @@ function viewAssign() {
         /* 对方选了「规划并承接」，会在他名下新建一条任务并指回这条；展开挂在下面，
            否则上级这里永远停在「已接收」，看不到后续 */
         const carried = S.tasks.filter(x => x.sourceId === t.id);
+        /* 承接人现在可以是全公司任何人：不是自己直接下属的，标一句「跨级」，
+           否则「他怎么不给我回进度」这种误会会一直冒出来 */
+        const cross = t.assigneeNo !== S.me.no && !S.subs.some(m => m.no === t.assigneeNo);
         return `<tr>
           <td style="max-width:250px"><b>${esc(t.title)}</b><div class="mini">${catName(t.cat1, t.cat2)} ${prioLabel(t) ? '· ' + prioLabel(t) : ''}</div>
             ${carried.map(x => `<div class="mini carry" data-act="open" data-id="${x.id}"
                 title="点开看承接后这条任务的详情"><span class="carry-ar">↳</span>${esc(nameOf(x.ownerNo))} 承接为「${esc(x.title)}」
                 <b>${taskProg(x)}%</b> · ${ST[x.status] ? ST[x.status].name : ''}${overdue(x) ? ' · <span style="color:#dc2626">已逾期</span>' : ''}</div>`).join('')}</td>
-          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${t.intakeStatus === 'pending' && t.status === 'todo' ? ' <span class="tag">待接收</span>'
+          <td style="white-space:nowrap">${esc(nameOf(t.assigneeNo))}${cross ? ' <span class="tag">跨级</span>' : ''}${t.intakeStatus === 'pending' && t.status === 'todo' ? ' <span class="tag">待接收</span>'
             : (t.intakeStatus === 'accepted' && !carried.length ? ' <span class="tag">已接收</span>' : '')}</td>
           <td class="mini" style="white-space:nowrap">${fmt(t.start)} → ${fmt(t.end)}${overdue(t) ? ' <span class="tag red">逾期</span>' : ''}</td>
           <td><div style="display:flex;align-items:center;gap:8px;white-space:nowrap"><div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div><span class="mini">${p}%${t.stages && t.stages.length ? ` · ${t.stages.filter(s => s.done).length}/${t.stages.length} 阶段` : ''}</span></div></td>
@@ -619,9 +637,126 @@ function viewAssign() {
   <div class="card">
     <div class="card-h"><h2>下属常规工作推进情况</h2>
       <span class="hint">默认折叠为一行汇总，点成员展开；「关注」某一条后，能看到它的完整节点</span>
-      <div class="spacer"></div><span class="mini">已关注 ${(S.watch || []).length} 条</span></div>
+      <div class="spacer"></div><span class="mini">已关注 ${(S.watch || []).filter(w => (w.kind || 'routine') === 'routine').length} 条</span></div>
     <div>${S.members.length ? S.members.map(memberBlock).join('') : '<div class="empty">暂无直接下属</div>'}</div>
     <div class="note" style="margin-top:2px">关注只是你本人的视图偏好：不通知下属、不改他们的任何数据。规则与节点的编辑权始终在本人手里，你只能看状态。</div>
+  </div>
+
+  <div class="card">
+    <div class="card-h fold" data-act="fold-special">
+      <h2>下属专项工作推进情况</h2>
+      <span class="hint">${spCount ? `${spCount} 条专项` : '暂无专项'}${openSpecialBlock ? '' : ' · 默认收起，点这里展开'}</span>
+      <div class="spacer"></div><span class="mini">${openSpecialBlock ? '收起 ▴' : '展开 ▾'}</span></div>
+    ${openSpecialBlock
+      ? (spMembers.filter(m => m.specials.length).length
+        ? spMembers.filter(m => m.specials.length).map(specialMemberBlock).join('')
+        : '<div class="empty">下属还没有立项专项任务。专项是「需要持续推进的大项目」，阶段拆得越清楚，进度越看得准。</div>')
+      : ''}
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>我关注的任务</h2>
+      <span class="hint">你点的「关注」，以及别人让你知情的专项，都汇总在这里</span>
+      <div class="spacer"></div><span class="mini">${following.length} 条</span></div>
+    ${following.length ? following.map(followRowHTML).join('')
+      : '<div class="empty">还没有关注的事。在上面两块里点「☆ 关注」，或者让别人把你设成知情人，这里就会列出来。</div>'}
+    <div class="note" style="margin-top:2px">自己下发的任务不在这里，仍在上面的「我下派的任务」里；同一件事只出现在一个地方。</div>
+  </div>`;
+}
+
+/* ============ 下属专项工作推进情况 ============ */
+/* 和常规工作一个路子：按人列出来，每条专项可以「关注」，
+   关注后出现在「我关注的任务」里。专项看的是阶段（一个大项目分几段），不是节点。 */
+function buildSpecialMembers() {
+  return S.subs.map(sub => ({
+    no: sub.no, name: sub.name, role: sub.role, dept: sub.dept,
+    specials: S.tasks.filter(t => t.type === 'special' && t.ownerNo === sub.no)
+      .sort((a, b) => (a.end < b.end ? -1 : 1))
+  }));
+}
+function isWatchedTask(subNo, taskId) {
+  return (S.watch || []).some(w => (w.kind || 'routine') === 'special' && w.subNo === subNo && w.taskId === taskId);
+}
+function specialMemberBlock(m) {
+  return `<div class="memrow open" style="cursor:default">
+    <div class="ava3">${esc(m.name.slice(-1))}</div>
+    <div class="mwho"><b>${esc(m.name)}</b> <span class="mini">${esc(m.role)}</span></div>
+    <span class="rmeta">${m.specials.length} 条专项</span>
+    <span class="mini">${esc(m.dept || '')}</span>
+    <span class="mini">展开中</span>
+  </div>
+  <div class="mem-slot">${m.specials.map(t => specialLineHTML(m, t)).join('')}</div>`;
+}
+function specialLineHTML(m, t) {
+  const w = isWatchedTask(m.no, t.id);
+  const leaves = leavesOf(t.stages || []);
+  const cur = leaves.find(s => !s.done) || null;
+  const late = overdue(t);
+  const p = taskProg(t);
+  return `<div class="rline ${w ? 'open' : ''}">
+    <span class="rnm">${esc(t.title)}</span>
+    <span class="rmeta">${fmt(t.start)} → ${fmt(t.end)}</span>
+    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 阶段` : '未拆阶段'}</span>
+    <span class="curnode ${late ? 'warn' : ''}">${cur
+      ? (late ? '卡在：' : '当前：') + esc(cur.name || '阶段') + ' · ' + fmt(cur.start || cur.date)
+      : (t.status === 'done' ? '已全部完成' : '还没开始')}</span>
+    <span class="mini">${p}%</span>
+    ${stTag(t.status)}
+    <span class="tag-watch ${w ? '' : 'off'}" data-act="watch-task" data-m="${m.no}" data-t="${t.id}"
+      title="${w ? '取消关注' : '关注后出现在「我关注的任务」里'}">${w ? '★ 已关注' : '☆ 关注'}</span>
+    <button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button>
+  </div>`;
+}
+
+/* ============ 我关注的任务 ============ */
+/* 三个来源：
+   ① 我主动关注的下属常规     —— watch.kind = 'routine'
+   ② 我主动关注的下属专项     —— watch.kind = 'special'
+   ③ 别人让我知情的专项       —— task_observer 里有我（越级关注的入口）
+   自己下发的任务不在这里，它在「我下派的任务」里。 */
+function buildFollowing() {
+  const out = [];
+  (S.watch || []).filter(w => (w.kind || 'routine') === 'routine' && w.ruleId).forEach(w => {
+    const m = S.members.find(x => x.no === w.subNo);
+    const r = m && (m.routines || []).find(x => x.id === w.ruleId);
+    if (r) out.push({ kind: 'routine', who: m.name, m, r });
+  });
+  (S.watch || []).filter(w => w.kind === 'special' && w.taskId).forEach(w => {
+    const t = S.tasks.find(x => x.id === w.taskId);
+    if (t) out.push({ kind: 'special', who: nameOf(t.ownerNo), t });
+  });
+  S.tasks.filter(t => t.observer && t.type === 'special').forEach(t => {
+    out.push({ kind: 'informed', who: nameOf(t.ownerNo), t });
+  });
+  return out;
+}
+function followRowHTML(f) {
+  if (f.kind === 'routine') {
+    const r = f.r;
+    const cur = curNodeOf(r);
+    const late = cur && cur.date < TODAY;
+    return `<div class="follow-row">
+      <span class="tag">常规</span>
+      <span class="who">${esc(f.who)}</span>
+      <span class="rnm">${esc(r.title)}</span>
+      <span class="rmeta">${cycleCN(r.cycle)} · 本周 ${r.weekDone}/${r.weekTotal}</span>
+      <span class="curnode ${late ? 'warn' : ''}">${cur
+        ? (late ? '卡在：' : '当前：') + esc(cur.name || '节点') + ' · ' + fmt(cur.date)
+        : '本轮全部完成'}</span>
+    </div>`;
+  }
+  const t = f.t;
+  const leaves = leavesOf(t.stages || []);
+  const p = taskProg(t);
+  return `<div class="follow-row" data-act="open" data-id="${t.id}" style="cursor:pointer">
+    <span class="tag">${f.kind === 'informed' ? '知情' : '专项'}</span>
+    <span class="who">${esc(f.who)}</span>
+    <span class="rnm">${esc(t.title)}</span>
+    <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 阶段` : '未拆阶段'}</span>
+    <div class="prog" style="width:56px"><i class="${p === 100 ? 'g' : ''}" style="width:${p}%"></i></div>
+    <span class="mini">${p}%</span>
+    ${stTag(t.status)}
+    ${f.kind === 'informed' ? `<span class="mini">${esc(f.who)} 让你知情</span>` : ''}
   </div>`;
 }
 
@@ -801,7 +936,6 @@ function viewIntake() {
   const pending = S.intake;
   const accepted = acceptedList();
   return `
-  ${noMgrBar('任务承接台')}
   <div class="grid-2">
     <div class="card">
       <div class="card-h"><h2>待接收的上级任务</h2><span class="hint">接收 → 规划 → 拆分 → 移入专项 / 临时</span>
@@ -995,10 +1129,13 @@ function viewSettings() {
     <div class="authkv">
       <div><span>登录账号</span><b>${S.me ? esc(S.me.name) + ' · ' + esc(S.me.no) : '未登录'}</b></div>
       <div><span>部门 / 岗位</span><b>${S.me ? esc(S.me.dept) + ' · ' + esc(S.me.role) : '—'}</b></div>
-      <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置，下派与承接不可用</span>'}</b></div>
-      <div><span>可见范围</span><b>直接下属 ${S.subs.length} 人（向下 1 层）</b></div>
+      <div><span>直属上级</span><b>${S.me && S.me.mgr ? esc(S.me.mgr.name) + ' · ' + esc(S.me.mgr.no) : '<span style="color:#b45309">未设置</span>'}</b></div>
+      <div><span>我的下属</span><b>直接下属 ${S.subs.length} 人（向下 1 层）</b></div>
+      <div><span>下派对象</span><b>全公司 ${(S.roster || []).length - 1} 位同事（不限于下属）</b></div>
+      <div><span>能否派活</span><b>${S.me && empActivated(S.me.no) ? '已开通，可以派活' : '<span style="color:#b45309">你还没登录过工作台，先自己登录一次</span>'}</b></div>
     </div>
-    <div class="note" style="margin-top:10px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下派的任务仍保留原上级可见，新增任务只对新上级可见。</div>
+    <div class="note" style="margin-top:10px">上级不是必填项：不设上级照样能下派任务、承接任务。只是不设上级的人不会出现在别人的「下属」名单里，上级也就看不到你的常规工作与专项进展。</div>
+    <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已下派的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
   <div class="grid-2">
     <div class="card">
@@ -1068,12 +1205,6 @@ function renderMe() {
   m.textContent = me.mgr ? '上级：' + me.mgr.name : '上级：未设置 · 点此设置';
   m.style.color = me.mgr ? '' : '#b45309';
 }
-function noMgrBar(what) {
-  if (S.me && S.me.mgr) return '';
-  return `<div class="noauth-bar">⚠ 你还没有设置直属上级，「${what}」暂不可用。
-    <span class="btn link" data-act="open-mgr">去设置</span></div>`;
-}
-
 /* ============ 任务详情（整页，不用抽屉） ============ */
 /* 左抽屉只有 460px 宽，一列控件往下堆；管理者点开一条任务想看的是「到哪了、卡在哪」，
    不是一列要填的表单。所以改成整页：抬头先给进度，左边看阶段，右边才是字段；
@@ -1118,8 +1249,7 @@ function taskDetailHTML(t) {
   const src = t.sourceId ? (S.tasks.find(i => i.id === t.sourceId) || null) : null;
   const stOpts = Object.keys(ST).map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${ST[k].name}</option>`).join('');
   const lvOpts = v => `<option value="">未设置</option>` + [3, 2, 1].map(k => `<option value="${k}" ${v === k ? 'selected' : ''}>${LV[k]}</option>`).join('');
-  const whoOpts = [`<option value="${S.me.no}" ${t.assigneeNo === S.me.no ? 'selected' : ''}>我</option>`]
-    .concat(S.subs.map(m => `<option value="${m.no}" ${t.assigneeNo === m.no ? 'selected' : ''}>${esc(m.name)}</option>`)).join('');
+  const whoOpts = assigneeOptions(t.assigneeNo);
 
   const leftText = t.status === 'done' ? '已完成'
     : leftDays > 0 ? `还有 ${leftDays} 天` : leftDays === 0 ? '今天到期' : `逾期 ${-leftDays} 天`;
@@ -1214,7 +1344,25 @@ function taskDetailHTML(t) {
       ${!isRoutine && canEdit ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
     </div>`;
 
-  return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}</div></div>` + foot;
+  /* ---- 知情人：专项任务才有。看得到进展，改不了任何东西 ---- */
+  const obsList = t.observers || [];
+  const obsCard = (t.type === 'special' && (obsList.length || canEdit))
+    ? `<div class="card">
+        <div class="card-h"><h2>知情人</h2><span class="hint">${canEdit ? '他们能在「下派任务」页看到这条专项的进度' : '你只能看进度'}</span></div>
+        ${obsList.length ? obsList.map(no => `<div class="kv"><span>${esc(nameOf(no))}</span>${
+          canEdit ? `<b><button class="btn sm ghost" data-act="obs-del" data-id="${t.id}" data-no="${no}">移除</button></b>` : '<b>知情</b>'}</div>`).join('')
+          : '<div class="mini">还没有指定知情人</div>'}
+        ${canEdit ? `<div style="margin-top:10px">
+          <select data-act="obs-add" data-id="${t.id}">
+            <option value="">+ 添加知情人</option>
+            ${(S.roster || []).filter(e => e.no !== S.me.no && !obsList.includes(e.no))
+              .map(e => `<option value="${e.no}">${esc(e.name)}（${esc(e.role || '')}）${e.activated ? '' : ' · 未登录过'}</option>`).join('')}
+          </select>
+          <div class="mini" style="margin-top:6px;line-height:1.4">知情人只看不改。他还没登录过工作台也不影响——知情是知会一声。</div>
+        </div>` : ''}
+      </div>` : '';
+
+  return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}${obsCard}</div></div>` + foot;
 }
 /* 阶段树：一级阶段带序号，子任务缩进一级。
    父阶段有子任务时不给勾选框——点了就是「全勾/全不勾」，容易误解；它的完成态由子任务决定。 */
@@ -1362,12 +1510,35 @@ function closeModal() {
    专项、临时一律是本人——这两个页面不是派活入口，锁住才不会让人以为能给他人派活。 */
 function canAssignOthers(type) { return type === 'assign'; }
 
+/* 承接人下拉：全员可选，分「我的下属 / 其他同事」两组。
+   下派是点名派的活，本来就不靠汇报关系，所以不再只列直接下属；
+   从没登录过工作台的人标出来——派给他他收不到，别让人以为派出去就有人接了。 */
+function empActivated(no) {
+  const e = (S.roster || []).find(x => x.no === no);
+  return e ? !!e.activated : false;
+}
+function empOptionLabel(e, isSub) {
+  return `${e.name}（${e.role || ''}）${isSub ? '' : '· 非下属'}${e.activated ? '' : ' · 未登录过'}`;
+}
+function assigneeOptions(sel) {
+  const me = S.me.no;
+  const subNos = new Set(S.subs.map(m => m.no));
+  const roster = S.roster || [];
+  const opt = (e, isSub) => `<option value="${e.no}" ${sel === e.no ? 'selected' : ''}>${esc(empOptionLabel(e, isSub))}</option>`;
+  const subs = roster.filter(e => subNos.has(e.no));
+  const others = roster.filter(e => e.no !== me && !subNos.has(e.no));
+  return `<option value="${me}" ${!sel || sel === me ? 'selected' : ''}>我</option>`
+    + (subs.length ? `<optgroup label="我的下属">${subs.map(e => opt(e, true)).join('')}</optgroup>` : '')
+    + (others.length ? `<optgroup label="其他同事">${others.map(e => opt(e, false)).join('')}</optgroup>` : '');
+}
+
 function assigneeFieldInner(type, sel) {
   if (canAssignOthers(type)) {
-    return `<div class="field"><label>承接人</label><select id="f_assignee">
-      <option value="${S.me.no}" ${!sel || sel === S.me.no ? 'selected' : ''}>我</option>
-      ${S.subs.map(m => `<option value="${m.no}" ${sel === m.no ? 'selected' : ''}>${esc(m.name)}（${esc(m.role || '')}）</option>`).join('')}
-    </select></div>`;
+    const cross = sel && sel !== S.me.no && !S.subs.some(m => m.no === sel);
+    return `<div class="field"><label>承接人</label><select id="f_assignee">${assigneeOptions(sel)}</select>
+      ${cross ? `<div class="mini" style="margin-top:5px;line-height:1.4">${esc(nameOf(sel))} 不是你的直接下属。这条活是点名派给他的，他登录后就能在承接台看到。</div>` : ''}
+      <div class="mini" style="margin-top:5px;line-height:1.4">标着「未登录过」的人还从没打开过工作台，任务派过去他收不到，不能派给他。</div>
+    </div>`;
   }
   return `<div class="field"><label>承接人</label>
     <div class="locked">我（本人）<span class="mini">不可改</span></div>
@@ -1378,6 +1549,49 @@ function assigneeFieldInner(type, sel) {
 
 function assigneeFieldHTML(type, sel) {
   return `<div id="fAssigneeWrap">${assigneeFieldInner(type, sel)}</div>`;
+}
+
+/* ============ 知情人（专项任务） ============ */
+/* 知情人＝知道这个项目在推进、但不是执行人。他们能在「下派任务」页的「我关注的任务」里看到进度。
+   现在按自由选择做：全员可选、可搜索、多选。
+   没登录过工作台的人照样能选——知情是「知会一声」，不依赖对方账号；
+   真正依赖对方能不能收得到的是「下派」，那个才拦。 */
+let obsPicked = [];
+function observerCandidates(kw) {
+  const k = String(kw || '').trim().toLowerCase();
+  return (S.roster || []).filter(e => e.no !== S.me.no)
+    .filter(e => !k || String(e.no).toLowerCase().includes(k)
+      || String(e.name || '').toLowerCase().includes(k)
+      || String(e.role || '').toLowerCase().includes(k)
+      || String(e.dept || '').toLowerCase().includes(k));
+}
+function renderObserverList(kw) {
+  const list = $('#f_obs_list');
+  if (!list) return;
+  const rows = observerCandidates(kw);
+  list.innerHTML = rows.length ? rows.map(e => `<label class="obs-row${obsPicked.includes(e.no) ? ' on' : ''}">
+      <input type="checkbox" data-no="${e.no}" ${obsPicked.includes(e.no) ? 'checked' : ''}/>
+      <span class="nm">${esc(e.name)}</span>
+      <span class="mini">${esc(e.role || '')} · ${esc(e.no)}</span>
+      ${e.activated ? '' : '<span class="mini warn">未登录过</span>'}
+    </label>`).join('')
+    : '<div class="mini" style="padding:8px 2px">没有匹配的人</div>';
+  const tip = $('#f_obs_picked');
+  if (tip) tip.textContent = obsPicked.length
+    ? `已选 ${obsPicked.length} 人：${obsPicked.map(no => esc(nameOf(no))).join('、')}`
+    : '还没选人';
+  const hidden = $('#f_observers');
+  if (hidden) hidden.value = obsPicked.join(',');
+}
+function observerFieldHTML(type) {
+  return `<div class="field" id="fObsWrap" style="display:${type === 'special' ? '' : 'none'}">
+    <label>知情人 <span class="mini">可多选；他们能在「下派任务」页看到这条专项的进度</span></label>
+    <input id="f_obs_kw" placeholder="搜索工号、姓名、岗位或部门" autocomplete="off"/>
+    <div id="f_obs_list" class="obs-list"></div>
+    <div class="mini" id="f_obs_picked">还没选人</div>
+    <input type="hidden" id="f_observers" value=""/>
+    <div class="mini" style="margin-top:5px;line-height:1.4">知情人只是知道进展，不参与执行，也不能改这条任务。没登录过工作台的人也能选。</div>
+  </div>`;
 }
 
 function taskModalBody(type, preset) {
@@ -1398,7 +1612,8 @@ function taskModalBody(type, preset) {
   <div class="field"><label>优先级（可选填，不填不影响使用）</label><div class="row">
     <select id="f_imp"><option value="">重要度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
     <select id="f_urg"><option value="">紧急度</option>${[3, 2, 1].map(k => `<option value="${k}">${LV[k]}</option>`).join('')}</select>
-  </div></div>`;
+  </div></div>
+  ${observerFieldHTML(type)}`;
 
   if (type !== 'special') {
     return base + `<div class="note">${type === 'temp' ? '临时任务默认归入「其他 / 临时事项」，起止可只选今天。' : '下派后组员登录即可在「承接台」看到并承接；可后续在详情里加阶段目标。'}</div>`;
@@ -1448,15 +1663,8 @@ function readStageRows(fallback) {
 }
 function openNewTask(type, preset) {
   const t = type || 'temp';
-  if (t === 'assign' && !(S.me && S.me.mgr)) {
-    toast('先设置直属上级，才能下派任务');
-    authStep = 'mgr'; authPick = null; authKw = ''; authRender();
-    return;
-  }
-  if (t === 'assign' && !S.subs.length) {
-    toast('你还没有直接下属，无法下派任务');
-    return;
-  }
+  /* 下派不再要求下派人自己有直属上级、也不要求有直接下属：
+     承接人下拉里是全公司的人，点名派给谁都行。没设上级的人照样能派活。 */
   openModal(`新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
     const title = $('#f_title').value.trim();
     if (!title) { toast('先填任务名称'); return false; }
@@ -1467,6 +1675,14 @@ function openNewTask(type, preset) {
     const typeVal = $('#f_type').value;
     // 专项、临时只归自己（界面已锁），这里再兜一层，避免切换类型后残留别人的工号
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
+    /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。
+       所以在这里拦住，不让它建出来。知情人没有这道限制（知情不依赖对方账号）。 */
+    if (typeVal === 'assign' && assigneeNo !== S.me.no && !empActivated(assigneeNo)) {
+      const e2 = (S.roster || []).find(x => x.no === assigneeNo);
+      toast(`${e2 ? e2.name : '这个人'} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。`);
+      return false;
+    }
+    const observers = typeVal === 'special' ? obsPicked.slice() : [];
     const task = {
       id: uid('t'), type: typeVal, title,
       ownerNo: S.me.no, assigneeNo,
@@ -1477,7 +1693,7 @@ function openNewTask(type, preset) {
       imp: Number($('#f_imp').value) || null, urg: Number($('#f_urg').value) || null,
       stages, sourceId: preset && preset.sourceId ? preset.sourceId : null,
       intakeStatus: (typeVal === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null,
-      routineId: null, planDate: null, detached: false
+      routineId: null, planDate: null, detached: false, observers
     };
     S.tasks.push(task);
     if (preset && preset.sourceId) {
@@ -1486,9 +1702,15 @@ function openNewTask(type, preset) {
     }
     S.intake = buildIntake(); S.members = buildMembers();
     save(); render(); closeModal();
-    toast('已创建：' + title);
+    toast(observers.length ? `已创建：${title}（知情人 ${observers.length} 人）` : '已创建：' + title);
   }, '创建');
   if (t === 'special') $('#modal').classList.add('wide');
+  obsPicked = [];
+  renderObserverList('');
+  /* 知情人列表是在 openModal 之后才填进去的，里面有一堆复选框。
+     「填过没有」的快照要在填完之后重拍一次，否则一打开就被判定成「已经改过」，
+     空表单点遮罩也关不掉——防误关不能变成关不掉。 */
+  modalSnap = modalSnapshot();
 }
 
 let ruleStepsDraft = [];
@@ -1612,6 +1834,7 @@ function openIntakeModal(id) {
     </select></div>
     <div class="field"><label>任务名称</label><input id="f_title" value="${esc(it.title)}"/></div>
     ${assigneeFieldHTML('special', null)}
+    ${observerFieldHTML('special')}
     <div class="field"><label>起止时间</label><div class="row">
       <input type="date" id="f_start" value="${TODAY}"/>
       <input type="date" id="f_end" value="${it.due}"/>
@@ -1623,13 +1846,19 @@ function openIntakeModal(id) {
     if (!title) { toast('先填任务名称'); return false; }
     const type = $('#f_type').value;
     const assigneeNo = canAssignOthers(type) ? $('#f_assignee').value : S.me.no;
+    if (type === 'assign' && assigneeNo !== S.me.no && !empActivated(assigneeNo)) {
+      const e2 = (S.roster || []).find(x => x.no === assigneeNo);
+      toast(`${e2 ? e2.name : '这个人'} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。`);
+      return false;
+    }
     S.tasks.push({
       id: uid('t'), type, title, ownerNo: S.me.no, assigneeNo,
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
       start: $('#f_start').value, end: $('#f_end').value, std: $('#f_std').value.trim(),
       status: 'todo', cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       imp: null, urg: null, stages: [], sourceId: it.id,
-      intakeStatus: (type === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null
+      intakeStatus: (type === 'assign' && assigneeNo !== S.me.no) ? 'pending' : null,
+      observers: type === 'special' ? obsPicked.slice() : []
     });
     const src = S.tasks.find(x => x.id === it.id);
     if (src) src.intakeStatus = 'accepted';
@@ -1637,6 +1866,10 @@ function openIntakeModal(id) {
     save(); closeModal(); render();
     toast(type === 'special' ? '已转入专项工作' : type === 'temp' ? '已转入临时任务' : '已下派组员');
   }, '承接');
+  obsPicked = [];
+  renderObserverList('');
+  /* 同上：知情人列表填完再拍一次快照，否则这个弹窗一打开就算「改过了」 */
+  modalSnap = modalSnapshot();
 }
 /* ============ 交互动作 ============ */
 function toast(msg) {
@@ -1816,7 +2049,7 @@ function authRender(msg) {
   body.innerHTML = `
     <div class="step">STEP 2 / 2 · 汇报关系</div>
     <h3>选择你的直属上级</h3>
-    <p class="desc">一个账号只有一个直属上级，用于下派任务、承接上级任务与可见范围。可搜索工号或姓名。</p>
+    <p class="desc">一个账号只有一个直属上级，决定你出现在谁的「下属」名单里、谁能看到你的常规工作和专项进展。可搜索工号或姓名。</p>
     <div class="auth-field" style="margin-bottom:9px"><input id="a_kw" placeholder="搜索工号 / 姓名" value="${esc(authKw)}"/></div>
     <div class="mgr-list" id="mgrList">${mgrListHTML(authKw)}</div>
     <div class="auth-err" id="a_err">${msg || ''}</div>
@@ -1824,7 +2057,8 @@ function authRender(msg) {
       <button class="btn ghost" data-act="skip-mgr">暂时跳过</button>
       <button class="btn primary" data-act="confirm-mgr">确定</button>
     </div>
-    <div class="auth-hint">暂不设置也能用：今日待办、常规、专项、临时任务、日历都正常；只是「下派任务」和「任务承接台」会锁住。
+    <div class="auth-hint">暂不设置也能用：下派任务、任务承接台、今日待办、常规、专项、临时任务、日历都正常。
+      只是你不设上级，别人就看不到你的常规工作和专项进展。
       ${S && S.me ? `<br/><span style="color:#7b8a9d">当前身份：${esc(S.me.name)} · ${esc(S.me.no)}</span>
       <span class="btn link" data-act="close-auth" style="margin-left:6px">返回工作台</span>` : ''}</div>`;
 }
@@ -1887,7 +2121,7 @@ document.addEventListener('click', e => {
       break;
     }
     case 'skip-mgr':
-      finishAuth('已跳过。下派任务与承接台暂不可用，可随时在设置里补');
+      finishAuth('已跳过。不设上级照样能下派任务，只是你不会出现在别人的「下属」名单里。可随时在设置里补。');
       break;
     case 'switch-user':
     case 'open-mgr':
@@ -1902,6 +2136,27 @@ document.addEventListener('click', e => {
       }
       break;
     case 'memrow': openMembers[id] = !openMembers[id]; render(); break;
+    case 'fold-special': openSpecialBlock = !openSpecialBlock; render(); break;
+    case 'watch-task': {
+      /* 关注下属的一条专项：和关注常规同一套机制，只是挂的是任务而不是规则 */
+      const subNo = el.dataset.m, taskId = el.dataset.t;
+      const i = (S.watch || []).findIndex(w => w.kind === 'special' && w.subNo === subNo && w.taskId === taskId);
+      if (i >= 0) S.watch.splice(i, 1);
+      else S.watch.push({ id: 'w_' + S.me.no + '_' + subNo + '_t_' + taskId, subNo, ruleId: null, kind: 'special', taskId });
+      save(); render();
+      toast(i >= 0 ? '已取消关注' : '已关注，会出现在「我关注的任务」里');
+      break;
+    }
+    case 'obs-del': {
+      const t = S.tasks.find(x => x.id === id);
+      const no = el.dataset.no;
+      if (t) {
+        t.observers = (t.observers || []).filter(x => x !== no);
+        save(); render();
+        toast(`已移除知情人：${nameOf(no)}`);
+      }
+      break;
+    }
     case 'watch': {
       const subNo = el.dataset.m, ruleId = el.dataset.r;
       const i = (S.watch || []).findIndex(w => w.subNo === subNo && w.ruleId === ruleId);
@@ -2304,6 +2559,15 @@ document.addEventListener('click', e => {
 
 /* 抽屉内字段编辑 */
 document.addEventListener('change', e => {
+  /* 知情人多选：勾上就加进名单，取消就去掉；改完重画列表，把「已选 N 人」同步上 */
+  if (e.target.closest('#f_obs_list') && e.target.matches('input[type=checkbox]')) {
+    const no = e.target.dataset.no;
+    if (e.target.checked) { if (!obsPicked.includes(no)) obsPicked.push(no); }
+    else obsPicked = obsPicked.filter(x => x !== no);
+    const kw = $('#f_obs_kw');
+    renderObserverList(kw ? kw.value : '');
+    return;
+  }
   if (e.target.matches('[data-act="qstatus"]')) {
     const t = S.tasks.find(x => x.id === e.target.dataset.id);
     if (!t) return;
@@ -2335,15 +2599,14 @@ document.addEventListener('change', e => {
   }
   if (modal && e.target.matches('#f_type')) {
     const prev = e.target.dataset.prev || 'special';
-    let next = e.target.value;
-    if (next === 'assign' && !S.subs.length) {
-      toast('你还没有直接下属，无法下派任务');
-      e.target.value = prev; next = prev;
-    }
+    const next = e.target.value;
     e.target.dataset.prev = next;
     // 类型一换，承接人就跟着换：只有下派任务能选人，其余锁回本人
     const wrap = $('#fAssigneeWrap');
     if (wrap) wrap.innerHTML = assigneeFieldInner(next, null);
+    /* 知情人只在专项任务上有意义：类型切走就把这块收起来 */
+    const obs = $('#fObsWrap');
+    if (obs) obs.style.display = next === 'special' ? '' : 'none';
     if (next === 'temp') toast('临时任务默认归入「其他 / 临时事项」');
     return;
   }
@@ -2351,6 +2614,16 @@ document.addEventListener('change', e => {
   if (!dr || !detailId) return;
   const t = S.tasks.find(x => x.id === detailId);
   if (!t) return;
+  /* 加知情人：只加不改，名单本身随任务一起存 */
+  if (e.target.matches('[data-act="obs-add"]')) {
+    const no = e.target.value;
+    if (no) {
+      t.observers = (t.observers || []).includes(no) ? (t.observers || []) : (t.observers || []).concat([no]);
+      save(); render();
+      toast(`已把 ${nameOf(no)} 设为知情人`);
+    }
+    return;
+  }
   const f = e.target.dataset.field;
   if (!f) return;
   if (f === 'cat1' || f === 'cat2') {
@@ -2410,6 +2683,7 @@ document.addEventListener('input', e => {
     const box = $('#mgrList');
     if (box) box.innerHTML = mgrListHTML(authKw);
   }
+  if (e.target.id === 'f_obs_kw') renderObserverList(e.target.value);
 });
 
 /* ============ 启动 ============ */

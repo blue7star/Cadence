@@ -192,10 +192,28 @@ async function main() {
   /* ---------- 1 登录 ---------- */
   /* ---------- 0 固定基线：清空 1012 后重新载入示例数据 ---------- */
   await goto(BASE);
+  /* 「谁登录过」是跨运行保留的：一旦跑过一次，1101 就永久变成「登录过」，
+     下一轮「派给没登录过的人」就会假绿。所以基线里把激活状态也钉死：
+     产品部这一组（1001 部门经理 + 1012 本人 + 四个下属）算用过；
+     人力资源部 / 运营中心那两位总监没参与演示，算没用过——正好当阻断用例的对象。 */
   await js(`(async()=>{
     await fetch('/api/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012'})});
     await fetch('/api/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012'})});
     return 'seeded'})()`);
+  {
+    const ROOT0 = fileURLToPath(new URL('..', import.meta.url));
+    execFileSync(process.execPath, ['--no-warnings', '-e', `
+      const {DatabaseSync}=require('node:sqlite');
+      const db=new DatabaseSync('data/workbench.db');
+      db.prepare("UPDATE emp SET activated = CASE WHEN no IN ('1001','1002','1003','1004','1005','1012') THEN 1 ELSE 0 END").run();
+      db.prepare("UPDATE emp SET last_login=NULL WHERE activated=0").run();
+      /* 以前拿别人身份载入过示例数据，会在下属名下留一批 <工号>_t<N>；
+         它们在「下属专项工作推进情况」里看起来像是下属自己立的，其实是重复的演示记录。
+         这里是测试库，清掉；真实数据不会用这种 id 形态。 */
+      db.prepare("DELETE FROM task WHERE owner_no<>'1012' AND id GLOB '[0-9][0-9][0-9][0-9]_t[0-9]*'").run();
+      db.prepare("UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k='rev'").run();
+      db.close();`], { cwd: ROOT0, stdio: 'ignore' });
+  }
   await js(`localStorage.clear(); sessionStorage.clear(); 'ok'`);
   await goto(BASE);
   check('登录页出现', await js(`!!document.querySelector('#auth.show')`));
@@ -306,7 +324,8 @@ async function main() {
     const dates=cells.map(c=>c.dataset.date);
     let hit=null;
     for(const t of S.tasks){
-      if(t.type!=='special') continue;
+      /* 只挑自己的：下属的专项现在也可见，但那是只读的，拿来测「格子显示哪一段」会挑错对象 */
+      if(t.type!=='special'||t.ownerNo!==S.me.no) continue;
       for(const st of (t.stages||[])){
         if(st.start&&st.end&&dates.includes(st.start)){ hit={t:t,st:st}; break; }
       }
@@ -367,7 +386,7 @@ async function main() {
 
   /* ---------- 6.2 阶段能就地改名称和日期，不用删了重建 ---------- */
   const stOpen = await js(`(function(){
-    const t=S.tasks.find(x=>x.type==='special'&&(x.stages||[]).length>=2&&(x.stages||[]).every(s=>s.start&&s.end));
+    const t=S.tasks.find(x=>x.type==='special'&&x.ownerNo===S.me.no&&(x.stages||[]).length>=2&&(x.stages||[]).every(s=>s.start&&s.end));
     if(!t) return {err:'没有可编辑阶段的专项'};
     openTaskPage(t.id);
     const row=[...document.querySelectorAll('#view .stage')].find(r=>r.querySelector('[data-act=stage-edit]'));
@@ -475,7 +494,7 @@ async function main() {
     JSON.stringify({ past: pastDrag, after: afterPast }));
 
   const stageDrag = await js(`(function(){
-    const t=S.tasks.find(x=>x.type==='special'&&(x.stages||[]).length>=2&&x.stages.every(s=>s.start&&s.end));
+    const t=S.tasks.find(x=>x.type==='special'&&x.ownerNo===S.me.no&&(x.stages||[]).length>=2&&x.stages.every(s=>s.start&&s.end));
     if(!t) return {err:'没有可测的专项'};
     const i=t.stages.length-1, st=t.stages[i], prev=t.stages[i-1];
     const chip=[...document.querySelectorAll('[data-drag]')].find(e=>{const d=JSON.parse(e.dataset.drag);return d.id===t.id&&d.s===i});
@@ -1056,6 +1075,173 @@ async function main() {
     !!swap && swap.assignee === '1003' && swap.intake === 'pending', JSON.stringify(swap));
   await push('1012', { del: { tasks: [SWAP] } });
   await push('1003', { del: { tasks: [SWAP] } });
+
+  /* ---------- 9.45 下派自由选人 + 专项知情人 + 下派页四模块 ---------- */
+  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
+  await goto(BASE); await sleep(1200);
+  await nav('assign'); await sleep(500);
+
+  /* 四个模块、顺序固定 */
+  const blocks = await js(`[...document.querySelectorAll('#view .card-h h2')].map(h=>h.textContent.trim())`);
+  check('下派任务页按「我下派的任务 → 下属常规 → 下属专项 → 我关注的任务」四块排',
+    JSON.stringify(blocks) === JSON.stringify(['我下派的任务', '下属常规工作推进情况', '下属专项工作推进情况', '我关注的任务']),
+    JSON.stringify(blocks));
+
+  /* 下属专项默认折叠：收着的时候一条专项都不渲染，点标题才展开 */
+  const spFold = await js(`(function(){
+    const cards=[...document.querySelectorAll('#view .card')];
+    const card=cards.find(c=>c.textContent.includes('下属专项工作推进情况'));
+    if(!card) return null;
+    const head=card.querySelector('.card-h');
+    return {open:openSpecialBlock, rows:card.querySelectorAll('.rline').length,
+      hint:head.innerText.replace(/\\s+/g,' '), clickable:head.classList.contains('fold')};})()`);
+  check('下属专项工作推进情况默认收起，一条不显示，标题可点',
+    !!spFold && spFold.open === false && spFold.rows === 0 && spFold.clickable === true
+      && spFold.hint.includes('默认收起'),
+    JSON.stringify(spFold).slice(0, 180));
+
+  await js(`document.querySelector('#view .card-h.fold').click();'ok'`);
+  await sleep(500);
+  const spOpen = await js(`(function(){
+    const cards=[...document.querySelectorAll('#view .card')];
+    const card=cards.find(c=>c.textContent.includes('下属专项工作推进情况'));
+    return {open:openSpecialBlock, rows:card.querySelectorAll('.rline').length,
+      watchable:card.querySelectorAll('[data-act="watch-task"]').length,
+      txt:card.innerText.replace(/\\s+/g,' ').slice(0,140)};})()`);
+  check('点开后按下属列出各自的专项，每条都能「关注」',
+    spOpen.open === true && spOpen.rows >= 1 && spOpen.watchable >= 1, JSON.stringify(spOpen).slice(0, 200));
+
+  /* 关注一条下属专项 → 出现在「我关注的任务」 */
+  const watchedTitle = await js(`(function(){
+    const card=[...document.querySelectorAll('#view .card')].find(c=>c.textContent.includes('下属专项工作推进情况'));
+    const row=card.querySelector('.rline');
+    const title=row.querySelector('.rnm').textContent.trim();
+    row.querySelector('[data-act="watch-task"]').click();
+    return title;})()`);
+  await sleep(800);
+  const inFollow = await js(`(function(){
+    const card=[...document.querySelectorAll('#view .card')].find(c=>c.textContent.includes('我关注的任务'));
+    const rows=[...card.querySelectorAll('.follow-row')].map(r=>r.innerText.replace(/\\s+/g,' '));
+    return {hit:rows.some(t=>t.includes(${JSON.stringify(watchedTitle)})), n:rows.length};})()`);
+  check('关注一条下属专项后，它出现在「我关注的任务」里',
+    inFollow.hit === true, `关注=${watchedTitle} 列表=${inFollow.n}`);
+
+  /* 承接人：全公司可选，非下属与「没登录过」都标出来 */
+  await js(`document.querySelector('[data-act="new"][data-type="assign"]').click();'ok'`);
+  await sleep(450);
+  const dd = await js(`(function(){
+    const s=document.querySelector('#f_assignee'); if(!s) return null;
+    const opts=[...s.options].map(o=>({v:o.value,t:o.textContent.trim()}));
+    return {n:opts.length, groups:[...s.querySelectorAll('optgroup')].map(g=>g.label),
+      nonSub:opts.filter(o=>o.t.includes('非下属')).map(o=>o.v),
+      never:opts.filter(o=>o.t.includes('未登录过')).map(o=>o.v),
+      has1001:opts.some(o=>o.v==='1001')};})()`);
+  check('承接人下拉是全公司花名册，非下属照常可选并标「非下属」',
+    !!dd && dd.n >= 7 && dd.has1001 === true && dd.nonSub.includes('1001')
+      && JSON.stringify(dd.groups) === JSON.stringify(['我的下属', '其他同事']),
+    JSON.stringify(dd).slice(0, 220));
+  check('从没登录过工作台的人在下拉里标「未登录过」',
+    !!dd && dd.never.includes('1101') && dd.never.includes('1102'), JSON.stringify(dd && dd.never));
+
+  /* 派给没登录过的人：前端当场拦住，弹窗不关，一个字都不告诉「已派出」 */
+  const blockedUi = await js(`(function(){
+    document.querySelector('#f_title').value='E2E派给没登录过的人';
+    const s=document.querySelector('#f_assignee'); s.value='1102';
+    document.querySelector('#modal [data-act="modal-ok"]').click();
+    return {stillOpen:document.querySelector('#modalWrap').classList.contains('show')};})()`);
+  await sleep(700);
+  const blockedToast = (await txt('#toast')).trim();
+  const blockedDb = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    return j.tasks.some(t=>t.title==='E2E派给没登录过的人')})()`);
+  check('派给没登录过的人被拦下：弹窗不关、说明原因、任务没建出来',
+    blockedUi.stillOpen === true && blockedToast.includes('还没有登录过工作台') && blockedDb === false,
+    JSON.stringify({ open: blockedUi.stillOpen, toast: blockedToast.slice(0, 60), created: blockedDb }));
+
+  await js(`document.querySelector('#modal [data-act="modal-cancel"]').click();'ok'`);
+  await sleep(300);
+
+  /* 服务端也拦一层：绕过界面直接写接口，同样进不去 */
+  const srvBlock = await js(`(async()=>{
+    const r=await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({me:'1012',tasks:[{id:'t_e2e_block',type:'assign',title:'E2E服务端该拦',
+        ownerNo:'1012',assigneeNo:'1102',start:'2026-11-03',end:'2026-11-06',status:'todo',stages:[]}]})});
+    const j=await r.json();
+    const st=await (await fetch('/api/state?me=1012')).json();
+    return {errors:j.errors||[], exists:st.tasks.some(t=>t.id==='t_e2e_block')};})()`);
+  check('绕过界面直接调接口，派给没登录过的人也进不去，并带回原因',
+    srvBlock.errors.length >= 1 && srvBlock.errors[0].includes('还没有登录过工作台') && srvBlock.exists === false,
+    JSON.stringify(srvBlock).slice(0, 200));
+
+  /* 不再要求下派人自己有直属上级：页面上不该再挂「先设直属上级」那条拦截 */
+  const mgrBlock = await js(`(function(){
+    const v=document.querySelector('#view');
+    return {bar:!!v.querySelector('.noauth-bar'), blocked:/先设置直属上级|暂不可用/.test(v.innerText)};})()`);
+  check('下派页不再挂「先设直属上级才能下派」的拦截',
+    mgrBlock.bar === false && mgrBlock.blocked === false, JSON.stringify(mgrBlock));
+
+  /* 专项知情人：可选没登录过的人（知情不依赖对方账号） */
+  await nav('special'); await sleep(400);
+  await js(`document.querySelector('[data-act="new"][data-type="special"]').click();'ok'`);
+  await sleep(450);
+  const obsPick = await js(`(function(){
+    const w=document.querySelector('#fObsWrap');
+    if(!w) return null;
+    const rows=[...document.querySelectorAll('#f_obs_list .obs-row')];
+    const target=rows.find(r=>r.querySelector('input').dataset.no==='1101');
+    if(!target) return {rows:rows.length, found:false};
+    const marked=target.innerText.includes('未登录过');
+    target.querySelector('input').click();
+    return {rows:rows.length, found:true, marked,
+      picked:document.querySelector('#f_obs_picked').textContent.trim()};})()`);
+  check('新建专项有「知情人」多选区，没登录过的人也在名单里、能选中',
+    !!obsPick && obsPick.found === true && obsPick.marked === true && obsPick.picked.includes('1 人'),
+    JSON.stringify(obsPick).slice(0, 200));
+
+  const OBS_TASK = 'E2E专项：带知情人';
+  await js(`(function(){
+    document.querySelector('#f_title').value=${JSON.stringify(OBS_TASK)};
+    document.querySelector('#modal [data-act="modal-ok"]').click(); return 'ok'})()`);
+  await sleep(1200);
+  const obsSaved = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    const t=j.tasks.filter(x=>x.title===${JSON.stringify(OBS_TASK)}).pop();
+    return t?{id:t.id,observers:t.observers}:null})()`);
+  check('知情人选没登录过的人也不阻断，专项照常建成并记下名单',
+    !!obsSaved && obsSaved.observers.includes('1101'), JSON.stringify(obsSaved).slice(0, 160));
+
+  /* 知情人视角：能在「我关注的任务」里看到这条，且只有查看权 */
+  if (obsSaved) {
+    await js(`localStorage.setItem('pm_mvp_me','1101');'ok'`);
+    await goto(BASE); await sleep(1500);
+    if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+      await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
+    }
+    await nav('assign'); await sleep(600);
+    const obsView = await js(`(function(){
+      const card=[...document.querySelectorAll('#view .card')].find(c=>c.textContent.includes('我关注的任务'));
+      const rows=[...card.querySelectorAll('.follow-row')].map(r=>({
+        txt:r.innerText.replace(/\\s+/g,' '), tag:(r.querySelector('.tag')||{}).textContent||''}));
+      return {rows, hit:rows.find(r=>r.txt.includes(${JSON.stringify(OBS_TASK)}))};})()`);
+    check('别人让你知情的专项出现在「我关注的任务」，标「知情」并写明是谁让你知情',
+      !!obsView.hit && obsView.hit.tag.trim() === '知情' && obsView.hit.txt.includes('让你知情'),
+      JSON.stringify(obsView.hit || {}).slice(0, 180));
+
+    await js(`openTaskPage('${obsSaved.id}');'ok'`); await sleep(500);
+    const obsRo = await js(`(function(){
+      const t=document.querySelector('#dTitle');
+      return {readonly:t?t.readOnly:null, fields:document.querySelectorAll('#view [data-field]').length,
+        obsDel:document.querySelectorAll('#view [data-act="obs-del"]').length,
+        obsAdd:!!document.querySelector('#view [data-act="obs-add"]')};})()`);
+    check('知情人打开这条专项是只读：改不了、也删不掉知情人',
+      obsRo.readonly === true && obsRo.obsDel === 0 && obsRo.obsAdd === false,
+      JSON.stringify(obsRo));
+    await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`);
+    await sleep(300);
+    await push('1012', { del: { tasks: [obsSaved.id] } });
+  }
+
+  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
+  await goto(BASE); await sleep(1200);
+  await nav('special'); await sleep(500);
 
   /* ---------- 9.5 三级节点：阶段下可再拆一级子任务 ---------- */
   await js(`document.querySelector('[data-act="new"][data-type="special"]').click();'ok'`);

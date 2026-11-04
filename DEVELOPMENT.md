@@ -110,7 +110,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | POST | `/api/setmgr` | 首次登录自选直属上级，服务端做防环校验（不能是自己或自己的下级） |
 | GET | `/api/state?me=<工号>` | 一次返回该用户可见的全量数据（含服务端生成的常规实例） |
 | GET | `/api/rev` | 全局版本号，供前端 7 秒轮询；变了才拉全量 |
-| POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`，服务端校验归属后落库 |
+| POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`；返回 `{ok, rows, errors[], rev}`。`errors` 非空表示**这条任务没写进去**（例如下派给从没登录过的人），前端要把第一条原话 toast 出来 |
 | POST | `/api/demo` | 注入示例数据（王磊的产品组） |
 | POST | `/api/reset` | 清空当前用户业务数据 |
 
@@ -118,11 +118,12 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
-| `emp` | 花名册 | `no`(PK) `name` `role` `dept` `mgr_no` `active` |
+| `emp` | 花名册 | `no`(PK) `name` `role` `dept` `mgr_no` `active` `activated`(登录过=1) `last_login` |
 | `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month)` `policy` `steps`(JSON) `active` |
 | `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no` `assignee_no` `start_date` `end_date` `stages`(JSON) `routine_id` `plan_date` `source_id` `detached` `intake_status` |
 | `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |
-| `watch` | 管理者关注的“下属+规则” | `mgr_no` `sub_no` `rule_id` |
+| `watch` | 管理者关注的“下属+规则”或“下属+专项” | `mgr_no` `sub_no` `rule_id` `kind(routine/special)` `task_id` |
+| `task_observer` | 专项任务的知情人 | `task_id` `emp_no` `created_at`，联合主键；只记“谁知道情”，不参与任何执行流转 |
 | `holiday` | 节假日与调休 | `date` `kind` |
 | `op_log` | 操作日志 | `actor_no` `action` `detail` `ip` |
 | `meta` | 版本号等 | `k` `v` |
@@ -136,8 +137,10 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 1. **常规实例由服务端生成，不由浏览器生成。** 管理者要看下属的推进情况，下属没登录也必须存在实例。`maintain()` 在每次取 `state` 前按 `today-40d ~ today+80d` 补齐；实例 ID 固定为 `ri_<ruleId>_<周期key>`，`INSERT OR IGNORE` 保证幂等。
 2. **前端不存业务数据。** `localStorage` 只放工号。`save()` 与上次同步快照做 diff，POST `/api/sync` 提交增量；连续操作走队列，避免“边存边刷新”把未推送的改动冲掉。
 3. **同步是拉模式。** 前端每 7 秒 GET `/api/rev`，版本号变了才拉全量；拉回时若弹窗或抽屉开着则延迟重渲染。
-4. **可见范围**：自己创建的 ∪ 指派给自己的 ∪ 下属的常规工作 ∪ **下属已承接后新建的拆解任务**（`source_id` 指回我下派的原任务）。下属的专项、临时任务管理者看不到，除了这一条承接链路。
+4. **可见范围**：自己创建的 ∪ 指派给自己的 ∪ 下属的常规工作 ∪ 下属的专项工作 ∪ **下属已承接后新建的拆解任务**（`source_id` 指回我下派的原任务）∪ 我作为知情人的专项（`observer=true`，只读）。下属的**下派/临时**任务管理者看不到——「他是我下属」不等于把他手里所有活都摊开。
 5. **承接链路**：上级下派 → 下属「承接台」`intakeStatus=pending` → 承接后生成自己的任务（`source_id` 指回原任务），原任务置 `accepted`。`pending` 的下派任务不进下属的今日待办，避免重复。**承接出来的任务对下派人可见但只读**（`upsertTask` 按 `owner_no`/`assignee_no` 判定归属，下派人写不进去）；前端在「下派任务」里挂在原任务下方显示进度，抽屉里标注「某某 承接」。
+5.1 **下派对象可以不是下属**，但必须是 `emp.activated=1` 的人。`activated` 在 `/api/login` 校验通过时置 1，老库启动时用 `op_log` 里 `action='login'` 的 `actor_no` 回填。`upsertTask` **只在“新派”或“换人”时拦**（`assigneeNo !== prevAssignee`）——老任务的承接人后来离职停用，不该让下发人连改个标题都改不动。示例数据走 `opts.demo` 跳过这道拦。
+5.2 **知情人**：`task_observer` 只由任务 owner 维护（`observers` 出现在请求体里才整体替换，没出现则原样保留）。知情人既不是 owner 也不是 assignee，所以 `canEdit=false`、`ownRows()` 不会提交它，改不动也写不回去。知情人**不进**今日待办、日历、承接台——只在「下派任务」页的「我关注的任务」里出现。
 6. **规则变更重排**：按“周期归属月”重建当月及以后的实例，仅恢复 `date <= today` 的已勾选节点；已勾选的历史不丢。
 7. **停用 vs 删除**（两者语义刻意不重叠，别合并）：
    - **停用**：只停今后。置 `active=0`，服务端 `regenRule()` 对 `active=0` 直接 return、`maintain()` 也只补 active 的规则，所以不会再生成；前端把**明天及以后、未完成**的实例删掉，**今天及以前原样保留**（历史不断档、当天任务不被打断）。重新启用后按窗口重建。

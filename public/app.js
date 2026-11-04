@@ -1598,9 +1598,9 @@ function taskModalBody(type, preset) {
   const today = (preset && preset.date) || TODAY;
   const base = `
   <div class="field"><label>任务名称</label><input id="f_title" placeholder="例如：季度经营分析报告" value="${preset && preset.title ? esc(preset.title) : ''}"/></div>
-  <div class="field"><label>任务类型</label><select id="f_type" data-prev="${type}">
-    ${['assign', 'special', 'temp'].map(k => `<option value="${k}" ${k === type ? 'selected' : ''}>${TYPES[k].name}</option>`).join('')}
-  </select></div>
+  <div class="field"><label>任务类型</label>
+    <div class="locked" id="f_type_lock">${TYPES[type].name}<span class="mini">由入口决定，不可改</span></div>
+  </div>
   ${assigneeFieldHTML(type, preset && preset.assigneeNo)}
   <div class="field"><label>起止时间 / 时间点（可选）</label><div class="row">
     <input type="date" id="f_start" value="${today}" style="flex:1"/>
@@ -1663,6 +1663,10 @@ function readStageRows(fallback) {
 }
 function openNewTask(type, preset) {
   const t = type || 'temp';
+  /* 类型不再在弹窗里改：建什么由入口决定（下派页=下派、专项页=专项、待办/日历=临时）。
+     以前这里能切类型，切一次就相当于换了条业务线，承接人、阶段计划、知情人全跟着变，
+     表单却是按打开时的类型生成的，切完只剩半套字段——所以从入口钉死。
+     承接台里「这件活算什么」那个下拉是另一回事，那里本来就要用户自己选。 */
   /* 下派不再要求下派人自己有直属上级、也不要求有直接下属：
      承接人下拉里是全公司的人，点名派给谁都行。没设上级的人照样能派活。 */
   openModal(`新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
@@ -1672,7 +1676,7 @@ function openNewTask(type, preset) {
     if (!s) { toast('请选择开始时间'); return false; }
     if (e < s) { toast('结束时间不能早于开始时间'); return false; }
     const stages = readStageRows(s);
-    const typeVal = $('#f_type').value;
+    const typeVal = t;
     // 专项、临时只归自己（界面已锁），这里再兜一层，避免切换类型后残留别人的工号
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
     /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。
@@ -2597,6 +2601,8 @@ document.addEventListener('change', e => {
     if (dn) dn.style.display = e.target.value === 'day' ? 'block' : 'none';
     return;
   }
+  /* 只剩承接台那个弹窗有 #f_type 了：新建任务的类型由入口钉死，弹窗里不给换。
+     这里保留是因为承接时要由本人决定「这件活在我这儿算什么」，换了还得跟着换承接人。 */
   if (modal && e.target.matches('#f_type')) {
     const prev = e.target.dataset.prev || 'special';
     const next = e.target.value;

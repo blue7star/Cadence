@@ -1016,21 +1016,13 @@ async function main() {
   await js(`document.querySelector('[data-act="new"][data-type="special"]').click();'ok'`);
   await sleep(400);
   const lock1 = await js(`(function(){const w=document.querySelector('#fAssigneeWrap'); if(!w) return null;
-    return { hasSelect: !!w.querySelector('select'), locked: (w.querySelector('.locked')||{}).innerText||'' }})()`);
+    const tl=document.querySelector('#f_type_lock');
+    return { hasSelect: !!w.querySelector('select'), locked: (w.querySelector('.locked')||{}).innerText||'',
+      typeSelect: !!document.querySelector('#modal #f_type'), typeLock: (tl||{}).innerText||'' }})()`);
   check('新建专项：承接人锁成「我」，没有下拉可选',
     !!lock1 && lock1.hasSelect === false && lock1.locked.includes('我（本人）'), JSON.stringify(lock1).slice(0, 160));
-
-  await js(`(function(){const s=document.querySelector('#f_type'); s.value='assign'; s.dispatchEvent(new Event('change',{bubbles:true})); return 'ok'})()`);
-  await sleep(350);
-  const lock2 = await js(`(function(){const s=document.querySelector('#fAssigneeWrap select');
-    return { opts: s ? s.options.length : 0 }})()`);
-  check('切成下派任务后承接人恢复可选（我 + 下属）', lock2.opts >= 2, JSON.stringify(lock2));
-
-  await js(`(function(){const s=document.querySelector('#f_type'); s.value='special'; s.dispatchEvent(new Event('change',{bubbles:true})); return 'ok'})()`);
-  await sleep(350);
-  const lock3 = await js(`(function(){const w=document.querySelector('#fAssigneeWrap');
-    return { hasSelect: !!w.querySelector('select') }})()`);
-  check('切回专项又锁回自己', lock3.hasSelect === false, JSON.stringify(lock3));
+  check('新建专项：类型写死为「专项任务」，弹窗里没有可改的下拉',
+    !!lock1 && lock1.typeSelect === false && lock1.typeLock.includes('专项任务'), JSON.stringify(lock1).slice(0, 160));
   await shot('12-special-locked');
 
   await js(`(function(){document.querySelector('#f_title').value='E2E专项：只能归自己';
@@ -1052,6 +1044,34 @@ async function main() {
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`);
     await sleep(300);
     await push('1012', { del: { tasks: [made.id] } });
+  }
+
+  /* ---------- 9.41 类型由入口钉死：下派页只能建下派任务 ---------- */
+  await nav('assign'); await sleep(500);
+  await js(`document.querySelector('[data-act="new"][data-type="assign"]').click();'ok'`);
+  await sleep(400);
+  const lockA = await js(`(function(){const w=document.querySelector('#fAssigneeWrap');
+    const tl=document.querySelector('#f_type_lock');
+    return { hasSelect: !!w.querySelector('select'),
+      opts: w.querySelector('select') ? w.querySelector('select').options.length : 0,
+      typeSelect: !!document.querySelector('#modal #f_type'), typeLock: (tl||{}).innerText||'' }})()`);
+  check('新建下派任务：类型写死为「下派任务」，弹窗里没有可改的下拉',
+    !!lockA && lockA.typeSelect === false && lockA.typeLock.includes('下派任务'), JSON.stringify(lockA).slice(0, 160));
+  check('新建下派任务：承接人下拉还在，能选人', !!lockA && lockA.hasSelect && lockA.opts >= 2, JSON.stringify(lockA));
+
+  /* 不动类型直接建，落库必须是 assign——哪天有人把下拉加回来，这条会红 */
+  await js(`(function(){document.querySelector('#f_title').value='E2E下派：只能是下派任务';
+    const s=document.querySelector('#f_assignee'); if(s) s.value='1002';
+    document.querySelector('#modal [data-act="modal-ok"]').click(); return 'ok'})()`);
+  await sleep(1000);
+  const madeAssign = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    const t=j.tasks.filter(x=>x.title==='E2E下派：只能是下派任务').pop();
+    return t?{id:t.id,type:t.type,assignee:t.assigneeNo,intake:t.intakeStatus}:null})()`);
+  check('下派页建出来的就是下派任务，承接人按选的人落库',
+    !!madeAssign && madeAssign.type === 'assign' && madeAssign.assignee === '1002', JSON.stringify(madeAssign));
+  if (madeAssign) {
+    await push('1012', { del: { tasks: [madeAssign.id] } });
+    await push('1002', { del: { tasks: [madeAssign.id] } });
   }
 
   /* 界面之外再兜一层：直接写接口把专项塞给别人，也该落回本人 */

@@ -1398,7 +1398,7 @@ function taskDetailHTML(t) {
       </div>`
     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
         <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
-        ${canEdit && toDispatch.length ? `<div class="note" style="margin-bottom:10px">
+        ${canEdit ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
           <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之前，对方那边什么都看不到。
           <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}">派发</button></div>` : ''}
         ${stages.length ? stageTreeHTML(t, canEdit) : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
@@ -1483,6 +1483,67 @@ function taskDetailHTML(t) {
 
   return head + `<div class="grid-2"><div>${stageCard}</div><div>${infoCard}${obsCard}</div></div>` + foot;
 }
+/* 「谁做」的选项。新建弹窗、详情页行内、「改」表单三处共用这一份——
+   上次就是三处各写各的：弹窗写「承接人自己做」、详情页写「承接人自己做（张三）」、
+   「改」表单里压根没有，结果同一个词在三个地方三种说法。 */
+function whoOptionsHTML(ownNo, cur) {
+  const own = ownNo ? nameOf(ownNo) : '';
+  return [`<option value="" ${cur ? '' : 'selected'}>${own ? `承接人自己做（${esc(own)}）` : '承接人自己做'}</option>`]
+    .concat((S.roster || [])
+      .filter(e => e.no !== ownNo && e.activated)
+      .map(e => `<option value="${e.no}" ${cur === e.no ? 'selected' : ''}>${esc(e.name)}${S.subs.some(x => x.no === e.no) ? '' : ' · 非下属'}</option>`))
+    .join('');
+}
+function stageWhoOptions(t, cur) { return whoOptionsHTML(t.assigneeNo, cur); }
+
+/* 弹窗里承接人还没落库，读的是当前选中的那个人；读不到就是自己 */
+function draftAssignee() {
+  const el = document.getElementById('f_assignee');
+  return (el && el.value) || S.me.no;
+}
+
+/* 子任务那一段的状态。没指定人就没有这一段，不占地方。 */
+function stageTagHTML(s) {
+  if (!s.who) return '';
+  if (!s.whoAt) return '<span class="tag warn">未派发</span>';
+  if (!s.joinedAt) return '<span class="tag">已派发 · 待加入</span>';
+  return '<span class="tag done">已加入待办</span>';
+}
+
+/* 换人：只改这一行 + 顶部那条派发提示，不整页重绘。
+   整页重绘会把用户刚拨开的下拉一起销毁，看起来就像「选了没反应」。
+   quiet 给「改」表单用：那边紧接着就整页重绘了，不用在这儿再刷一遍。 */
+function setStageWho(t, idx, no, sel, quiet) {
+  const s = (t.stages || [])[idx];
+  if (!s) return false;
+  const v = no || null;
+  if (v && !empActivated(v)) {
+    toast(`${nameOf(v)} 还没有登录过工作台，子任务派过去他收不到。`);
+    if (sel) sel.value = s.who || '';
+    return false;
+  }
+  if ((s.who || null) === v) return true;
+  /* 换人必须重新派发、重新加入待办：服务端也会清，这里同步清一遍，
+     否则界面上会显示「已派发」其实那边什么都没收到。 */
+  s.who = v; s.whoAt = null; s.joinedAt = null;
+  if (quiet) return true;
+  save();
+  const tag = document.querySelector(`#view .subtag[data-tag="${idx}"]`);
+  if (tag) tag.outerHTML = `<span class="subtag" data-tag="${idx}">${stageTagHTML(s)}</span>`;
+  refreshDispatchNote(t);
+  toast(v ? `这段指定给 ${nameOf(v)}，点「派发」对方才收得到` : '已改回由承接人自己做');
+  return true;
+}
+
+function refreshDispatchNote(t) {
+  const n = (t.stages || []).filter(s => s.pid && s.who && !s.whoAt).length;
+  const box = document.querySelector('#view #dispatchNote');
+  if (!box) return;
+  box.style.display = n ? '' : 'none';
+  const b = box.querySelector('b');
+  if (b) b.textContent = `有 ${n} 段已经指定了责任人，但还没派发`;
+}
+
 /* 阶段树：一级阶段带序号，子任务缩进一级。
    父阶段有子任务时不给勾选框——点了就是「全勾/全不勾」，容易误解；它的完成态由子任务决定。
    责任人只挂在子任务上：阶段是「一段时间」，子任务才是「一件能勾的活」。 */
@@ -1490,20 +1551,8 @@ function stageTreeHTML(t, canEdit) {
   const stages = t.stages || [];
   const tops = stages.filter(s => !s.pid);
   const myTick = s => canEdit || (s.who === S.me.no && s.whoAt);
-  const whoSel = (s, idx) => {
-    const cur = s.who || '';
-    const opts = [`<option value="" ${cur ? '' : 'selected'}>承接人自己做（${esc(nameOf(t.assigneeNo))}）</option>`]
-      .concat((S.roster || [])
-        .filter(e => e.no !== t.assigneeNo && e.activated)
-        .map(e => `<option value="${e.no}" ${cur === e.no ? 'selected' : ''}>${esc(e.name)}${S.subs.some(x => x.no === e.no) ? '' : ' · 非下属'}</option>`));
-    return `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}" title="这段由谁负责">${opts.join('')}</select>`;
-  };
-  const joinTag = s => {
-    if (!s.who) return '';
-    if (!s.whoAt) return '<span class="tag warn">未派发</span>';
-    if (!s.joinedAt) return '<span class="tag">已派发 · 待加入</span>';
-    return '<span class="tag done">已加入待办</span>';
-  };
+  const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
+    title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
   let n = 0;
   return tops.map(p => {
     n++;
@@ -1513,20 +1562,22 @@ function stageTreeHTML(t, canEdit) {
     const canTickP = canEdit && !kids.length;
     const head = `<div class="stage ${pDone ? 'on' : ''}">
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
-      <div class="t ${pDone ? 'done' : ''}"><span style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
+      <div class="t ${pDone ? 'done' : ''}"><span class="sn" style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
-      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务，子任务才能指定责任人">+ 子任务</button>` : ''}
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务；子任务是唯一能指定责任人的层级">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
     </div>`;
+    /* 子行只留三类信息：编号、名称+日期、谁做（下拉与状态挨在一起，是一件事）。
+       人名不再单独写一遍——下拉里已经有了，写两遍只会让人以为哪处能改哪处不能。 */
     const sub = kids.map((k, order) => {
       const ki = stages.indexOf(k);
       const tick = myTick(k);
       return `<div class="stage sub ${k.done ? 'on' : ''}">
         <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : 'title="这段由别人负责"'} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
-        <div class="t ${k.done ? 'done' : ''}"><span style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}
-          ${k.who ? `<small>· ${esc(nameOf(k.who))}</small>` : ''}${joinTag(k)}</div>
+        <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
+        ${canEdit ? `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>` : `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`}
         ${canEdit ? whoSel(k, ki) : ''}
-        ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="改这一段的名称和日期">改</button>` : ''}
+        ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="改这一段的名称、日期和谁做">改</button>` : ''}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
       </div>`;
     }).join('');
@@ -1786,10 +1837,7 @@ function stageRowHTML(s, e, pid) {
     <div class="row2">
       <input type="date" class="sst" value="${s}"/>
       <input type="date" class="sen" value="${e}"/>
-      ${isSub ? `<span class="lbl2">谁做</span><select class="swho" title="这段由谁做；不选就是承接人自己做">
-        <option value="">承接人自己做</option>
-        ${(S.roster || []).filter(x => x.activated).map(x => `<option value="${x.no}">${esc(x.name)}</option>`).join('')}
-      </select>` : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
+      ${isSub ? `<span class="lbl2">谁做</span><select class="swho" title="这段由谁做；不选就是承接人自己做">${whoOptionsHTML(draftAssignee(), '')}</select>` : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
       <button class="del" data-act="mstage-del" title="删除">✕</button>
     </div>
   </div>`;
@@ -2448,6 +2496,8 @@ document.addEventListener('click', e => {
       row.insertAdjacentHTML('afterend', `<div class="sedit" data-idx="${i}">
         <div class="sedit-h">改第 <b>${lbl}</b> ${s.pid ? '个子任务' : '段'}「${esc(s.name || '')}」</div>
         <input class="sname" value="${esc(s.name || '')}" placeholder="${s.pid ? '子任务名称' : '阶段名称'}"/>
+        ${s.pid ? `<label class="sedit-who">谁做
+          <select class="swho" data-sedit-who="${i}">${stageWhoOptions(t, s.who || '')}</select></label>` : ''}
         <div class="row">
           <input type="date" class="sst" value="${from}" ${kids.length ? 'disabled' : ''}/>
           <input type="date" class="sen" value="${to}" ${kids.length ? 'disabled' : ''}/>
@@ -2504,6 +2554,9 @@ document.addEventListener('click', e => {
       const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
       const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
       if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
+      /* 表单里也能换人：走同一个 setStageWho，别在这儿再写一遍清洗逻辑 */
+      const whoBox = box.querySelector('[data-sedit-who]');
+      if (whoBox) setStageWho(t, i, whoBox.value || null, whoBox, true);
       save(); openTaskPage(t.id); render(); toast(`已更新「${name}」`);
       break;
     }
@@ -2555,23 +2608,6 @@ document.addEventListener('click', e => {
       else if (t.status === 'done') t.status = 'doing';
       S.members = buildMembers();
       save(); openTaskPage(t.id); render();
-      break;
-    }
-    case 'stage-who': {
-      if (!t) break;
-      const s = t.stages[Number(el.dataset.idx)];
-      if (!s) break;
-      const no = el.value || null;
-      if (no && !empActivated(no)) {
-        toast(`${nameOf(no)} 还没有登录过工作台，子任务派过去他收不到。`);
-        el.value = s.who || '';
-        break;
-      }
-      /* 换人必须重新派发、重新加入待办：服务端也会清，这里同步清一遍，
-         否则界面上会显示「已派发」其实那边什么都没收到。 */
-      if ((s.who || null) !== no) { s.who = no; s.whoAt = null; s.joinedAt = null; }
-      save(); openTaskPage(t.id); render();
-      toast(no ? `这段已指定 ${nameOf(no)}，点「派发」他才会收到` : '已改回跟随承接人');
       break;
     }
     case 'task-dispatch': dispatchTask(id); break;
@@ -2823,6 +2859,16 @@ document.addEventListener('change', e => {
     if (dn) dn.style.display = e.target.value === 'day' ? 'block' : 'none';
     return;
   }
+  /* 弹窗里换了承接人：子任务那几行「承接人自己做（谁）」要跟着变，
+     否则人已经换成李四了，下拉还在说「王磊自己做」 */
+  if (modal && e.target.id === 'f_assignee') {
+    const own = e.target.value || S.me.no;
+    document.querySelectorAll('#stageRows .mrow.sub .swho').forEach(s => {
+      const o = s.querySelector('option[value=""]');
+      if (o) o.textContent = `承接人自己做（${nameOf(own)}）`;
+    });
+    return;
+  }
   /* 只剩承接台那个弹窗有 #f_type 了：新建任务的类型由入口钉死，弹窗里不给换。
      这里保留是因为承接时要由本人决定「这件活在我这儿算什么」，换了还得跟着换承接人。 */
   if (modal && e.target.matches('#f_type')) {
@@ -2842,6 +2888,12 @@ document.addEventListener('change', e => {
   if (!dr || !detailId) return;
   const t = S.tasks.find(x => x.id === detailId);
   if (!t) return;
+  /* 「谁做」下拉：select 的新值只在 change 里拿得到。挂到 click 上的话，
+     点开下拉那一刻读到的还是旧值，选完什么都不发生——看上去就是「改不了」。 */
+  if (e.target.matches('[data-act="stage-who"]')) {
+    setStageWho(t, Number(e.target.dataset.idx), e.target.value || null, e.target);
+    return;
+  }
   /* 加知情人：只加不改，名单本身随任务一起存 */
   if (e.target.matches('[data-act="obs-add"]')) {
     const no = e.target.value;

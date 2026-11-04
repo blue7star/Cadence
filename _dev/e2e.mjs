@@ -1599,6 +1599,75 @@ async function main() {
     await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
     await push('1002', { del: { tasks: [FLOW] } });
     await push('1012', { del: { tasks: [FLOW] } });
+
+    /* ---------- 9.10 界面上的「谁做」：真拨那个下拉，不是调接口 ----------
+       教训：上一版 127 条断言全绿，而下拉拨完什么都不发生——
+       stage-who 挂在 click 上，change 里没接，点开读到的是旧值。
+       断言走的是 /api/sync，界面坏了它看不见。这里每一步都从 DOM 出发。 */
+    const UIW = 't_e2e_uiwho';
+    await push('1012', { del: { tasks: [UIW] } });
+    await pushJ('1012', { tasks: [{ id: UIW, type: 'special', title: 'E2E界面改人', ownerNo: '1012', assigneeNo: '1012',
+      start: d(0), end: d(6), dueDate: d(6), status: 'todo',
+      stages: [
+        { id: 'u1', pid: null, name: '整段', start: d(0), end: d(6), done: false },
+        { id: 'u2', pid: 'u1', name: '子段', start: d(0), end: d(6), done: false }
+      ] }] });
+    await whoAmI('1012');
+    await js(`openTaskPage('${UIW}');'ok'`); await sleep(800);
+
+    const uiRow = await js(`(function(){
+      const rows=[...document.querySelectorAll('#view .stage')];
+      return {n:rows.length, h:rows.map(r=>Math.round(r.getBoundingClientRect().height)),
+        subText:((document.querySelector('#view .stage.sub .t')||{}).innerText||'').replace(/\\s+/g,' '),
+        hasSel:!!document.querySelector('#view .stage.sub .who-sel')};})()`);
+    check('详情页子任务行：一行装得下名称和日期，不再每样占一行',
+      uiRow.n === 2 && uiRow.h.every(h => h <= 46) && uiRow.hasSel,
+      JSON.stringify(uiRow));
+
+    const uiPick = await js(`(async()=>{
+      const sel=document.querySelector('#view .stage.sub .who-sel');
+      if(!sel) return {err:'行里没有「谁做」下拉'};
+      const before=sel.value;
+      sel.value='${SUBW}';
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,900));
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${UIW}');
+      const s=(t.stages||[]).find(x=>x.id==='u2');
+      const row=document.querySelector('#view .stage.sub');
+      const now=document.querySelector('#view .stage.sub .who-sel');
+      return {before, dom:now&&now.value, rebuilt:now!==sel,
+        dbWho:s&&s.who, dbWhoAt:s&&s.whoAt, tag:(row.querySelector('.subtag')||{}).innerText||''};})()`);
+    check('详情页拨「谁做」下拉，选完就落库（不是只有下拉框自己变了）',
+      uiPick && uiPick.dbWho === SUBW && uiPick.dbWhoAt === null, JSON.stringify(uiPick));
+    check('换完人这一行立刻标「未派发」，不整页重绘（下拉不重建、不闪）',
+      uiPick && (uiPick.tag || '').includes('未派发') && uiPick.rebuilt === false, JSON.stringify(uiPick));
+
+    /* 「改」表单里也要能换人：用户第一反应是点「改」，进去发现没人可改就等于没有 */
+    await js(`document.querySelector('#view .stage.sub [data-act="stage-edit"]').click();'ok'`);
+    await sleep(300);
+    const uiForm = await js(`(function(){
+      const box=document.querySelector('#view .sedit');
+      if(!box) return {err:'点「改」没有出现表单'};
+      const sel=box.querySelector('[data-sedit-who]');
+      return {has:!!sel, opts:sel?sel.querySelectorAll('option').length:0,
+        head:(box.querySelector('.sedit-h')||{}).innerText||''};})()`);
+    check('「改」表单里也有「谁做」，不用退出去找行内下拉',
+      uiForm.has === true && uiForm.opts > 1, JSON.stringify(uiForm));
+
+    const uiFormSave = await js(`(async()=>{
+      const box=document.querySelector('#view .sedit');
+      box.querySelector('[data-sedit-who]').value='1002';
+      box.querySelector('[data-act="stage-save"]').click();
+      await new Promise(r=>setTimeout(r,1000));
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${UIW}');
+      const s=(t.stages||[]).find(x=>x.id==='u2');
+      return {dbWho:s&&s.who, name:s&&s.name};})()`);
+    check('在「改」表单里换人并保存，和行内下拉落到同一处',
+      uiFormSave && uiFormSave.dbWho === '1002', JSON.stringify(uiFormSave));
+
+    await push('1012', { del: { tasks: [UIW] } });
   }
 
   /* 登录即激活——「派活能不能送到」全靠这一行。

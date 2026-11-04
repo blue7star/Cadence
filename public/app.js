@@ -469,16 +469,19 @@ const kidsOf = (stages, id) => id ? (stages || []).filter(s => s.pid === id) : [
 const hasKids = (stages, s) => !!s.id && (stages || []).some(x => x.pid === s.id);
 /* 叶子 = 没有子任务的节点。进度、日历、完成判定都只认叶子，父阶段是派生的，不参与计数。 */
 const leavesOf = stages => (stages || []).filter(s => !hasKids(stages, s));
-/* 父阶段的起止不独立存在：有子任务时永远等于子任务日期的并集 */
-function recalcParent(stages, pid) {
-  const p = (stages || []).find(s => s.id === pid);
-  if (!p) return;
-  const kids = stages.filter(s => s.pid === pid);
-  if (!kids.length) return;
-  const ss = kids.map(k => k.start || k.date).filter(Boolean).sort();
-  const ee = kids.map(k => k.end || k.date || k.start).filter(Boolean).sort();
-  if (ss.length) p.start = ss[0];
-  if (ee.length) p.end = ee[ee.length - 1];
+/* 阶段的起止是**人设定的**，不从子任务反推。子任务只能排在这个窗口里：
+   窗口装不下就明确去改阶段，而不是让阶段被悄悄撑长——那样人会以为自己设的时间没生效。
+   （曾经有过一版是按子任务并集重算父阶段，导致改阶段自己的日期被静默打回原样。） */
+const parentOf = (stages, s) => (s && s.pid ? (stages || []).find(x => x.id === s.pid) : null);
+/* 子任务越界的说法：指出它在谁的窗口外、两边各该怎么改 */
+function windowMsg(stages, kid, p) {
+  const no = topNo(stages, p);
+  const ps = dayOf(p, 'start'), pe = dayOf(p, 'end') || ps;
+  const ks = dayOf(kid, 'start') || dayOf(kid, 'end');
+  const ke = dayOf(kid, 'end') || ks;
+  if (ks && ps && ks < ps)
+    return `「${kid.name || '这个子任务'}」从 ${fmt(ks)} 起，可第 ${no} 段「${p.name || ''}」是 ${dateSpan(p)}；把这一段提前到 ${fmt(ks)}，或者把它挪到 ${fmt(ps)} 之后`;
+  return `「${kid.name || '这个子任务'}」排到 ${fmt(ke)}，可第 ${no} 段「${p.name || ''}」只到 ${fmt(pe)}；把这一段延长到 ${fmt(ke)}，或者把它收到 ${fmt(pe)} 之前`;
 }
 /* 同层相邻：子任务只和同一父下的兄弟比顺序，顶层阶段只和顶层比。
    按数组下标直接取上一条会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。 */
@@ -495,22 +498,18 @@ const dateSpan = s => {
   return a ? (a === b ? fmt(a) : `${fmt(a)}–${fmt(b)}`) : '';
 };
 
-/* 同层重叠时的说法：谁占着哪天、这一段最早能排到哪天、存进去之后父阶段会变成什么。
-   最后半句是关键——父阶段是子任务并集，会自己变长，不写出来用户会以为「11/6 超出了阶段范围」。 */
+/* 同层重叠时的说法：谁占着哪天、后一段最早能排到哪天。
+   父阶段的窗口是人设定的，不会因为子任务而偷偷变长，所以这里只说窗口在哪，不要说"会变成"。 */
 function overlapMsg(stages, a, b, pid) {
   const ae = dayOf(a, 'end') || dayOf(a, 'start');
+  const bs = dayOf(b, 'start') || dayOf(b, 'end');
   const who = a.who ? `（${nameOf(a.who)}）` : '';
-  const scope = pid ? '这一段' : '这一阶段';
   let tail = '';
   if (pid) {
     const p = stages.find(x => x.id === pid);
-    const ks = stages.filter(k => k.pid === pid);
-    const pe = ks.map(k => dayOf(k, 'end')).filter(Boolean).sort().slice(-1)[0];
-    const ps = ks.map(k => dayOf(k, 'start')).filter(Boolean).sort()[0];
-    if (p && ps && pe && (pe > (p.end || '') || ps < (p.start || '')))
-      tail = `；存进去之后第 ${topNo(stages, p)} 段会变成 ${fmt(ps)}–${fmt(pe)}`;
+    if (p) tail = `；第 ${topNo(stages, p)} 段「${p.name || ''}」的窗口是 ${dateSpan(p)}`;
   }
-  return `「${a.name || '上一段'}」${who}占着到 ${fmt(ae)}，${scope}最早只能从 ${fmt(addDays(ae, 1))} 起${tail}`;
+  return `「${a.name || '前一段'}」${who}占着到 ${fmt(ae)}，和「${b.name || '后一段'}」（${fmt(bs)} 起）压上了；后者最早只能从 ${fmt(addDays(ae, 1))} 起${tail}`;
 }
 
 /* ============ 阶段校验：唯一入口 ============
@@ -598,29 +597,19 @@ function validateStages(t, next, ctx) {
     }
   }
 
-  /* 6. 子任务把父阶段撑开之后，父阶段不能压到相邻的阶段。
-        同样只在「这个阶段的子任务动过」时才判，否则存量数据里两段压着会挡住所有编辑。 */
-  const tops = next.filter(s => !s.pid);
-  for (const p of tops) {
-    const kids = next.filter(k => k.pid === p.id);
-    if (!kids.length) continue;
-    const kidsMoved = isChanged(p) || kids.some(isChanged);
-    const ps = kids.map(k => dayOf(k, 'start')).filter(Boolean).sort()[0];
-    const pe = kids.map(k => dayOf(k, 'end')).filter(Boolean).sort().slice(-1)[0];
-    const pi = tops.indexOf(p);
-    const pp = pi > 0 ? tops[pi - 1] : null;
-    const pn = pi < tops.length - 1 ? tops[pi + 1] : null;
-    if (!kidsMoved) continue;
-    if (pp) {
-      const ppe = dayOf(pp, 'end');
-      if (ppe && ps && ps <= ppe)
-        return bad('parent-prev', `「${p.name || '这一段'}」的子任务排到 ${fmt(ps)}，会压到上一段「${pp.name || ''}」（到 ${fmt(ppe)}）`);
-    }
-    if (pn) {
-      const pns = dayOf(pn, 'start');
-      if (pns && pe && pe >= pns)
-        return bad('parent-next', `「${p.name || '这一段'}」的子任务排到 ${fmt(pe)}，会压到下一段「${pn.name || ''}」（${fmt(pns)} 开始）`);
-    }
+  /* 6. 子任务必须落在父阶段的窗口里。阶段时间是设定的，不会被撑开：
+        排不下就说明该改阶段（明确的动作），而不是让阶段背地里变长。
+        同样只判这次动过的那一对，存量里出界的子任务不挡住无关的编辑。 */
+  for (const s of next) {
+    if (!s.pid) continue;
+    const p = next.find(x => x.id === s.pid);
+    if (!p) continue;
+    if (!isChanged(s) && !isChanged(p)) continue;
+    const ps = dayOf(p, 'start'), pe = dayOf(p, 'end') || ps;
+    const ks = dayOf(s, 'start') || dayOf(s, 'end');
+    const ke = dayOf(s, 'end') || ks;
+    if (!ps || !pe) continue;
+    if ((ks && ks < ps) || (ke && ke > pe)) return bad('window', windowMsg(next, s, p));
   }
 
   /* 7. 不超发布时定的总截止。这条以前只在服务端拦，人看到的是「保存失败」——
@@ -628,6 +617,7 @@ function validateStages(t, next, ctx) {
         只锁「别人发布给我」的活：自己建的专项，截止本来就是自己的计划结束日，
         服务端那边没主动改截止时也会自动跟着计划走（upsertTask 里的 !dueChanged 分支），
         前端要是也拦就成了「自己的活挪不动」。存量就超截止的，只在这次把结束日又往后推时才拦。 */
+  const tops = next.filter(s => !s.pid);
   const ends = tops.map(s => dayOf(s, 'end')).filter(Boolean).sort();
   const taskEnd = ends.length ? ends[ends.length - 1] : '';
   const prevEnds = prev.filter(s => !s.pid).map(s => dayOf(s, 'end')).filter(Boolean).sort();
@@ -2059,7 +2049,8 @@ function renumberStageRows() {
     }
   });
 }
-/* 从弹窗读回阶段树，父阶段日期按子任务并集重算。
+/* 从弹窗读回阶段树。父阶段的日期就是表单里填的那些，不从子任务反推：
+   弹窗里阶段行和子任务行各有各的日期输入框，谁填的就是谁的。
    父行名字没填被丢掉时，挂在它下面的子任务不能变孤儿，一律按一级处理。 */
 function readStageRows(fallback) {
   const out = $$('#stageRows .mrow').map(r => {
@@ -2073,7 +2064,6 @@ function readStageRows(fallback) {
   }).filter(Boolean);
   const tops = new Set(out.filter(x => !x.pid).map(x => x.id));
   out.forEach(x => { if (x.pid && !tops.has(x.pid)) x.pid = null; });
-  out.forEach(p => { if (!p.pid) recalcParent(out, p.id); });
   return out;
 }
 function openNewTask(type, preset) {
@@ -2342,25 +2332,18 @@ function dragCheck(t, date, si) {
         return { ok: false, why: `会压到${scope}「${next.name || ''}」（${fmt(ns)} 开始）；先把下一段往后挪，或把这一段缩短` };
       }
     }
-    /* 子任务动了会带着父阶段的长边一起动，父阶段不能因此压到相邻的顶层阶段 */
+    /* 子任务不能拖出父阶段的窗口。阶段的起止是人设的，拖子任务不会让它变长——
+       要更多时间就把那一段延长，那是个看得见的动作，而不是拖完发现阶段悄悄变了。 */
     if (stage.pid) {
       const p = t.stages.find(x => x.id === stage.pid);
       if (p) {
-        const kids = t.stages.filter(k => k.pid === p.id);
-        const ns2 = kids.map(k => (k === stage ? date : (k.start || k.date))).filter(Boolean).sort()[0];
-        const ne2 = kids.map(k => (k === stage ? newEnd : (k.end || k.date || k.start))).filter(Boolean).sort().slice(-1)[0];
-        const pi = t.stages.indexOf(p);
-        const psib = siblingsOf(t.stages, pi);
-        const ppos = psib.findIndex(o => o.i === pi);
-        const pp = ppos > 0 ? psib[ppos - 1].x : null;
-        const pn = ppos >= 0 && ppos < psib.length - 1 ? psib[ppos + 1].x : null;
-        const ppEnd = pp && (pp.end || pp.date || pp.start);
-        const pnStart = pn && (pn.start || pn.date || pn.end);
-        if (ppEnd && ns2 <= ppEnd) {
-          return { ok: false, why: `改了子任务会带着「${p.name || '这个阶段'}」压到前面那段「${pp.name || ''}」（到 ${fmt(ppEnd)}）；先把前面那段往前挪` };
+        const ps = p.start || p.date, pe = p.end || p.date || ps;
+        const no = topNo(t.stages, p);
+        if (ps && date < ps) {
+          return { ok: false, why: `「${p.name || '这一段'}」从 ${fmt(ps)} 开始，子任务不能排到它前面；先把第 ${no} 段提前` };
         }
-        if (pnStart && ne2 >= pnStart) {
-          return { ok: false, why: `改了子任务会带着「${p.name || '这个阶段'}」压到下一阶段「${pn.name || ''}」（${fmt(pnStart)} 开始）` };
+        if (pe && newEnd > pe) {
+          return { ok: false, why: `这样「${stage.name || '这个子任务'}」要到 ${fmt(newEnd)}，可第 ${no} 段「${p.name || ''}」只到 ${fmt(pe)}；先把这一段延长到 ${fmt(newEnd)}，或者缩短这条子任务` };
         }
       }
     }
@@ -2417,16 +2400,15 @@ function moveTask(id, date, si) {
     s.start = date; s.end = addDays(date, span);
     const kids = s.id ? t.stages.filter(k => k.pid === s.id) : [];
     if (kids.length) {
-      /* 有子任务的阶段整段平移：子任务跟着走同样的天数，相对关系不变 */
+      /* 拖的是阶段：整段平移，子任务跟着走同样的天数，相对关系不变。
+         窗口是人定的，所以整段挪就是整段挪，里面的子任务不会丢掉原有的排布。 */
       kids.forEach(k => {
         if (k.start) k.start = addDays(k.start, delta);
         if (k.end) k.end = addDays(k.end, delta);
         if (k.date) k.date = addDays(k.date, delta);
       });
-    } else if (s.pid) {
-      /* 拖的是子任务：父阶段的起止按子任务并集重算 */
-      recalcParent(t.stages, s.pid);
     }
+    /* 拖的是子任务：父阶段的窗口不动，越界在上面 dragCheck 里已经拦了 */
     const tops = t.stages.filter(x => !x.pid);
     const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
     const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
@@ -2684,11 +2666,12 @@ document.addEventListener('click', e => {
       /* 编号按一级阶段的实际位置算，和左边那段圆标对得上 */
       const no = (t.stages || []).filter(x => !x.pid).indexOf(p) + 1;
       /* 默认日期以前直接抄父阶段的整段，等于保证「第二条子任务一定和第一条重叠」。
-         现在改成在父阶段窗口里找空档；满了就接在后面，并当场说清楚阶段会被撑到哪天。 */
+         现在改成在父阶段窗口里找空档；窗口满了就明说装不下、让人先延长这一段。
+         注意：加子任务**不会**把阶段撑长——阶段时间是人设的，得由人来改。 */
       const kids = kidsOf(t.stages, p.id);
       const slot = freeSlot(p, kids, 1);
       const slotTip = slot.overflow
-        ? `这一段的 ${dateSpan(p)} 已经被 ${kids.length} 个子任务排满了，默认接在 <b>${fmt(slot.start)}</b>；加进来之后第 ${no} 段会跟着变长。想给它留空间，先在上面把这一段「拉长」。`
+        ? `这一段的 ${dateSpan(p)} 被 ${kids.length} 个子任务占满了，默认排在 <b>${fmt(slot.start)}</b>，已经在窗口外——这样加会被拦。要加进来，先把这一段的结束日延长到 ${fmt(slot.end)}。`
         : `默认放进这段的空档里；这一段的窗口是 ${dateSpan(p)}，下面已有 ${kids.length} 个子任务。`;
       row.insertAdjacentHTML('afterend', `<div class="subadd">
         <div class="subadd-h">在第 <b>${no}</b> 段「${esc(p.name)}」下面加一个子任务</div>
@@ -2733,18 +2716,13 @@ document.addEventListener('click', e => {
         ${s.pid ? `<label class="sedit-who">谁做
           <select class="swho" data-sedit-who="${i}">${stageWhoOptions(t, s.who || '')}</select></label>` : ''}
         <div class="row">
-          <input type="date" class="sst" value="${from}" ${kids.length ? 'disabled' : ''}/>
-          <input type="date" class="sen" value="${to}" ${kids.length ? 'disabled' : ''}/>
+          <input type="date" class="sst" value="${from}"/>
+          <input type="date" class="sen" value="${to}"/>
           <button class="btn primary sm" data-act="stage-save" data-id="${t.id}" data-idx="${i}">保存</button>
           <button class="btn ghost sm" data-act="sedit-cancel">取消</button>
         </div>
-        ${kids.length ? `<div class="row" style="margin-top:6px">
-          <span class="lbl2">拉长到</span>
-          <input type="date" class="sext" value="${to}" title="把这一段加长到这天，最后一段子任务跟着延长"/>
-          <button class="btn ghost sm" data-act="stage-extend" data-id="${t.id}" data-idx="${i}">延长</button>
-        </div>` : ''}
         <div class="mini" style="margin-top:6px">${kids.length
-          ? `${dateSpan(s)} 由下面 ${kids.length} 个子任务决定，不能直接改。要给后面的子任务留时间，用上面的「拉长到」。`
+          ? `这一段的窗口是 ${dateSpan(s)}，下面 ${kids.length} 个子任务要排在里面；缩短时不能把它们挤到窗口外。`
           : '结束日期不能早于开始日期，也不能压到前后两段上'}</div>
       </div>`);
       break;
@@ -2752,40 +2730,9 @@ document.addEventListener('click', e => {
     case 'sedit-cancel':
       if (el.closest('.sedit')) el.closest('.sedit').remove();
       break;
-    /* 有子任务的阶段，日期是派生的（= 子任务并集），所以「延长这个阶段」不能靠改父阶段自己的
-       起止——存下去会被 recalcParent 打回原样，人看到的是「点了保存什么都没变」。
-       真正要动的是最后那一段子任务：把它拉长，父阶段自然跟着长。 */
-    case 'stage-extend': {
-      if (!t) break;
-      const i = Number(el.dataset.idx), s = (t.stages || [])[i];
-      const box = el.closest('.sedit');
-      if (!s || !box) break;
-      const nd = box.querySelector('.sext').value;
-      if (!nd) { toast('先选一个日期'); break; }
-      const kids = kidsOf(t.stages, s.id);
-      if (!kids.length) { toast('这一段已经没有子任务了，直接改日期就行'); break; }
-      const last = kids.slice().sort((a, b) => (dayOf(a, 'end') < dayOf(b, 'end') ? 1 : -1))[0];
-      const curEnd = dayOf(last, 'end') || dayOf(last, 'start');
-      if (nd <= curEnd) {
-        toast(`「${last.name || '最后一段'}」已经排到 ${fmt(curEnd)}，只能往后拉；要提前请直接改那一段`);
-        break;
-      }
-      const next = t.stages.map(x => Object.assign({}, x));
-      const target = next.find(x => x.id === last.id);
-      target.end = nd;
-      if (target.date) target.date = nd;   /* 单日节点拉长成区间，date 要跟着挪到新的结束日 */
-      recalcParent(next, s.id);
-      const v = validateStages(t, next, { action: 'extend' });
-      if (!v.ok) { toast(v.msg); break; }
-      t.stages = next;
-      const tops = t.stages.filter(x => !x.pid);
-      const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
-      const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
-      if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
-      save(); openTaskPage(t.id); render();
-      toast(`第 ${topNo(t.stages, t.stages.find(x => x.id === s.id))} 段延长到 ${fmt(nd)}`);
-      break;
-    }
+    /* 阶段延长不需要单独入口：编辑框里的结束日直接改就行。
+       以前这里有个「拉长到」，是因为有子任务的阶段被锁了日期框、只能绕道去拉子任务——
+       那个前提本身就是错的（阶段时间不该由子任务决定），入口一并去掉。 */
     case 'stage-save': {
       if (!t) break;
       const i = Number(el.dataset.idx), s = (t.stages || [])[i];
@@ -2798,18 +2745,16 @@ document.addEventListener('click', e => {
       const next = t.stages.map(x => Object.assign({}, x));
       const cur = next[i];
       cur.name = name;
-      const kids = kidsOf(t.stages, s.id);
-      if (!kids.length) {
-        const ns = box.querySelector('.sst').value;
-        let ne = box.querySelector('.sen').value;
-        if (!ns) { toast('先选开始日期'); break; }
-        if (!ne) ne = ns;
-        cur.start = ns;
-        cur.end = ne;
-        /* 单日节点改成区间时把 date 摘掉，否则日历还按单日取 */
-        if (cur.date) { if (ne === ns) cur.date = ns; else delete cur.date; }
-      }
-      if (cur.pid) recalcParent(next, cur.pid);
+      /* 日期就是表单里填的。有子任务时也照改——装不下会被校验拦下来并说清是哪个子任务出界，
+         而不是像以前那样锁住输入框、让人以为阶段时间不能碰。 */
+      const ns = box.querySelector('.sst').value;
+      let ne = box.querySelector('.sen').value;
+      if (!ns) { toast('先选开始日期'); break; }
+      if (!ne) ne = ns;
+      cur.start = ns;
+      cur.end = ne;
+      /* 单日节点改成区间时把 date 摘掉，否则日历还按单日取 */
+      if (cur.date) { if (ne === ns) cur.date = ns; else delete cur.date; }
       const v = validateStages(t, next, { action: 'stage-save' });
       if (!v.ok) { toast(v.msg); break; }
       t.stages = next;
@@ -2846,7 +2791,7 @@ document.addEventListener('click', e => {
       const e2 = box.querySelector('.sen').value || s;
       const node = { id: uid('s'), pid: next[i].id, name, start: s, end: e2, done: false, who };
       next.push(node);
-      recalcParent(next, next[i].id);
+      /* 父阶段的窗口原样保留，只校验新节点是否落在里面 */
       const v = validateStages(t, next, { action: 'add-sub', newName: name, newPid: next[i].id, newNode: node });
       if (!v.ok) { toast(v.msg); break; }
       t.stages = next;
@@ -2903,7 +2848,7 @@ document.addEventListener('click', e => {
       const kids = s.id ? t.stages.filter(x => x.pid === s.id) : [];
       if (kids.length && !confirm(`「${s.name}」下面还有 ${kids.length} 个子任务，一起删掉？`)) break;
       t.stages = t.stages.filter(x => x !== s && !(s.id && x.pid === s.id));
-      if (s.pid) recalcParent(t.stages, s.pid);
+      /* 删子任务不动父阶段的窗口：窗口是人设的，不会因为里面少了一条就自己缩短 */
       /* 删掉最后一段之后总区间要收回来，不然卡片上还挂着已经不存在的那一段的结束日 */
       const tops = t.stages.filter(x => !x.pid);
       const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();

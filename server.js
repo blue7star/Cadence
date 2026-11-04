@@ -487,24 +487,18 @@ function bumpRev() {
    ① 只有 assign / special 允许子任务，temp / routine 一律拉平；
    ② pid 只能指向「pid 为空」的节点，第四级静默拉平成一级（脏数据不该让人卡在保存上）；
    ③ 父阶段的起止不独立存在，有子任务时一律重算为子任务日期的并集。 */
+/* 阶段的起止是设定值，不从子任务反推。这里只做「pid 指向的阶段还在不在」的清理：
+   父行被删掉时，挂在上面的子任务不能变成孤儿。
+   （曾经这里还有一段按子任务并集重算父阶段——前端改了日期，存进来又被改回去，
+    人看到的是「点了保存什么都没变」。已删除，别再放回来。） */
 function normalizeStages(raw, type) {
   const arr = Array.isArray(raw) ? raw : [];
   if (type !== 'assign' && type !== 'special') return arr.map(s => Object.assign({}, s, { pid: null }));
   const topIds = new Set(arr.filter(s => !s.pid && s.id).map(s => s.id));
-  const out = arr.map(s => {
+  return arr.map(s => {
     const pid = s.pid && topIds.has(s.pid) ? s.pid : null;
     return Object.assign({}, s, { pid });
   });
-  for (const p of out) {
-    if (p.pid) continue;
-    const kids = out.filter(k => k.pid && k.pid === p.id);
-    if (!kids.length) continue;
-    const ss = kids.map(k => k.start || k.date).filter(Boolean).sort();
-    const es = kids.map(k => k.end || k.date || k.start).filter(Boolean).sort();
-    if (ss.length) p.start = ss[0];
-    if (es.length) p.end = es[es.length - 1];
-  }
-  return out;
 }
 
 /* 子任务责任人：只在三级节点上生效。

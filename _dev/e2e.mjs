@@ -1804,8 +1804,8 @@ async function main() {
     check('加子任务的默认日期不再抄父阶段整段（以前抄整段 = 保证第二条必和第一条重叠）',
       !!subDefault && !(subDefault.sst === subDefault.pStart && subDefault.sen === subDefault.pEnd),
       JSON.stringify(subDefault));
-    check('占满时把「这一段已经排满了、会跟着变长」写出来，不当场硬塞',
-      !!subDefault && /排满|变长|接在/.test(subDefault.tip), subDefault && subDefault.tip);
+    check('窗口占满时说明装不下、要先把这一段延长，不当场硬塞进去',
+      !!subDefault && /窗口外|装不下|延长/.test(subDefault.tip), subDefault && subDefault.tip);
 
     /* 同阶段重名：两条同名子任务在进度里算成两件独立的事，分母直接虚高 */
     const subDup = await js(`(function(){const f=document.querySelector('#view .subadd');
@@ -1819,18 +1819,18 @@ async function main() {
     await js(`(function(){const b=document.querySelector('#view .subadd [data-act="subadd-cancel"]'); if(b) b.click(); return 'ok'})()`);
     await sleep(200);
 
-    /* 有子任务的阶段：日期是派生的，直接改会被 recalcParent 打回，
-       所以必须给一个「拉长到」的入口——否则「这一段排满了」就是绝路。 */
+    /* 阶段的起止是人设定的：有子任务照样能改，改完就是新窗口。
+       以前这里是"锁住日期框 + 一个「拉长到」绕道"，等于让子任务反推阶段时间——方向是反的。 */
     const parEdit = await js(`(function(){
       document.querySelector('#view .stage:not(.sub) [data-act="stage-edit"]').click();
       const box=document.querySelector('#view .sedit');
       if(!box) return null;
-      return {hasExtend:!!box.querySelector('.sext'), hasBtn:!!box.querySelector('[data-act="stage-extend"]'),
-        stDisabled:box.querySelector('.sst').disabled, tip:box.innerText};})()`);
-    check('有子任务的阶段：日期框锁住，但给「拉长到」这个入口，不是一句「请改子任务」了事',
-      !!parEdit && parEdit.stDisabled === true && parEdit.hasExtend === true && parEdit.hasBtn === true,
+      return {stDisabled:box.querySelector('.sst').disabled, enDisabled:box.querySelector('.sen').disabled,
+        noExtend:!box.querySelector('[data-act="stage-extend"]'), tip:box.innerText};})()`);
+    check('有子任务的阶段，起止日期照样能改（阶段时间由人设定，不由子任务反推）',
+      !!parEdit && parEdit.stDisabled === false && parEdit.enDisabled === false && parEdit.noExtend === true,
       JSON.stringify(parEdit));
-    await shot('17c-stage-extend');
+    await shot('17c-stage-edit-window');
     await js(`(function(){const b=document.querySelector('#view .sedit [data-act="sedit-cancel"]'); if(b) b.click(); return 'ok'})()`);
     await sleep(200);
 
@@ -1869,15 +1869,16 @@ async function main() {
   await sleep(200);
   check('临时任务新建时没有阶段/子任务入口', tempForm.has === false, JSON.stringify(tempForm));
 
-  /* 子任务越界：它一挪，父阶段的边界跟着长，不能因此压到下一段 */
+  /* 子任务越界：阶段窗口是人设的，拖子任务不会让窗口变长，越界就得拦下并指出怎么改 */
   const GRD = 't_e2e_drag_root';
   await push('1012', { tasks: [{ id: GRD, ownerNo: '1012', assigneeNo: '1012', type: 'special',
-    title: 'E2E拖子任务越界', start: '2026-11-03', end: '2026-11-20', status: 'todo',
+    title: 'E2E拖子任务越界', start: '2026-11-03', end: '2026-11-25', status: 'todo',
     stages: [
       { id: 'g1', pid: null, name: '第一段', start: '2026-11-03', end: '2026-11-10', done: false },
       { id: 'g2', pid: 'g1', name: '子一', start: '2026-11-03', end: '2026-11-05', done: false },
       { id: 'g3', pid: 'g1', name: '子二', start: '2026-11-06', end: '2026-11-10', done: false },
-      { id: 'g4', pid: null, name: '第二段', start: '2026-11-11', end: '2026-11-20', done: false },
+      /* 第二段留出空档，才测得到「延长第一段」本身，不被相邻段挡住 */
+      { id: 'g4', pid: null, name: '第二段', start: '2026-11-20', end: '2026-11-25', done: false },
     ] }] });
   await js(`refresh(true);'ok'`); await sleep(900);
   const verdict = await js(`(function(){
@@ -1886,8 +1887,46 @@ async function main() {
     const i=t.stages.findIndex(s=>s.id==='g3');
     const r=dragCheck(t,'2026-11-13',i);
     return {ok:r.ok, why:r.why||''};})()`);
-  check('子任务越界拖动会带着父阶段压到下一段，被拦下并说清原因',
-    !!verdict && verdict.ok === false && verdict.why.includes('下一阶段'), JSON.stringify(verdict));
+  check('子任务拖出阶段窗口被拦下，并说清先延长这一段',
+    !!verdict && verdict.ok === false && verdict.why.includes('延长'), JSON.stringify(verdict));
+
+  /* 阶段窗口就是设定的值，两个方向都要对：
+     ① 延长窗口 → 阶段自己的日期变，子任务一个不动（以前会被子任务并集打回去）
+     ② 缩到装不下子任务 → 拒绝，并指出是谁出界 */
+  const editWin = (stageId, end) => js(`(function(){
+    const t=S.tasks.find(x=>x.id==='${GRD}');
+    openTaskPage(t.id);
+    const idx=t.stages.findIndex(s=>s.id==='${stageId}');
+    const row=[...document.querySelectorAll('#view .stage')].find(r=>{
+      const b=r.querySelector('[data-act=stage-edit]'); return b&&Number(b.dataset.idx)===idx;});
+    if(!row) return {err:'这一行没有改入口'};
+    row.querySelector('[data-act=stage-edit]').click();
+    const box=document.querySelector('#view .sedit');
+    if(!box) return {err:'没展开编辑框'};
+    const st=box.querySelector('.sst').value;
+    box.querySelector('.sen').value='${end}';
+    box.querySelector('[data-act=stage-save]').click();
+    return {msg:(document.querySelector('#toast')||{}).textContent||'', st};})()`);
+
+  const wide = await editWin('g1', '2026-11-13');
+  await sleep(900);
+  await js(`refresh(true);'ok'`); await sleep(700);
+  const winAfter = await js(`(function(){
+    const t=S.tasks.find(x=>x.id==='${GRD}');
+    if(!t) return null;
+    const g1=t.stages.find(s=>s.id==='g1');
+    const g2=t.stages.find(s=>s.id==='g2'), g3=t.stages.find(s=>s.id==='g3');
+    return {pEnd:g1.end, k2s:g2.start, k2e:g2.end, k3s:g3.start, k3e:g3.end};})()`);
+  check('延长阶段窗口就生效：阶段自己变成新日期，里面的子任务一个不动',
+    !!winAfter && winAfter.pEnd === '2026-11-13' && winAfter.k2s === '2026-11-03'
+      && winAfter.k3e === '2026-11-10',
+    JSON.stringify({ click: wide, after: winAfter }));
+
+  const narrow = await editWin('g1', '2026-11-08');
+  await sleep(700);
+  check('阶段缩到装不下子任务时被拦，并指出是哪个子任务出界、该改哪边',
+    narrow.msg.includes('子二') && narrow.msg.includes('延长'), JSON.stringify(narrow));
+
   await push('1012', { del: { tasks: [GRD] } });
 
   /* ---------- 10 点遮罩/按 Esc 不能烧掉没保存的内容 ---------- */

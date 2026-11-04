@@ -502,6 +502,18 @@ const taskProg = t => {
 const overdue = t => t.status !== 'done' && t.end < TODAY;
 
 /* ============ 通用组件 ============ */
+/* 发布人：这件事最开始是谁发起的（publisher_no 永不改），和「承接人」是两回事——
+   接过去之后 owner 变了、计划归承接人排，但总截止还是发布人定的。
+   自己发起的活不写，不然每一行都挂一句「我发布」，看着更乱。 */
+function pubName(t) {
+  const p = t && (t.publisherNo || t.ownerNo);
+  return (!p || (S.me && p === S.me.no)) ? '' : nameOf(p);
+}
+/* 整张卡片头部用：一个标签，扫一眼就知道这活是谁派的 */
+function pubTag(t) {
+  const p = pubName(t);
+  return p ? `<span class="tag pub" title="发布人：这条活由他发起，总截止也由他定；接收之后他只看进度">${esc(p)} 发布</span>` : '';
+}
 function typeChip(t) { return `<span class="chip ${t.type}">${TYPES[t.type].name}</span>`; }
 function stTag(status) { return `<span class="tag ${ST[status].cls}">${ST[status].name}</span>`; }
 function prioBadge(t) {
@@ -532,6 +544,7 @@ function taskRow(t, step, si) {
   const spanTo = step ? (step.end || step.date || t.end) : t.end;
   const late = step ? (!step.done && spanTo < TODAY) : overdue(t);
   const who = (t.assigneeNo && t.assigneeNo !== S.me.no) ? nameOf(t.assigneeNo) : '';
+  const pub = pubName(t);
   /* 有状态下拉的普通任务不再重复写一遍状态；常规实例写「节点进度」 */
   const stText = step ? `${si + 1}/${t.stages.length} 节点` : (t.type === 'routine' ? ST[t.status].name : '');
   return `<div class="trow ${done ? 'done' : ''}">
@@ -545,6 +558,7 @@ function taskRow(t, step, si) {
         ${late ? '<span class="tag red">已逾期</span>' : ''}</div>
       <div class="meta">
         <span>${time ? time + ' · ' : ''}${spanFrom === spanTo ? fmt(spanFrom) : fmt(spanFrom) + ' → ' + fmt(spanTo)}</span>
+        ${pub ? `<span class="pubm" title="发布人：这条活由他发起，总截止由他定">${esc(pub)} 发布</span>` : ''}
         ${who ? `<span>承接：${esc(who)}</span>` : ''}
         <span>${catName(t.cat1, t.cat2)}</span>
       </div>
@@ -756,8 +770,13 @@ function specialLineHTML(m, t) {
   const cur = leaves.find(s => !s.done) || null;
   const late = overdue(t);
   const p = taskProg(t);
+  /* 这一行是「某个下属名下的专项」，所以判据是「跟他本人对不对得上」：
+     不是他自己起的，就标出真正的发布人（可能是我，也可能是别人）。 */
+  const pub0 = t.publisherNo || t.ownerNo;
+  const fromOther = pub0 && pub0 !== m.no;
   return `<div class="rline ${w ? 'open' : ''}">
     <span class="rnm">${esc(t.title)}</span>
+    ${fromOther ? `<span class="tag pub" title="发布人：这条活不是他自己起的">${esc(nameOf(pub0))} 发布</span>` : ''}
     <span class="rmeta">${fmt(t.start)} → ${fmt(t.end)}</span>
     <span class="rmeta">${leaves.length ? `${leaves.filter(s => s.done).length}/${leaves.length} 阶段` : '未拆阶段'}</span>
     <span class="curnode ${late ? 'warn' : ''}">${cur
@@ -981,7 +1000,7 @@ function viewSpecial() {
         const left = diffDays(t.end, TODAY);
         return `<div class="rule-card">
           <div class="card-h" style="margin-bottom:6px">
-            <h2>${esc(t.title)}</h2>${stTag(t.status)}${prioBadge(t)}
+            <h2>${esc(t.title)}</h2>${stTag(t.status)}${pubTag(t)}${prioBadge(t)}
             ${t.status !== 'done' && left < 0 ? '<span class="tag red">逾期 ' + Math.abs(left) + ' 天</span>' : t.status !== 'done' && left <= 3 ? '<span class="tag warn">剩 ' + left + ' 天</span>' : ''}
             <div class="spacer"></div><button class="btn sm ghost" data-act="open" data-id="${t.id}">查看</button>
           </div>
@@ -1027,6 +1046,8 @@ function viewIntake() {
         ${subIn.length ? subIn.map(g => `<div class="rule-card">
           <div class="card-h" style="margin-bottom:6px"><h2>${esc(g.task.title)}</h2>
             <span class="tag">${esc(g.from)} 分给你 ${g.stages.length} 段</span>
+            ${(g.task.publisherNo || g.task.ownerNo) && (g.task.publisherNo || g.task.ownerNo) !== g.task.ownerNo
+              ? `<span class="tag pub" title="这整件事的发布人，承接人是 ${esc(nameOf(g.task.ownerNo))}">${esc(nameOf(g.task.publisherNo || g.task.ownerNo))} 发布</span>` : ''}
             <div class="spacer"></div><span class="tag red">最早 ${fmt(g.earliest)}</span></div>
           ${g.stages.map(s => `<div class="kv"><span>${esc(s.name || '子任务')} · ${fmt(s.start || s.date)} → ${fmt(s.end || s.date)}</span>
             <b><button class="btn sm ghost" data-act="stage-join" data-id="${g.id}" data-sid="${esc(s.id)}">加入待办</button></b></div>`).join('')}
@@ -1104,7 +1125,8 @@ const CHIP_STATE = { doing: '进行中', paused: '暂缓', done: '已完成' };
 function calChipHTML(t, step, si, label, maxLen) {
   const stKey = (step && step.done) ? 'done' : (ST[t.status] ? t.status : 'todo');
   const late = chipLate(t, step);
-  const tip = (step && step.name ? t.title + ' · ' + step.name : t.title) + ' · ' + ST[stKey].name + (late ? ' · 已逾期' : '');
+  const tip = (step && step.name ? t.title + ' · ' + step.name : t.title) + ' · ' + ST[stKey].name + (late ? ' · 已逾期' : '')
+    + (pubName(t) ? ' · ' + pubName(t) + ' 发布' : '');
   const adjusted = step ? false : (t.auto && t.planDate && t.planDate !== t.start);
   const stateText = late ? '逾期' : (CHIP_STATE[stKey] || '');
   return `<span class="chip cal ${t.type} s-${stKey}${late ? ' overdue' : ''}${adjusted ? ' adjusted' : ''}"

@@ -1941,6 +1941,46 @@ async function main() {
      db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
     { cwd: ROOT });
 
+  /* ---------- 9.6 任务卡片上要写清「这条活是谁发布的」 ---------- */
+  /* 发布人 ≠ 承接人：接收之后 owner 变成了承接人，卡片上如果只剩「承接」，
+     承接人回头看这条活，分不清是别人派的还是自己起意干的；自己的活也不该每条都刷「我发布」。 */
+  const T0 = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();return j.today})()`);
+  const PUBCHK = 't_e2e_pubtag';
+  await push('1012', { tasks: [{ id: PUBCHK, assigneeNo: '1002', type: 'assign',
+    title: 'E2E发布人显示', start: T0, end: T0, status: 'todo' }] });
+  const pubAcc = await act('/api/task/accept', { me: '1002', id: PUBCHK });
+  check('（前置）1012 发布、1002 接收之后，这条活的发布人仍是 1012',
+    pubAcc.ok === true, JSON.stringify(pubAcc));
+
+  await js(`localStorage.setItem('pm_mvp_me','1002');'ok'`);
+  await goto(BASE); await sleep(1400);
+  if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+    await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
+  }
+  await nav('today');
+  const pubRow = await js(`(function(){
+    const row=[...document.querySelectorAll('.trow')].find(r=>/E2E发布人显示/.test(r.innerText));
+    if(!row) return {found:false};
+    const m=row.querySelector('.meta'); const el=m&&m.querySelector('.pubm');
+    return {found:true, has:!!el, text:el?el.innerText.replace(/\\s+/g,' ').trim():'',
+      tip:el?el.getAttribute('title'):''}})()`);
+  check('今日待办的任务行写明发布人（不是「我」，是我上面派下来的那个人）',
+    pubRow.found && pubRow.has && /王磊 发布/.test(pubRow.text) && !!pubRow.tip, JSON.stringify(pubRow));
+
+  await nav('special');
+  const pubCard = await js(`(function(){
+    const cards=[...document.querySelectorAll('.rule-card')];
+    const mine=cards.find(c=>/E2E发布人显示/.test(c.innerText));
+    const self=cards.find(c=>/客户画像标签体系重建/.test(c.innerText));
+    const t=mine&&mine.querySelector('.tag.pub'); const s=self&&self.querySelector('.tag.pub');
+    return {card:!!mine, selfCard:!!self, pub:t?t.innerText.replace(/\\s+/g,' ').trim():'', selfPub:!!s}})()`);
+  check('专项工作卡片标出发布人；自己起的活不标（不刷「我发布」）',
+    pubCard.card && pubCard.pub === '王磊 发布' && pubCard.selfCard && pubCard.selfPub === false,
+    JSON.stringify(pubCard));
+
+  await push('1002', { del: { tasks: [PUBCHK] } });
+  await push('1012', { del: { tasks: [PUBCHK] } });
+
   /* ---------- 11 错误汇总 ---------- */
   const errs = cdp.events.filter((e) =>
     e.method === 'Runtime.exceptionThrown' ||

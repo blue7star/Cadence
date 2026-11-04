@@ -6,6 +6,7 @@ const PORT = 9334;
 const BASE = 'http://localhost:8788';
 const target = process.argv[2] || 'calendar';
 const out = process.argv[3] || '_dev/shots/live.png';
+const ME = process.argv[4] || '1012';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const prof = fs.mkdtempSync('C:/Users/lanmingjian/AppData/Local/Temp/shot-');
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${prof}`,
@@ -26,8 +27,11 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 await send('Page.enable');
 await send('Page.navigate', { url: BASE });
 await sleep(1500);
-await send('Runtime.evaluate', { expression: `localStorage.setItem('pm_mvp_me','1012');location.reload()` });
+await send('Runtime.evaluate', { expression: `localStorage.setItem('pm_mvp_me','${ME}');location.reload()` });
 await sleep(2200);
+/* 第一次登录的人会被要求选直属上级，截图时直接跳过，看页面本身 */
+await send('Runtime.evaluate', { expression: `(function(){const b=document.querySelector('[data-act=skip-mgr]');if(b)b.click();return !!b})()` });
+await sleep(1400);
 await send('Runtime.evaluate', { expression: `view='${target}'; if(typeof render==='function') render();` });
 await sleep(1200);
 const shot = await send('Page.captureScreenshot', { format: 'png' });

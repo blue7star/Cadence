@@ -31,8 +31,8 @@ function runFast() {
 const pick = (kw) => fs.readdirSync(DIR)
   .filter((f) => f.endsWith('.md') && f !== '_template.md' && f.includes(kw))[0];
 
-const DELIVERED = pick('三级节点');      /* 已交付、停在 READY_FOR_REVIEW */
-const DEFERRED = pick('阶段责任人');     /* 未实施、PLANNED */
+const DELIVERED = pick('三级节点');      /* 已交付；2026-11-05 已转 PASS，用例自己把它降回 READY_FOR_REVIEW 来造场景 */
+const DEFERRED = pick('阶段责任人');     /* 未实施、PLANNED，挂着 #18 */
 const PASSED = fs.readdirSync(DIR)
   .filter((f) => f.endsWith('.md') && f !== '_template.md')
   .find((f) => /\*\*状态\*\*[：:]\s*`?PASS`?/.test(fs.readFileSync(path.join(DIR, f), 'utf8')));
@@ -51,8 +51,12 @@ const cases = [
   {
     name: '第 3 段标题少一个点（`## 3 复核`）也不许跳过',
     file: DELIVERED,
-    /* 少一个点 + 复核段写「通过」，状态仍停在 READY_FOR_REVIEW。跳过检查就会判绿。 */
-    mutate: (s) => s.replace('## 3. 复核', '## 3 复核').replace(/- 结论：[^\n]*/, '- 结论：通过')
+    /* 少一个点 + 复核段写「通过」，状态降回 READY_FOR_REVIEW（挂 #19，未被别的契约占用）。
+       标题认不出来就会跳过第 3 段，看不到「结论已通过」，也就不会红。 */
+    mutate: (s) => s
+      .replace(/\*\*状态\*\*[：:][^\n]*/, '**状态**：`READY_FOR_REVIEW`（见 `issues.md` #19）')
+      .replace('## 3. 复核', '## 3 复核')
+      .replace(/- 结论：[^\n]*/, '- 结论：通过')
   },
   {
     name: '第 2 段标题少一个点 + 交付删空，不许免检',
@@ -77,12 +81,15 @@ const cases = [
   {
     name: '挂一个不在「未解决」表里的编号不算欠债',
     file: DELIVERED,
-    mutate: (s) => s.replace(/issues\.md`?\s*#17/, 'issues.md` #999')
+    /* 状态降回 READY_FOR_REVIEW，欠债编号写一个不存在的 #999 */
+    mutate: (s) => s.replace(/\*\*状态\*\*[：:][^\n]*/, '**状态**：`READY_FOR_REVIEW`（见 `issues.md` #999）')
   },
   {
     name: '一个编号不许被两份契约共用',
-    file: DEFERRED,
-    mutate: (s) => s.replace(/#18/, '#17')
+    file: DELIVERED,
+    /* 阶段责任人挂着 #18（PLANNED，状态行后 300 字内可见）。让三级节点也挂 #18，
+       两份共存 → 共用同一张欠债凭证。 */
+    mutate: (s) => s.replace(/\*\*状态\*\*[：:][^\n]*/, '**状态**：`READY_FOR_REVIEW`（见 `issues.md` #18）')
   },
   {
     name: 'PASS 的结论不许是「有条件通过」',

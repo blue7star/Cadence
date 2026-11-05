@@ -11,11 +11,13 @@
  *   4) WorkBuddy 会话还会注入 https_proxy=127.0.0.1:49381（内部代理，不转发 github）。
  * 每次手动删环境变量 + 换 -c 覆盖，既费事又容易漏掉某一层。
  *
- *   node _dev/push.mjs            探测 + 推送
- *   node _dev/push.mjs --check    只探测，不动远程
+ *   node .agents/scripts/push.mjs          探测 + 推送
+ *   node .agents/scripts/push.mjs --check  只探测，不动远程
  *
  * 通道优先级：SSH（不受 443 封锁影响）→ HTTPS 直连 → HTTPS 走 7897 → HTTPS 走 SOCKS5。
  * 全部不通时，脚本会把「哪一层断了」打出来，而不是甩一句 network error。
+ *
+ * 2026-11-05 起公钥已加到 github 账号，SSH 是常态首选通道，remote 也已切成 SSH。
  */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -54,6 +56,15 @@ function run(cmd, args, env, timeout) {
 }
 
 /* ── 通道探测 ────────────────────────────────────────────── */
+
+/**
+ * 推送只改变远端，本地 origin/main 引用要单独 fetch 才跟得上。
+ * 不补这一步，`git status` 会一直显示 ahead 1 —— 明明推成功了，看着像没推。
+ * 这里直接对 URL fetch 并写进 origin/main，不依赖 remote 当前配的是哪条通道。
+ */
+function syncRemoteRef(url) {
+  run('git', ['fetch', url, 'main:refs/remotes/origin/main'], baseEnv(), PROBE_TIMEOUT);
+}
 
 function probeSsh() {
   /* github 不提供 shell，认证成功也返回 1，所以只看输出不看退出码 */
@@ -157,7 +168,7 @@ async function main() {
         console.log(`\n用 SSH 推送 → ${SSH_URL}\n`);
         const p = run('git', ['push', SSH_URL, 'HEAD:main'], baseEnv(), PUSH_TIMEOUT);
         console.log(p.out || '（无输出）');
-        if (p.code === 0) { console.log('\n[成功] 已推送到 main\n'); return; }
+        if (p.code === 0) { syncRemoteRef(SSH_URL); console.log('\n[成功] 已推送到 main\n'); return; }
         console.log('\n[失败] SSH 探测通但推送失败，见上面的输出\n');
         process.exit(1);
       }
@@ -171,7 +182,7 @@ async function main() {
       const p = run('git', ['-c', `http.https://github.com.proxy=${proxy}`,
         'push', HTTPS_URL, 'HEAD:main'], env, PUSH_TIMEOUT);
       console.log(p.out || '（无输出）');
-      if (p.code === 0) { console.log('\n[成功] 已推送到 main\n'); return; }
+      if (p.code === 0) { syncRemoteRef(HTTPS_URL); console.log('\n[成功] 已推送到 main\n'); return; }
       console.log('\n[失败] 通道探测通但推送失败，见上面的输出\n');
       process.exit(1);
     }

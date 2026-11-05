@@ -1755,8 +1755,14 @@ async function main() {
   await sleep(400);
   await js(`(function(){
     document.querySelector('#f_title').value='E2E三级：阶段带子任务';
+    /* 日历一格最多显示 4 条，演示数据会把「今天」占满，这条就被折叠成 +N 了——
+       那样这条用例成没成，取决于当天有几条活。固定挑一个演示数据不挤的工作日。 */
+    document.querySelector('#f_start').value='2026-11-24';
+    document.querySelector('#f_end').value='2026-11-24';
     const r=document.querySelector('#stageRows .mrow');
     r.querySelector('.sname').value='阶段一';
+    r.querySelector('.sst').value='2026-11-24';
+    r.querySelector('.sen').value='2026-11-24';
     r.querySelector('[data-act="mstage-sub"]').click();
     return 'ok';
   })()`);
@@ -1765,6 +1771,8 @@ async function main() {
     const k=document.querySelector('#stageRows .mrow.sub');
     if(!k) return {n:0};
     k.querySelector('.sname').value='子任务A';
+    k.querySelector('.sst').value='2026-11-24';
+    k.querySelector('.sen').value='2026-11-24';
     const w=k.querySelector('.swho');
     if(w) w.value='1002';
     return {n:document.querySelectorAll('#stageRows .mrow').length,

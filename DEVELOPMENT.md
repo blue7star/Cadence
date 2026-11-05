@@ -24,13 +24,14 @@ public/app.js          # 视图渲染、交互、同步
 public/changelog.js    # 顶栏版本号 + 版本更新弹窗
 data/                  # 运行时数据库（已 gitignore）
 AGENTS.md              # 工程规矩与事实指针（改代码前先读）
-issues.md              # 问题台账，每条带 fail_source
+.agents/SPEC.md        # 需求语义、能力边界、公开契约不变量
+.agents/issues.md      # 问题台账，每条带 fail_source
+.agents/review-checklist.md  # G2 复核清单（每条对应踩过的坑）
+.agents/archive/contracts/   # 已退役的手工契约（只读留档，2026-11-04 起不用）
+.agents/practice/      # 采纳记录、skill 反馈、方法层观察
+specs/modules/         # 模块边界、不变量、依赖方向（蓝图，权威）
 docs/product-design.html  # 产品设计方案（含一期范围、权限、决策记录）
 docs/prototype.html       # 交互原型（无后端，localStorage，供对照）
-docs/modules.md           # 模块边界、不变量、依赖方向
-docs/contracts/           # G2 改动的契约（_template.md 是模板）
-docs/review-checklist.md  # G2 复核清单（每条对应踩过的坑）
-docs/adoption-log.md      # 采纳外部工程方法的实测记录
 .githooks/pre-commit   # 提交门禁入口（需 git config core.hooksPath .githooks）
 _dev/verify.mjs        # 门禁本体：语法/版本/CHANGELOG/服务版本/e2e/树摘要
 _dev/e2e.mjs           # 端到端自检（84 项），脚本进版本库、产物不进
@@ -139,7 +140,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 
 `task.stages` 节点结构：`{id, pid, name, start, end, done, who, whoAt, joinedAt, doneBy, doneAt}`，常规实例是 `{name, date, time, done, plan}`。`pid` 为空是一级阶段，有值表示它是那个阶段的子任务（只允许一层，见第 6 节第 20 条）。老数据没有 `id`/`pid`，一律按一级阶段处理，不需要迁移。
 
-`who` 只允许出现在三级子任务上（`pid` 非空）——二级阶段不设责任人（决策见 `docs/contracts/2026-11-04-子任务责任人与发布任务.md`）。四个字段的时序是：**指定**（`who` 有值、`whoAt` 空，对方什么都看不到）→ **派发**（写 `whoAt` + 一条 `dispatched` 提醒，对方承接台出现）→ **加入待办**（写 `joinedAt`，生成镜像 temp）→ **勾选**（`done`/`doneBy`/`doneAt`，镜像 temp 跟着变）。`who` 等于承接人时一律存 `null`：承接人本人就是这活的责任人，不必在子任务上再写一遍。
+`who` 只允许出现在三级子任务上（`pid` 非空）——二级阶段不设责任人（决策见 `.agents/archive/contracts/2026-11-04-子任务责任人与发布任务.md`）。四个字段的时序是：**指定**（`who` 有值、`whoAt` 空，对方什么都看不到）→ **派发**（写 `whoAt` + 一条 `dispatched` 提醒，对方承接台出现）→ **加入待办**（写 `joinedAt`，生成镜像 temp）→ **勾选**（`done`/`doneBy`/`doneAt`，镜像 temp 跟着变）。`who` 等于承接人时一律存 `null`：承接人本人就是这活的责任人，不必在子任务上再写一遍。
 
 ## 6. 关键设计（改动前先读）
 
@@ -265,7 +266,7 @@ git config core.hooksPath .githooks
 - `.gitattributes` 已固定 `*.bat text eol=crlf`，clone 后无需手动转换。
 - 前端不引入构建工具与第三方库，保持“拷过去就能跑”。
 - 数据库结构变更写在 `server.js` 建表处，并对老库做兼容（`ALTER TABLE` 前先查 `pragma table_info`）。
-- 工程治理文件（`AGENTS.md` / `issues.md` / `docs/modules.md` / `docs/contracts/` / `docs/review-checklist.md`）各管一件事，**别把同一口径写第二遍**：业务写 `README.md`，工程写本文件，规矩和指针写 `AGENTS.md`，问题写 `issues.md`。写完发现两边说法不一致时，先判断哪边是对的，删掉另一边，别让两处并存。
+- 工程治理文件（`AGENTS.md` / `.agents/issues.md` / `specs/modules/` / `.agents/archive/contracts/` / `.agents/review-checklist.md`）各管一件事，**别把同一口径写第二遍**：业务写 `README.md`，工程写本文件，规矩和指针写 `AGENTS.md`，问题写 `.agents/issues.md`。写完发现两边说法不一致时，先判断哪边是对的，删掉另一边，别让两处并存。
 
 ## 10. 版本与发版
 

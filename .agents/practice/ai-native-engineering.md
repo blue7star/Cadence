@@ -29,11 +29,12 @@ Cadence 的方法层观察只写在这里。两者不是并行真相：那份是
 | 想知道什么 | 去哪看 |
 |---|---|
 | 开发规矩、G 分级、提交纪律、fail_source 口径 | `AGENTS.md` |
-| 模块边界与不变量 | `docs/modules.md` |
-| 采纳了什么、拒绝什么、实测数字 | `docs/adoption-log.md` |
-| 问题归因与分类口径 | `issues.md` |
-| 契约与复核记录 | `docs/contracts/` |
-| 复核清单 | `docs/review-checklist.md` |
+| 需求语义与不变量 | `.agents/SPEC.md` |
+| 模块边界与不变量 | `specs/modules/` |
+| 采纳了什么、拒绝什么、实测数字 | `.agents/practice/adoption-log.md` |
+| 问题归因与分类口径 | `.agents/issues.md` |
+| 新契约模板与账本 | `.agents/templates/`、`artifacts/runs/` |
+| 复核清单 | `.agents/review-checklist.md` |
 | 门禁实现与证据 | `_dev/verify.mjs`、`_dev/verify-report.json`、`.githooks/pre-commit` |
 
 ## 观察（现象 + 根因假设，不下结论）
@@ -81,7 +82,7 @@ Cadence 的方法层观察只写在这里。两者不是并行真相：那份是
 ### 6. 完全落实：三个实测盲区被 skill 3.0.0 修复
 
 2026-11-03 是「选择性采纳」——只取方法层（事实单一归属、契约、独立复核、fail_source），
-**拒绝工具层**（`gate.py`、`agent_workflow.py`、`scaffold_project.py` 一律不用，见 `docs/adoption-log.md` 第 3/4 节）。
+**拒绝工具层**（`gate.py`、`agent_workflow.py`、`scaffold_project.py` 一律不用，见 `.agents/practice/adoption-log.md` 第 3/4 节）。
 2026-11-04 转「完全落实」：工具层也接入，`.agents/gates/gate.py` 成为双轨门禁里的契约门禁。
 
 当时拒绝 `gate.py` 的三个实测盲区，全部由 skill 3.0.0 修复，本项目已逐条对上：
@@ -103,8 +104,8 @@ Cadence 的方法层观察只写在这里。两者不是并行真相：那份是
 | evidence_uri | `_dev/verify-report.json`（门禁 6 项的原始输出与树摘要） |
 | evidence_digest | DEEPDIGEST（每次 `--full` 后同步更新，内容为 `verify-report.json` 的 sha256 前 16 位） |
 | reproduction_conditions | Node 22、本机 Chromium（`_dev/e2e.mjs` 顶部路径）、服务跑在 8788、`node _dev/verify.mjs --full` |
-| 复核记录 | `docs/contracts/2026-11-03-下派自由选择与知情人.md` 第 3 段 |
-| 问题归因 | `issues.md` |
+| 复核记录 | `.agents/archive/contracts/2026-11-03-下派自由选择与知情人.md` 第 3 段 |
+| 问题归因 | `.agents/issues.md` |
 
 ## 拟议的方法影响（未提案）
 

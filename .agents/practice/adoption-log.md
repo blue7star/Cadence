@@ -1,5 +1,11 @@
 # 采纳记录：ai-native-engineering（部分采纳）
 
+> **后续状态（2026-11-04）**：本项目已转为「完全落实」，工具层（`gate.py` / `agent_workflow.py`）已接入双轨门禁。
+> 本记录保留 11-03 的判断原貌；后续进展见 `.agents/practice/skill-feedback-20261104.md`。
+> **文中路径为 11-03 时的位置**，现已迁移：`docs/modules.md` → `specs/modules/`、
+> `docs/contracts/` → `.agents/archive/contracts/`、`docs/review-checklist.md` → `.agents/review-checklist.md`、
+> `docs/adoption-log.md` → 本文件、`issues.md` → `.agents/issues.md`。
+
 2026-11-03 · 来源 `D:\ai_project\ai-skills\skills\ai-native-engineering` · 方式：**选择性采纳，不整包接入**
 
 > 这份记录回答两个问题：**这套方法里哪些真的用上了、用出什么效果**，以及**哪些明确不用、为什么**。

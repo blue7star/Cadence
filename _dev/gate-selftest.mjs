@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
-const DIR = path.join(ROOT, 'docs', 'contracts');
+const DIR = path.join(ROOT, '.agents', 'archive', 'contracts');
 const VERIFY = path.join(ROOT, '_dev', 'verify.mjs');
 
 function runFast() {

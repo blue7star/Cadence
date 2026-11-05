@@ -12,10 +12,10 @@
 | **需求语义、能力边界、公开契约不变量** | `.agents/SPEC.md` | 实现细节（接口/表结构细节在 DEVELOPMENT.md §4/§5） |
 | **模块职责、公开行为、不变量、依赖边界** | `specs/modules/`（`README.md` 索引 + 各蓝图） | 实现细节 |
 | 现在是什么版本、这版改了什么 | `version.js`（`CHANGELOG.md` 由它生成，勿手改） | 别处硬编码版本号 |
-| 手头有哪些没解决的问题、为什么反复返工 | `issues.md` | 聊天记录 |
+| 手头有哪些没解决的问题、为什么反复返工 | `.agents/issues.md` | 聊天记录 |
 | 产品范围、权限、决策记录 | `docs/product-design.html` | — |
-| G2 复核看哪几条 | `docs/review-checklist.md` | — |
-| 采纳过什么外部方法、实测效果如何 | `docs/adoption-log.md` | — |
+| G2 复核看哪几条 | `.agents/review-checklist.md` | — |
+| 采纳过什么外部方法、实测效果如何 | `.agents/practice/adoption-log.md` | — |
 | 方法层观察与晋升提案 | `.agents/practice/ai-native-engineering.md` | 项目事实 |
 
 改行为就改代码 + 上面**对应那一段**。不要新建第二份说明。
@@ -61,7 +61,7 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
 ```
 
 - 契约用 `.agents/templates/` 三件套（task / delivery / verdict），事件流在 `artifacts/runs/<id>/events.jsonl`（哈希链，只追加，禁手改）。
-- 旧 `docs/contracts/` 的一页三段自 2026-11-04 起**退役**（历史保留），新契约不再用。
+- 旧 `docs/contracts/` 的一页三段自 2026-11-04 起**退役**，已归档到 `.agents/archive/contracts/`（只读留档），新契约不再用。
 - `git commit` 信息带 `Task: <task_id>` trailer；pre-commit 跑 `gate.py --fast --staged` 拦「已 add 的受保护路径缺契约」，CI 跑 `gate.py --ci` 拦「没有证据的合并」。
 - 树摘要仍分三把尺子（代码 / 证据 / 文档），见第 5 节——它管「代码验过没」，gate.py 管「流程走完没」，两者管的是两件事。
 
@@ -84,7 +84,7 @@ git add -A && git commit -m "feat(日历): 一句话"
 
 ## 6. 出问题先归因，再修
 
-`issues.md` 里每条反馈必须标一个 `fail_source`，不标不修：
+`.agents/issues.md` 里每条反馈必须标一个 `fail_source`，不标不修：
 
 判据一句话：**「如果上一层做得完美，这个问题还会漏吗？」**——不会的那一层，就是主因。
 
@@ -104,4 +104,4 @@ git add -A && git commit -m "feat(日历): 一句话"
 
 - **T1 单元测试**（暂时）：`public/app.js` 无模块导出，纯函数抽不出来。先按 `specs/modules/` 拆出纯逻辑层，再补单测——顺序反了只会写出一堆测 DOM 的假单测（issues #12）。
 - **改 `version.js` 为 `VERSION` 文件**：版本弹窗和 CHANGELOG 是产品功能；`gate.py` 的 M4 已支持 `version_authority: version.js`，无需换文件。
-- 其余红线见 `docs/adoption-log.md`。
+- 其余红线见 `.agents/practice/adoption-log.md`。

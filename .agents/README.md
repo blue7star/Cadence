@@ -2,6 +2,20 @@
 
 这一页只讲"怎么跑"。规则在项目根 `AGENTS.md`，判定细节见 skill 的 `GATES.md`。
 
+## 这目录里装什么
+
+| 路径 | 是什么 |
+|---|---|
+| `SPEC.md` | 需求语义、能力边界、公开契约不变量（M4 读它的 `version_authority`） |
+| `issues.md` | 问题台账，每条带 `fail_source` |
+| `review-checklist.md` | G2 复核清单 |
+| `templates/` | 契约三件套模板（task / delivery / verdict） |
+| `gates/` | 契约门禁 `gate.py` |
+| `scripts/` | 账本写入器 `agent_workflow.py` |
+| `schemas/` | 账本与记录的 JSON Schema |
+| `practice/` | 采纳记录、实践台账、skill 反馈 |
+| `archive/` | 退役档案（旧手工契约、一次性计划），只读 |
+
 ## 门禁在哪
 
 - `.agents/gates/gate.py` —— M1–M6 唯一实现，没有第二套逻辑。

@@ -94,8 +94,8 @@ function version() {
    - 一个编号只能挂一份契约，PASS 之后也一样——否则它就从欠债凭证变成通用豁免券。
    机器只能证明「有人写下过一条指向这版代码的复核记录」，证明不了复核真的发生了——那部分仍归人。 */
 function contracts() {
-  const dir = path.join(ROOT, 'docs', 'contracts');
-  if (!fs.existsSync(dir)) return check('契约状态与复核记录', false, '找不到 docs/contracts/');
+  const dir = path.join(ROOT, '.agents', 'archive', 'contracts');
+  if (!fs.existsSync(dir)) return check('契约状态与复核记录', false, '找不到 .agents/archive/contracts/');
   const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
   const live = rep && rep.full && rep.ok ? rep.digest : null;
 
@@ -108,11 +108,11 @@ function contracts() {
   })(dir);
 
   /* 一份契约都没有 = G2 的入口被删掉了。这时候判绿，等于「把门拆了就算通过」。 */
-  if (!files.length) return check('契约状态', false, 'docs/contracts 下一份契约都没有（模板不算）');
+  if (!files.length) return check('契约状态', false, '.agents/archive/contracts 下一份契约都没有（模板不算）');
 
   const V = ['PLANNED', 'IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'];
-  const unresolved = fs.existsSync(path.join(ROOT, 'issues.md'))
-    ? fs.readFileSync(path.join(ROOT, 'issues.md'), 'utf8').split('## 已解决')[0] : '';
+  const unresolved = fs.existsSync(path.join(ROOT, '.agents', 'issues.md'))
+    ? fs.readFileSync(path.join(ROOT, '.agents', 'issues.md'), 'utf8').split('## 已解决')[0] : '';
   const bad = [];
   const debts = {}; /* 欠债编号 → 挂了它的契约名，用来发现「一张豁免券被几份契约共用」 */
   const nos = (t) => [...t.matchAll(/[#＃](\d+)/g)].map((x) => x[1]);
@@ -293,8 +293,8 @@ const DOC_ONLY = /^(docs\/|\.agents\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md
 /* 「证据与规矩」类文件：不改变运行行为，但改变了「能不能信这棵树」。
    它们也排除在代码摘要之外，所以单独算一个 evidenceDigest，让 --hook 也能看见——
    否则改完契约第 3 段、改完 AGENTS.md 的 G 分级，门禁一律认为「这棵树没变过」。 */
-const EVIDENCE = [/^docs\/contracts\//, /^issues\.md$/, /^AGENTS\.md$/, /^docs\/review-checklist\.md$/,
-  /^\.agents\//, /^docs\/modules\.md$/, /^docs\/adoption-log\.md$/];
+/* 2026-11-05 文档归位后，契约/issue/复核/采纳记录全部收进 `.agents/`，一条前缀覆盖。 */
+const EVIDENCE = [/^\.agents\//, /^AGENTS\.md$/];
 
 function treeDigest() {
   const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],

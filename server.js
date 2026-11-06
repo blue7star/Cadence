@@ -1043,10 +1043,12 @@ function seedDemo(meNo) {
     { id: meNo + '_t5', type: 'special', title: '部门制度修订（考核细则）',
       start: d(2), end: d(25), std: '形成修订稿并通过部门会签', status: 'todo', imp: 2, urg: 1,
       stages: [st('s1', '问题清单收集', d(2), d(9)), st('s2', '细则起草', d(10), d(18)), st('s3', '会签与发布', d(19), d(25))] },
+    /* 示例数据也得守「周末不排活」：按「今天 +N 天」硬算，周五生成就会把临时任务放到周六，
+       那天就成了非工作日里唯一的活，看着像自己定的规矩没执行 */
     { id: meNo + '_t6', type: 'temp', title: '回复客户续约邮件',
-      start: d(0), end: d(0), time: '16:00', std: '', status: 'todo', imp: null, urg: 3, stages: [] },
+      start: shiftDay(d(0), 'next'), end: shiftDay(d(0), 'next'), time: '16:00', std: '', status: 'todo', imp: null, urg: 3, stages: [] },
     { id: meNo + '_t7', type: 'temp', title: '采购团建物资',
-      start: d(1), end: d(1), std: '', status: 'todo', imp: null, urg: null, stages: [] }
+      start: shiftDay(d(1), 'next'), end: shiftDay(d(1), 'next'), std: '', status: 'todo', imp: null, urg: null, stages: [] }
   ];
   for (const t of T) {
     /* 有阶段的按阶段边界重定任务的起止，没阶段的（临时任务）保持原样 */

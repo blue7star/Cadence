@@ -1333,10 +1333,17 @@ function calChipHTML(t, step, si, label, maxLen) {
     + (pubName(t) ? ' · ' + pubName(t) + ' 发布' : '');
   const adjusted = step ? false : (t.auto && t.planDate && t.planDate !== t.start);
   const stateText = late ? '逾期' : (CHIP_STATE[stKey] || '');
+  /* 带阶段的任务，正文写的是阶段名，角标里补一句它属于哪件事。
+     没有阶段的任务正文就是任务名，不用再重复一遍。 */
+  const par = (step && step.name) ? t.title : '';
   return `<span class="chip cal ${t.type} s-${stKey}${late ? ' overdue' : ''}${adjusted ? ' adjusted' : ''}"
     draggable="true" data-drag='${JSON.stringify({ id: t.id, s: si })}' data-act="open" data-id="${t.id}" data-st="${stKey}"${late ? ' data-late="1"' : ''}
-    title="${esc(tip)}"><span class="lbl">${esc(maxLen ? cut(label, maxLen) : label)}</span>${stateText ? `<i class="st">${stateText}</i>` : ''}</span>`;
+    title="${esc(tip)}"><span class="lbl">${esc(maxLen ? cut(label, maxLen) : label)}</span>${stateText ? `<i class="st">${stateText}</i>` : ''}${par ? `<span class="par">${esc(cut(par, 16))}</span>` : ''}</span>`;
 }
+/* 一格最多铺这么多条，再多就折成「还有 N 条」——点一下这格，右边当日清单是全的。
+   以前是硬截 4 条且剩余的只写个 +N，常规任务没有优先级、排序天然靠后，
+   第一个被截掉的就是它，于是「同一天有好几件活时，常规那条在日历上不见了」。 */
+const CELL_MAX = 8;
 function cellHTML(c) {
   if (c.blank) return '<div class="cell blank"></div>';
   const d = c.d, items = sortOcc(occOn(d, 'ends'));
@@ -1345,18 +1352,20 @@ function cellHTML(c) {
   if (d === TODAY) cls.push('today');
   if (isHoliday(d)) cls.push('holiday');
   else if (!isWorkday(d)) cls.push('weekend');
-  const chips = items.slice(0, 4).map(o => {
+  const shown = items.slice(0, CELL_MAX);
+  const chips = shown.map(o => {
     const label = o.step && o.step.name ? o.step.name : o.t.title;
     return calChipHTML(o.t, o.step, o.si, label);
   }).join('');
-  return `<div class="${cls.join(' ')}" data-date="${d}">
+  const rest = items.length - shown.length;
+  return `<div class="${cls.join(' ')}" data-date="${d}" data-total="${items.length}">
     <div class="dhead">
       <span class="num ${dow(d) === 0 ? 'sun' : ''}">${parse(d).getDate()}</span>
       ${d === TODAY ? '<span class="todayb">今天</span>' : ''}
       ${isHoliday(d) ? `<span class="hol">休·${HOL[d]}</span>` : isMakeup(d) ? '<span class="mk">补班</span>' : ''}
     </div>
     ${chips}
-    ${items.length > 4 ? `<span class="more">+${items.length - 4}</span>` : ''}
+    ${rest > 0 ? `<button class="more">还有 ${rest} 条，点开这天看</button>` : ''}
   </div>`;
 }
 function viewCalendar() {
@@ -1366,7 +1375,7 @@ function viewCalendar() {
     : `本周 · ${fmt(cells[0].d)} - ${fmt(cells[6].d)}`;
   const dayItems = sortOcc(occOn(selDay, 'all'));
   return `
-  <div class="grid-2">
+  <div class="grid-cal">
     <div class="card">
       <div class="cal-head">
         <span class="m">${head}</span>
@@ -1512,6 +1521,7 @@ function render() {
   $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
   const map = { today: viewToday, assign: viewAssign, routine: viewRoutine, special: viewSpecial, intake: viewIntake, calendar: viewCalendar, settings: viewSettings, task: viewTaskDetail };
   $('#view').innerHTML = (map[view] || viewToday)();
+  $('#view').classList.toggle('wide', view === 'calendar');
   $('#pageTitle').textContent = TITLES[view] || '任务详情';
   $('#pageSub').textContent = view === 'calendar' ? '任务与待办统一在日历上安排' : '';
   const wd = isWorkday(TODAY);

@@ -369,8 +369,10 @@ async function main() {
     if(!hit) return {err:'当月没有带阶段区间的专项'};
     const cell=cells.find(c=>c.dataset.date===hit.st.start);
     cell.click();
+    /* 正文和角标分开取：正文写的是「哪一段」，角标写的是「哪件事」 */
     return {id:hit.t.id, parent:hit.t.title, stage:hit.st.name,
-      chips:[...cell.querySelectorAll('.chip.cal')].map(e=>e.textContent)};
+      chips:[...cell.querySelectorAll('.chip.cal')].map(e=>((e.querySelector('.lbl')||e).textContent)),
+      pars:[...cell.querySelectorAll('.chip.cal .par')].map(e=>e.textContent.replace(/^↳\\s*/,''))};
   })()`);
   await sleep(600);
   const dayRows = await js(`(function(){return [...document.querySelectorAll('#view .tlist .trow')]
@@ -379,10 +381,47 @@ async function main() {
     !stageCal.err && stageCal.chips.some(x => x.includes(stageCal.stage)) &&
     !stageCal.chips.some(x => x.includes(stageCal.parent)),
     JSON.stringify({ stage: stageCal.stage, chips: stageCal.chips, parent: stageCal.parent }));
+  /* 「这段是哪件事里的」不能靠猜：正文放阶段名，大任务名退到下面的小角标里 */
+  check('阶段条目的下方挂小角标，写明所属大任务',
+    !stageCal.err && stageCal.pars.length >= 1 && stageCal.pars.some(p => p.includes(stageCal.parent.slice(0, 6))),
+    JSON.stringify({ pars: stageCal.pars, parent: stageCal.parent }));
   const dayRow = dayRows.find(r => r.txt.includes(stageCal.stage));
   check('右侧当天清单按阶段列，父任务降级成归属标签',
     !!dayRow && dayRow.parent.includes(stageCal.parent),
     JSON.stringify({ row: dayRow && dayRow.txt.slice(0, 90), parent: dayRow && dayRow.parent }));
+
+  /* ---------- 6.0 一天里多条活要全露出来，不能折叠成 +N ---------- */
+  /* 以前一格硬截 4 条，剩下的只写个 +N。常规任务没有优先级，排序天然靠后，
+     于是「同一天活一多，常规那条在日历上不见了」——而 +N 本身也不是个能点开的东西。
+     这里拿 5 条新任务把格子占满，钉住「一条都不许吞」。 */
+  const PACKDAY = '2026-12-18';
+  const packed = await js(`(async()=>{
+    for(let i=1;i<=5;i++){
+      await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({me:'1012',tasks:[{id:'t_e2e_pack_'+i,ownerNo:'1012',assigneeNo:'1012',
+          type:'temp',title:'E2E挤格'+i,start:'${PACKDAY}',end:'${PACKDAY}',status:'todo'}]})});
+    }
+    await refresh(true);
+    calCursor='${PACKDAY}'; selDay='${PACKDAY}'; view='calendar'; render();
+    const cell=document.querySelector('.cell[data-date="${PACKDAY}"]');
+    if(!cell) return {err:'日历里没有这一天'};
+    cell.click();
+    return {total:Number(cell.dataset.total||0),
+      labels:[...cell.querySelectorAll('.chip.cal .lbl')].map(x=>x.textContent),
+      more:(cell.querySelector('.more')||{}).textContent||''};
+  })()`);
+  await sleep(600); await shot('16-packday');
+  const packRows = await js(`[...document.querySelectorAll('#view .tlist .trow')]
+    .map(r=>r.innerText.replace(/\\s+/g,' ').trim()).filter(x=>x.includes('E2E挤格')).length`);
+  check('同一天 5 条活全部铺在格子里，一条都不折叠',
+    !packed.err && packed.total >= 5 && packed.labels.filter(x => x.includes('E2E挤格')).length === 5
+      && packed.more === '',
+    JSON.stringify(packed));
+  check('格子里的条目和右侧当天清单对得上（不会只在格子里少、清单里多）',
+    !packed.err && Number(packRows) === 5, '右侧清单 ' + packRows + ' 条');
+  await js(`(async()=>{ await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({me:'1012',del:{tasks:['t_e2e_pack_1','t_e2e_pack_2','t_e2e_pack_3','t_e2e_pack_4','t_e2e_pack_5']}})});
+    return 'ok'; })()`);
 
   const spDetail = await js(`(function(){openTaskPage('${stageCal.id}');
     return {title:((document.querySelector('#dTitle')||{}).value||''),
@@ -1755,8 +1794,8 @@ async function main() {
   await sleep(400);
   await js(`(function(){
     document.querySelector('#f_title').value='E2E三级：阶段带子任务';
-    /* 日历一格最多显示 4 条，演示数据会把「今天」占满，这条就被折叠成 +N 了——
-       那样这条用例成没成，取决于当天有几条活。固定挑一个演示数据不挤的工作日。 */
+    /* 固定挑一个演示数据不挤的工作日：这条用例要的是「日历上出的是子任务名」，
+       落到人多手杂的那天，断言会被别的条目搅浑。 */
     document.querySelector('#f_start').value='2026-11-24';
     document.querySelector('#f_end').value='2026-11-24';
     const r=document.querySelector('#stageRows .mrow');
@@ -1879,7 +1918,7 @@ async function main() {
 
     await js(`document.querySelector('.td-head [data-act="close"]').click();'ok'`); await sleep(300);
     await nav('calendar'); await sleep(700);
-    const cal = await js(`(function(){const names=[...document.querySelectorAll('.chip.cal')].map(x=>x.innerText);
+    const cal = await js(`(function(){const names=[...document.querySelectorAll('.chip.cal .lbl')].map(x=>x.textContent);
       return {sub:names.filter(t=>t.includes('子任务A')).length, parent:names.filter(t=>t.includes('阶段一')).length};})()`);
     check('日历上出的是子任务名，父阶段不再单独出一条',
       cal.sub >= 1 && cal.parent === 0, JSON.stringify(cal));

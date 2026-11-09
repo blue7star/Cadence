@@ -41,6 +41,8 @@
 | 20 | e2e 直接读写真实 `data/workbench.db`，且按 id 形态 `DELETE` 清残留 | `testcase_gap` | 没有独立测试库，靠「这是测试库」一句注释兜着 | 给 e2e 单独库（`E2E_DB` 环境变量），或所有测试数据统一 `e2e_` 前缀 |
 | 21 | 详情页改承接人的前置拦截只补了代码，e2e 没有覆盖 | `testcase_gap` | 新建、承接两处有断言，第三处改派漏了 | 补一条：详情页换成未登录者 → 下拉回退 + 提示，库里不变 |
 | 46 | 承接台的「有变动的任务」没有批量已读，也没有独立入口 | `requirement_gap` | 决策只要了「变更要在承接台做到位」，没说量大了怎么办；一个人同时负责十几段时，会一条一条点「知道了」 | 先看实际是否会堆积。若会，加「全部知道了」，或把提醒并入每日摘要 |
+| 64 | 每写一次复核证据，归档契约的「复核对象」树摘要就过期一代，`verify --full` 必须先红一次才能重新对齐；一轮复核要多跑一到两次全量 e2e | `machine_gate_miss` | `_dev/verify.mjs` 的 `digest` 只排除 `docs/`、`.agents/` 这类 doc-only 路径，`artifacts/runs/` 下的契约、交付、verdict、events、`candidate-snapshot.bin` 全被算成「代码」。而这些文件恰恰是复核完才写、写完就让摘要变的证据——「报告摘要 = 归档契约锚点」因此必然差一代。2026-11-09 这轮为此多跑了两轮 `--full` | 门禁规则：把 `artifacts/` 归入 evidence（只进 `evidenceDigest`，不进 code digest）；或让 `contracts()` 接受「锚点落后于最近一份同代码报告」。二选一都行，但要在 `.agents/` 里写死口径 |
+| 65 | 删除任务后 `stage_notice` 不清理：e2e 复用固定 id 时旧提醒会挂到新任务上，库里也留着一批指向已删任务的变动记录 | `contract_gap` | 决策只定了「派发后的变更要落在承接台」，没定提醒的生命周期：任务删除、段删除之后，提醒是跟着消失还是留作历史。实现按「写了就不删」处理，`DELETE FROM task` 也没有级联 | 先定口径（建议：任务删除即清该任务的提醒；段删除保留一条 `removed` 说明），写进 `specs/modules/server-api.md` 再改实现 |
 
 ## 已解决
 
@@ -102,8 +104,8 @@
 
 ## 这份表在说什么
 
-63 条（未解决 16、已解决 47）：`requirement_gap` 14、`testcase_gap` 18、
-`review_miss` 6、`machine_gate_miss` 7、`contract_gap` 3、`impl_bug` 15。
+65 条（未解决 18、已解决 47）：`requirement_gap` 14、`testcase_gap` 18、
+`review_miss` 6、`machine_gate_miss` 8、`contract_gap` 4、`impl_bug` 15。
 真正的代码写错 15 条——其中 3 条是**第六轮独立复核**找出来的，自测和门禁全绿的时候它们都在。
 这不是复核运气好，是复核看的输入集不一样：实现者看「我改的地方对不对」，
 复核看「契约说的和代码做的是不是一回事」。

@@ -1259,18 +1259,18 @@ function viewIntake() {
             <div class="spacer"></div><span class="tag red">最早 ${fmt(g.earliest)}</span></div>
           ${g.stages.map(s => `<div class="kv"><span>${esc(s.name || '子任务')} · ${fmt(s.start || s.date)} → ${fmt(s.end || s.date)}</span>
             <b><button class="btn sm ghost" data-act="stage-join" data-id="${g.id}" data-sid="${esc(s.id)}">加入待办</button></b></div>`).join('')}
-          <div class="mini" style="margin-top:6px;line-height:1.5">加入后变成一条临时任务，日期跟着上面走，你改不了期——要调找承接人。</div>
+          <div class="mini" style="margin-top:6px;line-height:1.5">加入后变成一条待办：计划和日期由承接人维护，你这边只勾完成；要调期找承接人。</div>
         </div>`).join('') : '<div class="empty">没有分给你的子任务</div>'}
       </div>
 
       <div class="card">
-        <div class="card-h"><h2>有变动的任务</h2><span class="hint">派发之后改期、换人、删除，都会记在这里</span>
+        <div class="card-h"><h2>有变动的任务</h2><span class="hint">派发之后改期、换人、删除、完成，都会记在这里</span>
           <div class="spacer"></div><span class="pill warn">${groups.length} 条</span></div>
         ${groups.length ? groups.map(g => `<div class="rule-card">
           <div class="card-h" style="margin-bottom:6px"><h2>${esc(g.title)}</h2>
             <div class="spacer"></div><button class="btn sm ghost" data-act="notice-seen" data-tid="${g.taskId}">知道了</button></div>
-          ${g.items.map(n => `<div class="mini" style="padding:3px 0"><span class="tag ${n.kind === 'removed' ? 'red' : n.kind === 'moved' ? 'warn' : ''}">${
-            n.kind === 'removed' ? '已移除' : n.kind === 'moved' ? '改期' : n.kind === 'reassigned' ? '换人' : '新派'}</span> ${esc(n.summary || '')}</div>`).join('')}
+          ${g.items.map(n => `<div class="mini" style="padding:3px 0"><span class="tag ${n.kind === 'removed' ? 'red' : n.kind === 'moved' ? 'warn' : n.kind === 'stage_done' ? 'done' : ''}">${
+            n.kind === 'removed' ? '已移除' : n.kind === 'moved' ? '改期' : n.kind === 'reassigned' ? '换人' : n.kind === 'stage_done' ? '完成' : '新派'}</span> ${esc(n.summary || '')}</div>`).join('')}
         </div>`).join('') : '<div class="empty">没有变动</div>'}
       </div>
     </div>
@@ -1601,6 +1601,9 @@ function taskDetailHTML(t) {
   /* 编辑权只看 owner。发布人把活交出去之后是只读，只剩总截止能动；
      子任务责任人更窄：只能勾自己那一段。 */
   const canEdit = t.ownerNo === S.me.no;
+  /* 「加入待办」出来的那条是承接人某一段的派生副本：完成之外都归承接人。 */
+  const isMirror = !!(t.stageRef && t.stageRef.taskId);
+  const canPlan = canEdit && !isMirror;
   const pub = t.publisherNo || t.ownerNo;
   const imPublisher = pub === S.me.no;
   const stages = t.stages || [];
@@ -1622,12 +1625,13 @@ function taskDetailHTML(t) {
   const head = `<div class="td-head">
       <button class="btn sm ghost" data-act="close">← 返回</button>
       <div style="flex:1;min-width:0">
-        <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
-          class="td-title${canEdit ? '' : ' ro'}"/>
+        <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canPlan ? '' : 'readonly'}
+          class="td-title${canPlan ? '' : ' ro'}"/>
         <div class="split" style="margin-top:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
           ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} 承接</span>` : ''}
           ${imPublisher && t.ownerNo !== S.me.no ? '<span class="tag">你发布</span>' : ''}
           ${canEdit ? '' : (mySubs.length ? '<span class="tag">你负责其中一段</span>' : '<span class="tag">只读</span>')}
+          ${isMirror ? `<span class="tag">${esc(nameOf(t.ownerNo))} 派给你的一段</span>` : ''}
         </div>
       </div>
     </div>
@@ -1654,11 +1658,13 @@ function taskDetailHTML(t) {
       </div>`
     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
         <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
-        ${canEdit ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
+        ${canPlan ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
           <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之前，对方那边什么都看不到。
           <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}">派发</button></div>` : ''}
-        ${stages.length ? stageTreeHTML(t, canEdit) : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
-        ${canEdit ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
+        ${stages.length ? stageTreeHTML(t, canPlan) : (isMirror
+          ? '<div class="mini">这段的计划由承接人维护，你只需要做完后勾完成。</div>'
+          : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>')}
+        ${canPlan ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
           <div class="sec-title" style="margin:0 0 7px">再加一段 <span class="mini">名称写清这一段交付什么</span></div>
           <input id="sName" placeholder="例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
           <div class="row">
@@ -1676,8 +1682,7 @@ function taskDetailHTML(t) {
     : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
        <div class="mini" style="margin-top:5px;line-height:1.5">整件事要交给别人，去「发布任务」新建一条；只想把其中一段分给同事，在左边的阶段里拆子任务、选上谁做就行。</div>`;
 
-  const infoCard = canEdit
-    ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
+  const infoCard = canPlan ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
         <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
         <div class="field"><label>起止时间</label><div class="row">
           <input type="date" value="${t.start}" data-field="start"/>
@@ -1694,7 +1699,17 @@ function taskDetailHTML(t) {
           <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
         </div></div>`}
       </div>`
-    : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
+    : isMirror
+      ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">计划由承接人维护</span></div>
+        <div class="field"><label>完成情况</label><select data-field="status">${stOpts}</select></div>
+        <div class="kv"><span>谁派的</span><b>${esc(nameOf(t.ownerNo))}</b></div>
+        <div class="kv"><span>计划起止</span><b>${fmt(t.start)}${t.time ? ' ' + t.time : ''} → ${fmt(t.end)}</b></div>
+        <div class="kv"><span>达成标准</span><b style="font-weight:500;text-align:right">${esc(t.std || '未填写')}</b></div>
+        <div class="kv"><span>分类</span><b>${catName(t.cat1, t.cat2)}</b></div>
+        <div class="kv"><span>优先级</span><b>${prioLabel(t) || '未设置'}</b></div>
+        <div class="mini" style="margin-top:8px;line-height:1.5">标题和日期归承接人，要调期找他；你勾完成，他那边会同步看到。</div>
+      </div>`
+      : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
         <div class="kv"><span>状态</span><b>${ST[t.status] ? ST[t.status].name : '—'}</b></div>
         <div class="kv"><span>承接人</span><b>${esc(nameOf(t.assigneeNo))}</b></div>
         <div class="kv"><span>发布人</span><b>${esc(nameOf(pub))}</b></div>
@@ -1714,9 +1729,10 @@ function taskDetailHTML(t) {
   const roWhy = mySubs.length
     ? `你负责其中 ${mySubs.length} 段，只能勾自己那段的完成；计划由 ${esc(nameOf(t.ownerNo))} 排`
     : (imPublisher ? '这条已经交出去了，你只能看进度；要改总截止点「改」' : '你没有这条任务的编辑权');
+  const mirrorWhy = isMirror ? `这段由 ${esc(nameOf(t.ownerNo))} 派给你：计划归他维护，你只勾完成` : '';
   const foot = `<div class="td-foot">
-      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? '' : ' · ' + roWhy}</div>
-      ${!isRoutine && canEdit ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
+      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? (mirrorWhy ? ' · ' + mirrorWhy : '') : ' · ' + roWhy}</div>
+      ${!isRoutine && canPlan ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
     </div>`;
 
   /* ---- 知情人：专项任务才有。看得到进展，改不了任何东西 ---- */
@@ -1806,7 +1822,7 @@ function refreshDispatchNote(t) {
 function stageTreeHTML(t, canEdit) {
   const stages = t.stages || [];
   const tops = stages.filter(s => !s.pid);
-  const myTick = s => canEdit || (s.who === S.me.no && s.whoAt);
+  const myTick = s => s.who ? (s.who === S.me.no && s.whoAt) : canEdit;
   const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
     title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
   let n = 0;
@@ -1829,7 +1845,7 @@ function stageTreeHTML(t, canEdit) {
       const ki = stages.indexOf(k);
       const tick = myTick(k);
       return `<div class="stage sub ${k.done ? 'on' : ''}">
-        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : 'title="这段由别人负责"'} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
+        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责'}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
         <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
         ${canEdit ? `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>` : `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`}
         ${canEdit ? whoSel(k, ki) : ''}

@@ -531,6 +531,97 @@ function applyStageOwners(stages, prev, assigneeNo, meNo) {
   });
 }
 
+/* 已派给别人的叶子，完成态只归责任人：上级整理自己那条任务时，整段 stages 里
+   带回来的旧 done/doneBy/doneAt 一律以库为准。新加的段、换了人的段一律从
+   「未完成」开始——客户端不能顺手带一个 done 把别人那段点亮。 */
+function keepForeignDone(stages, prev, meNo) {
+  const prevById = {};
+  for (const s of prev) if (s && s.id) prevById[s.id] = s;
+  for (const s of stages) {
+    if (!s || !s.pid || !s.who || s.who === meNo) continue;
+    const p = s.id ? prevById[s.id] : null;
+    if (p && p.who === s.who) {
+      s.done = !!p.done;
+      s.doneBy = p.doneBy || null;
+      s.doneAt = p.doneAt || null;
+    } else {
+      s.done = false;
+      s.doneBy = null;
+      s.doneAt = null;
+    }
+  }
+}
+
+/* 换人或移除之后，旧责任人「加入待办」出来的那份副本要收走：
+   留着就是一条他永远勾不动、也永远不知道已经失效的待办。
+   副本在界面上没有删除入口（只留完成情况），服务端不收就没人能收。 */
+function dropStaleMirrors(taskId, prev, stages) {
+  const prevById = {};
+  for (const s of prev) if (s && s.id) prevById[s.id] = s;
+  const nextIds = new Set(stages.filter(s => s && s.id).map(s => s.id));
+  const drop = sid => db.prepare('DELETE FROM task WHERE stage_ref LIKE ?')
+    .run(`%"taskId":"${taskId}","stageId":"${sid}"%`);
+  for (const s of stages) {
+    const p = s && s.id ? prevById[s.id] : null;
+    if (p && p.who && s.who !== p.who) drop(s.id);
+  }
+  /* 段被移除：副本反指的那一段已经不存在，留着也勾不动 */
+  for (const p of prev) {
+    if (p && p.pid && p.id && !nextIds.has(p.id)) drop(p.id);
+  }
+}
+
+/* 叶子完成态 → 父任务状态。勾选和上行回写共用同一口径，避免两处算出两个结论。
+   有子任务时状态跟着叶子走：全部完成才算完成，一段没勾就不许挂「已完成」。
+   「暂缓」是执行人自己的节奏，「进行中」同理——只把不该成立的状态掰回来，
+   不替人把「已开始但还没勾完」改回「未开始」。 */
+function stageStatusFromLeaves(stages, prevStatus) {
+  const leaves = stages.filter(x => x && x.pid);
+  if (!leaves.length) return prevStatus;
+  if (leaves.every(x => x.done)) return 'done';
+  if (prevStatus === 'paused') return 'paused';
+  if (leaves.some(x => x.done)) return 'doing';
+  return prevStatus === 'done' ? 'todo' : (prevStatus || 'todo');
+}
+
+/* 完成/撤销完成落到承接台的「有变动的任务」——不弹窗，攒在那一栏里看。
+   自己勾自己负责的整条任务时不提醒自己。 */
+function notifyStageDone(parent, s, on, byNo) {
+  if (parent.owner_no === byNo) return;
+  const emp = getEmp(byNo);
+  const nm = emp ? emp.name : byNo;
+  db.prepare(`INSERT INTO stage_notice(task_id,stage_id,emp_no,kind,summary,at)
+              VALUES(?,?,?,?,?,?)`).run(parent.id, s.id, parent.owner_no, 'stage_done',
+    on ? `${nm}完成了「${s.name || '子任务'}」` : `${nm}取消了「${s.name || '子任务'}」的完成标记`, nowStr());
+}
+
+/* 派生副本完成 → 回写父任务那一段，并把父任务状态推一遍。
+   方向只允许「责任人自己那侧 → 上级」：这是唯一的上行通道。 */
+function pullStageFromMirror(taskId) {
+  const mirror = db.prepare('SELECT * FROM task WHERE id=?').get(taskId);
+  if (!mirror || !mirror.stage_ref) return null;
+  let ref; try { ref = JSON.parse(mirror.stage_ref); } catch (e) { return null; }
+  if (!ref || !ref.taskId || !ref.stageId) return null;
+  const parent = db.prepare('SELECT * FROM task WHERE id=?').get(ref.taskId);
+  if (!parent) return null;
+  const stages = parseStages(parent.stages);
+  const s = stages.find(x => x && x.id === ref.stageId && x.pid);
+  if (!s) return null;
+  /* 副本必须真的属于这一段的责任人，且这一段已经派发：换人之后旧副本不许再写回，
+     伪造出来的副本也点不动别人的段。 */
+  if (!s.who || s.who !== mirror.owner_no || !s.whoAt) return null;
+  const on = mirror.status === 'done';
+  if (!!s.done === on) return null;
+  s.done = on;
+  s.doneBy = on ? mirror.owner_no : null;
+  s.doneAt = on ? todayStr() : null;
+  const status = stageStatusFromLeaves(stages, parent.status);
+  db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
+    .run(JSON.stringify(stages), status, nowStr(), parent.id);
+  notifyStageDone(parent, s, on, mirror.owner_no);
+  return parent.id;
+}
+
 /* 派发之后的变更要落到责任人的承接台（决策⑨：不设第二次按钮，靠这条通道兜住）。
    只对「已派发」的段写：没派发的段，改了也没人知道过，提醒反而制造噪音。 */
 function notifyStageChanges(taskId, prev, next) {
@@ -651,11 +742,23 @@ function upsertTask(meNo, t, opts) {
       if (!emp.activated) return { ok: false, msg: `${emp.name} 还没有登录过工作台，子任务派过去他收不到。` };
     }
   }
+  /* 别人的完成态不许被整段写入带回旧值（上级只改标题也会把 stages 一起提交）。 */
+  keepForeignDone(stages, prevStages, meNo);
+  /* 新任务不能一出生就带着别人的完成态。 */
+  if (!exist && (!opts || !opts.demo)) {
+    for (const s of stages) {
+      if (!s.pid) continue;
+      s.done = false; s.doneBy = null; s.doneAt = null;
+    }
+  }
+  dropStaleMirrors(t.id, prevStages, stages);
+  let status = t.status || 'todo';
+  if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stages, status);
 
   if (exist) {
     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
                 imp=?,urg=?,stages=?,detached=?,assignee_no=?,intake_status=?,type=?,due_date=?,updated_at=? WHERE id=?`)
-      .run(t.title, t.std || '', t.start, t.end, t.time || '', t.status || 'todo',
+      .run(t.title, t.std || '', t.start, t.end, t.time || '', status,
         t.cat1 || null, t.cat2 || null,
         t.imp == null || t.imp === '' ? null : Number(t.imp),
         t.urg == null || t.urg === '' ? null : Number(t.urg),
@@ -674,18 +777,20 @@ function upsertTask(meNo, t, opts) {
        routine_id,plan_date,source_id,stage_ref,detached,intake_status,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       t.id, meNo, meNo, assigneeNo, type, t.title, t.std || '',
-      t.start, t.end, dueDate, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
+      t.start, t.end, dueDate, t.time || '', status, t.cat1 || null, t.cat2 || null,
       t.imp == null || t.imp === '' ? null : Number(t.imp),
       t.urg == null || t.urg === '' ? null : Number(t.urg),
       JSON.stringify(stages), t.routineId || null, t.planDate || null,
-      t.sourceId || null, t.stageRef ? JSON.stringify(t.stageRef) : null,
+      /* 派生副本只能由 /api/stage/join 建（服务端写 stage_ref）；客户端提交的
+         stageRef 一律丢弃，否则任何人都能伪造一份副本去点亮别人的段。 */
+      t.sourceId || null, null,
       t.detached ? 1 : 0, intake, now, now
     );
   }
 
-  /* 责任人「加入待办」出来的临时任务是镜像：父任务那边勾了，它也得跟着变，
-     否则两边看同一件事结论不同。权威源永远是 stages[i].done。 */
-  mirrorStageDone(t.id, stages);
+  /* 责任人自己的派生副本变了，往上汇总到父任务那一段——只走这一个方向。
+     上级侧的改动不再往下写副本（那会变成双向循环，谁最后写谁说了算）。 */
+  pullStageFromMirror(t.id);
 
   /* 知情人：只有任务 owner 能定。整体替换——payload 里带了 observers 就以它为准，
      不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。
@@ -796,16 +901,15 @@ function applySync(meNo, body) {
    「谁的行谁提交」，所以各有一个人少的专用接口。四个动作都只做一件事，
    权限判定写在函数第一行——绕过界面直接打接口也拦得住。 */
 
-/** 临时任务镜像父任务的某一段：勾哪边都同步，权威源是 stages[i].done */
-function mirrorStageDone(taskId, stages) {
-  const rows = db.prepare('SELECT id,stage_ref FROM task WHERE stage_ref LIKE ?').all(`%"taskId":"${taskId}"%`);
-  for (const r of rows) {
-    let ref; try { ref = JSON.parse(r.stage_ref); } catch (e) { continue; }
-    const s = stages.find(x => x && x.id === ref.stageId);
-    if (!s) continue;
-    const st = s.done ? 'done' : 'todo';
-    db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=? AND status<>?').run(st, nowStr(), r.id, st);
-  }
+/** 责任人自己在父任务里勾了那一段时，把他名下的派生副本对齐到同一个结论。
+    只在「勾的人就是这一段的责任人」时调用；上级侧不碰副本。 */
+function syncMirrorStatus(taskId, stageId, done) {
+  const ref = `%"taskId":"${taskId}","stageId":"${stageId}"%`;
+  const mir = db.prepare('SELECT id,status FROM task WHERE stage_ref LIKE ?').get(ref);
+  if (!mir) return;
+  const st = done ? 'done' : 'todo';
+  if (mir.status === st) return;
+  db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?').run(st, nowStr(), mir.id);
 }
 
 /* 接收：所有权转移。不派发、不通知、不生成副本——这是它和「派发」的分界线。 */
@@ -882,7 +986,8 @@ function joinStage(meNo, id, stageId) {
   return { ok: true, id: tid, existed: false };
 }
 
-/* 勾选：承接人勾任何一段，责任人也只能勾自己那段。两边都落到同一处。 */
+/* 勾选：只认这一段的责任人。承接人只维护计划（拆段、派发、改期、换人），
+   别人负责的那段他勾不动——完成状态必须由干活的人往上汇总。 */
 function toggleStage(meNo, id, stageId, done) {
   const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
   if (!r) return { ok: false, msg: '这条任务已经不在你手上了' };
@@ -890,8 +995,12 @@ function toggleStage(meNo, id, stageId, done) {
   const s = stages.find(x => x && x.id === stageId && x.pid);
   if (!s) return { ok: false, msg: '这一段已经从任务里移除了' };
   const isOwner = r.owner_no === meNo;
-  const isWho = s.who === meNo && s.whoAt;
-  if (!isOwner && !isWho) return { ok: false, msg: '这一段不归你勾' };
+  if (s.who) {
+    if (s.who !== meNo) return { ok: false, msg: '这一段由别人负责，只有他能勾完成' };
+    if (!s.whoAt) return { ok: false, msg: '这一段还没派发，派发后由你勾完成' };
+  } else if (!isOwner) {
+    return { ok: false, msg: '这一段不归你勾' };
+  }
 
   const on = done === undefined ? !s.done : !!done;
   /* 父阶段没有独立的勾选态：它的完成由子任务推出来，这里只动叶子。 */
@@ -899,13 +1008,14 @@ function toggleStage(meNo, id, stageId, done) {
   s.doneBy = on ? meNo : null;
   s.doneAt = on ? todayStr() : null;
   /* 状态跟着叶子走，别让「3/3 已完成」还挂在「进行中」上 */
-  const leaves = stages.filter(x => x && x.pid);
-  const allDone = leaves.length > 0 && leaves.every(x => x.done);
-  const anyDone = leaves.some(x => x.done);
-  const status = allDone ? 'done' : (anyDone && r.status === 'todo' ? 'doing' : (anyDone ? r.status : 'todo'));
+  const status = stageStatusFromLeaves(stages, r.status);
   db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
     .run(JSON.stringify(stages), status, nowStr(), id);
-  mirrorStageDone(id, stages);
+  /* 他自己在父任务里勾的，副本那份也对齐；不做反向下写。 */
+  if (s.who === meNo) {
+    syncMirrorStatus(id, stageId, on);
+    notifyStageDone(r, s, on, meNo);
+  }
   bumpRev();
   return { ok: true, done: on };
 }

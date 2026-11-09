@@ -1,0 +1,24 @@
+﻿create { ok: true, rows: 1, errors: [], rev: 8141 }
+dispatch { ok: true, n: 1, rev: 8142 }
+[1003 可见] true | 子任务 who: 1003 | whoAt: true
+join {
+  ok: true,
+  id: 'st_repro_1794195528521_c1',
+  existed: false,
+  rev: 8143
+}
+[临时任务] {
+  id: 'st_repro_1794195528521_c1',
+  ownerNo: '1003',
+  type: 'temp',
+  status: 'todo',
+  start: '2026-11-10',
+  end: '2026-11-12',
+  stageRef: { taskId: 'repro_1794195528521', stageId: 'c1' }
+}
+1003 勾完成临时任务 { ok: true, rows: 1, errors: [], rev: 8144 }
+[上级视角-下属勾完临时任务后] 任务status= todo | 子任务done= undefined
+[1003 视角] 临时任务status= done
+上级勾子任务 { ok: true, done: true, rev: 8145 }
+[上级勾完后] 子任务done= true | 任务status= done | 1003 临时任务status= done
+留档 id=repro_1794195528521

@@ -1820,6 +1820,143 @@ async function main() {
     await push('1012', { del: { tasks: [UIW] } });
   }
 
+  /* ---------- 9.11 子任务完成：责任人维护、向上汇总（v0.8.5 修复项） ----------
+     方向反了的旧行为：上级勾子任务 → 下属副本被动变完成；下属勾自己那份 → 上级毫无变化。
+     现在只允许「责任人自己那侧 → 上级」，上级对别人那段只读，旧快照也冲不掉。
+     每一步都断言到具体字段，不是「页面没报错」。 */
+  {
+    const T = 't_e2e_upstream';
+    const SUB = '1003', OTHER = '1004';
+    const d = n => addDaysStr('2026-11-10', n);
+    const login = async no => {
+      await js(`localStorage.setItem('pm_mvp_me','${no}');'ok'`);
+      await goto(BASE); await sleep(1400);
+      if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
+        await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(800);
+      }
+    };
+    const plan = [
+      { id: 'p1', pid: null, name: '阶段一', start: d(0), end: d(6), done: false },
+      { id: 'c1', pid: 'p1', name: '子任务A', who: SUB, start: d(0), end: d(2), done: false },
+      { id: 'c2', pid: 'p1', name: '子任务B', start: d(3), end: d(6), done: false }
+    ];
+    await push('1012', { del: { tasks: [T] } });
+    await push('1003', { del: { tasks: ['st_' + T + '_c1'] } });
+    await pushJ('1012', { tasks: [{ id: T, type: 'special', title: 'E2E子任务上行',
+      ownerNo: '1012', assigneeNo: '1012', start: d(0), end: d(6), dueDate: d(6), status: 'todo', stages: plan }] });
+    await act('/api/task/dispatch', { me: '1012', id: T });
+    /* 先把上级的旧提醒读掉：上一轮残留的 stage_done 不能替这一轮的正向断言交差。 */
+    await act('/api/notice/seen', { me: '1012' });
+
+    /* 上级侧：别人负责的那段没有勾选框，自己那段还在 */
+    await login('1012');
+    await js(`openTaskPage('${T}');'ok'`); await sleep(700);
+    const supRow = await js(`(function(){
+      const rows=[...document.querySelectorAll('#view .stage.sub')];
+      const a=rows.find(r=>r.textContent.includes('子任务A'));
+      const b=rows.find(r=>r.textContent.includes('子任务B'));
+      return {aTick:!!(a&&a.querySelector('[data-act="stage-toggle"]')),
+        bTick:!!(b&&b.querySelector('[data-act="stage-toggle"]'))};})()`);
+    check('上级详情页：别人负责的子任务没有勾选框，自己那段还能勾',
+      supRow.aTick === false && supRow.bTick === true, JSON.stringify(supRow));
+
+    const supTry = await act('/api/stage/toggle', { me: '1012', id: T, stageId: 'c1', done: true });
+    check('上级绕过界面直接勾别人那段 → 被拒', supTry.ok === false, JSON.stringify(supTry));
+
+    /* 责任人侧：加入待办 → 副本只读计划字段 */
+    await login(SUB);
+    const jr = await act('/api/stage/join', { me: SUB, id: T, stageId: 'c1' });
+    const tempId = jr.id || ('st_' + T + '_c1');
+    check('责任人「加入待办」：拿到反指父任务那一段的副本', jr.ok === true && jr.id === tempId, JSON.stringify(jr));
+
+    await goto(BASE); await sleep(1500); /* 接口建出来的副本要重新拉一次状态才在 S.tasks 里 */
+    await js(`openTaskPage('${tempId}');'ok'`); await sleep(800);
+    const mirrorUi = await js(`(function(){
+      const ti=document.querySelector('#dTitle');
+      return {titleRO:!!ti&&ti.readOnly===true,
+        hasStart:!!document.querySelector('[data-field="start"]'),
+        del:!!document.querySelector('[data-act="task-del"]'),
+        statusSel:!!document.querySelector('[data-field="status"]')};})()`);
+    check('副本只留「完成情况」：标题/起止只读、没有删除按钮，状态下拉还在',
+      mirrorUi.titleRO === true && mirrorUi.hasStart === false && mirrorUi.del === false
+        && mirrorUi.statusSel === true, JSON.stringify(mirrorUi));
+
+    /* 正向：责任人在自己那侧把状态改成已完成 */
+    await js(`(function(){
+      const sel=document.querySelector('#view [data-field="status"]');
+      sel.value='done'; sel.dispatchEvent(new Event('change',{bubbles:true})); return 'ok';})()`);
+    await sleep(1400);
+    const supAfter = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${T}');
+      const s=(t.stages||[]).find(x=>x.id==='c1');
+      return {done:!!s.done, by:s.doneBy, status:t.status,
+        doneNotice:(j.notices||[]).filter(n=>n.taskId==='${T}'&&n.kind==='stage_done').length};})()`);
+    check('责任人勾完成 → 上级那一段变完成、任务转进行中、承接台收到完成提醒',
+      supAfter.done === true && supAfter.by === SUB && supAfter.status === 'doing'
+        && supAfter.doneNotice === 1, JSON.stringify(supAfter));
+
+    await login('1012');
+    await js(`openTaskPage('${T}');'ok'`); await sleep(700);
+    const supKpi = await js(`(function(){
+      const k=[...document.querySelectorAll('#view .td-kpis > div')].map(x=>x.innerText.replace(/\\s+/g,' '));
+      return {txt:k.join(' | ')};})()`);
+    check('上级详情页的完成计数跟着变（1 / 2，不再停在 0 / 2）',
+      supKpi.txt.includes('1 / 2'), supKpi.txt.slice(0, 160));
+
+    /* 提醒落在承接台「有变动的任务」：标签是「完成」，不是只有 API 里的 kind */
+    await nav('intake'); await sleep(700);
+    const noticeUi = await js(`(function(){
+      const c=[...document.querySelectorAll('#view .card')].find(x=>x.textContent.includes('有变动的任务'));
+      return {n:c?c.querySelectorAll('.rule-card').length:0,
+        tags:c?[...c.querySelectorAll('.tag')].map(x=>x.textContent.trim()):[],
+        txt:(c?c.innerText:'').replace(/\\s+/g,' ').slice(0, 200)};})()`);
+    check('承接台「有变动的任务」：下属完成后上级看到「完成」标签',
+      noticeUi.n >= 1 && noticeUi.tags.includes('完成') && noticeUi.txt.includes('子任务A'),
+      JSON.stringify(noticeUi).slice(0, 220));
+
+    /* 反向：旧快照整段提交（标题和日期改了，stages 还是完成前的） */
+    const stale = JSON.parse(JSON.stringify(plan));
+    await push('1012', { tasks: [{ id: T, title: 'E2E子任务上行（改标题）', end: d(7),
+      ownerNo: '1012', assigneeNo: '1012', start: d(0), status: 'done', stages: stale }] });
+    const afterStale = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${T}');
+      const s=(t.stages||[]).find(x=>x.id==='c1');
+      const m=await (await fetch('/api/state?me=${SUB}')).json();
+      const mt=(m.tasks||[]).find(x=>x.id==='${tempId}');
+      return {title:t.title, end:t.end, done:!!s.done, status:t.status, mirrorStatus:mt&&mt.status};})()`);
+    check('上级用旧快照改标题：标题落库，但下属的完成态没被冲掉',
+      afterStale.title === 'E2E子任务上行（改标题）' && afterStale.done === true,
+      JSON.stringify(afterStale));
+    check('上级改计划字段（结束日）：计划真的落了库，完成态仍归责任人',
+      afterStale.end === d(7) && afterStale.done === true, JSON.stringify(afterStale));
+    check('旧快照里有别人未完成的段，任务也不会被写成「已完成」',
+      afterStale.status === 'doing', 'status=' + afterStale.status);
+    check('上级改计划不反向下写副本：下属那条仍是已完成',
+      afterStale.mirrorStatus === 'done', 'mirror=' + afterStale.mirrorStatus);
+
+    const otherTry = await act('/api/stage/toggle', { me: OTHER, id: T, stageId: 'c1', done: false });
+    check('非责任人（第三个人）勾这段 → 被拒', otherTry.ok === false, JSON.stringify(otherTry));
+
+    /* 段被移除：副本反指的那一段不存在了，服务端收走它——
+       副本界面没有删除入口，不收就是一条永远勾不动的待办。 */
+    await push('1012', { tasks: [{ id: T, ownerNo: '1012', assigneeNo: '1012', start: d(0), end: d(7),
+      status: 'doing', stages: [
+        { id: 'p1', pid: null, name: '阶段一', start: d(0), end: d(7), done: false },
+        { id: 'c2', pid: 'p1', name: '子任务B', start: d(3), end: d(6), done: false }
+      ] }] });
+    const afterRemove = await js(`(async()=>{const m=await (await fetch('/api/state?me=${SUB}')).json();
+      return {mirror:(m.tasks||[]).some(x=>x.id==='${tempId}')};})()`);
+    check('父任务移除这一段：责任人那条副本被服务端收走，不留孤儿待办',
+      afterRemove.mirror === false, JSON.stringify(afterRemove));
+
+    /* 清理：副本归 1003，父任务归 1012，各自删各自的；顺手把本轮产生的提醒标已读，
+       否则下一轮开头的「承接角标」会多算一组「有变动的任务」。 */
+    await push('1003', { del: { tasks: [tempId] } });
+    await push('1012', { del: { tasks: [T] } });
+    await act('/api/notice/seen', { me: SUB });
+    await act('/api/notice/seen', { me: '1012' });
+  }
+
   /* 登录即激活——「派活能不能送到」全靠这一行。
      基线用直连 sqlite 把 activated 钉死，等于把这条实现替换成了测试自己的断言；
      所以必须单独验一次：登录真的会写标记，且登录后派活不再被拦。 */
@@ -1998,16 +2135,24 @@ async function main() {
     check('拖有子任务的阶段，子任务跟着平移同样的天数',
       moved.ps === '2026-11-10' && moved.ks === '2026-11-10', JSON.stringify(moved));
 
-    /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动 */
-    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(500);
-    await js(`document.querySelector('#view .stage.sub .n[data-act="stage-toggle"]').click();'ok'`);
-    await sleep(900);
+    /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动。
+       这段派给了 1002（未派发），按口径只能他勾——先派发，再以他的身份勾。 */
+    await act('/api/task/dispatch', { me: '1012', id: tree.id });
+    const subStageId = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=j.tasks.find(x=>x.id==='${tree.id}'); const k=t.stages.find(s=>s.pid);
+      return k?k.id:'';})()`);
+    await act('/api/stage/toggle', { me: '1002', id: tree.id, stageId: subStageId, done: true });
+    await goto(BASE); await sleep(1200); /* 接口勾的，页面得重新拉一次状态 */
+    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(700);
     const prog = await js(`(function(){const b=document.querySelectorAll('#view .td-kpis b');
       return {prog:b[0]?b[0].innerText:'',cnt:b[1]?b[1].innerText:''}})()`);
     check('勾完唯一的子任务 → 进度 100%，父阶段不重复计数',
       prog.prog === '100%' && prog.cnt === '1 / 1', JSON.stringify(prog));
 
     await push('1012', { del: { tasks: [tree.id] } });
+    /* 派发提醒给 1002，完成提醒给承接人 1012——两边都要读掉，别留给下一轮角标 */
+    await act('/api/notice/seen', { me: '1002' });
+    await act('/api/notice/seen', { me: '1012' });
   }
 
   const tempForm = await js(`(function(){openNewTask('temp');

@@ -20,3 +20,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Python 字节码（跑 gate.py 会生成，不是源码）
+__pycache__/
+*.pyc

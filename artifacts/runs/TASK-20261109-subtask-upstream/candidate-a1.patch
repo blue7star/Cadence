@@ -1,0 +1,716 @@
+diff --git "a/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md" "b/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
+index d48cdfd..568c53f 100644
+--- "a/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
++++ "b/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
+@@ -115,7 +115,7 @@ bump **Y**（0.4.13 → 0.5.0）：任务结构多一层，使用者能感知，
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` 走 A/B/C/D；只读代码与 e2e 断言，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `75156878f618a1e2`（v0.8.4，`verify --full` 7 项全绿，e2e 150 项 0 失败；本次改动只动日历点击行为与日历用例，未触及本契约描述的行为）
++- 复核对象：树摘要 `a6030feb9974a28f`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的三级节点行为）
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B3、B5、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS），追认范围有边界——1.2 节「父阶段日期 = 子任务并集」不追认。
+ - 追认边界：
+diff --git "a/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md" "b/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
+index a091c5c..f371967 100644
+--- "a/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
++++ "b/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
+@@ -142,7 +142,7 @@
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` A→B→C→D 过一遍；只读代码、跑 e2e、看界面截图，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `75156878f618a1e2`（v0.8.4，`verify --full` 7 项全绿，e2e 150 项 0 失败；本次改动只动日历点击行为与日历用例，未触及本契约描述的行为）
++- 复核对象：树摘要 `a6030feb9974a28f`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的下派自由选择与知情人行为）
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B1、B3、B7、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS）
+ - 逐项：
+diff --git "a/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md" "b/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
+index 243b8ba..33a0e39 100644
+--- "a/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
++++ "b/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
+@@ -308,7 +308,7 @@ bump **Y**（0.6.2 → 0.7.0）：任务多一个发布人字段、所有权可
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` A→B→C→D 过一遍；只读代码、跑 e2e、看界面截图，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `75156878f618a1e2`（v0.8.4，`verify --full` 7 项全绿，e2e 150 项 0 失败；本次改动只动日历点击行为与日历用例，未触及本契约描述的行为）
++- 复核对象：树摘要 `a6030feb9974a28f`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败）。**其中的「承接人可代勾任何一段」已被 TASK-20261109-subtask-upstream 取代**：完成只由该段责任人勾、向上汇总；派发、加入待办、知情人、发布任务等其余条款复核结论仍成立，新口径以 `specs/modules/server-api.md` / `app-ui.md` 为准
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B1、B3、B5、B7、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS）
+ - 四条重点（`issues.md` #45 点名的）：
+diff --git a/.agents/issues.md b/.agents/issues.md
+index 807f6f5..50f4215 100644
+--- a/.agents/issues.md
++++ b/.agents/issues.md
+@@ -98,10 +98,11 @@
+ | 60 | 示例数据把「采购团建物资」排到了周六，非工作日日历上唯一一条活就是它 | `impl_bug` | `/api/demo` 里临时任务用「今天 +N 天」硬算，没走 `shiftDay`；周五生成时「明天」就是周六。阶段那批早就在 0.8.2 吸附到工作日了，没阶段的临时任务漏了这一条——示例数据又一次违反自己定的「周末不排活」 | 0.8.3（`_t6` / `_t7` 的起止都过 `shiftDay(d(n), 'next')`；`DEVELOPMENT.md` 5.3 把这个坑写进规矩） |
+ | 61 | 从日历上点一条活，直接把人推进整页详情——用户想的多半是改状态，结果被赶离日历 | `requirement_gap` | 交互上把「看一眼这条是什么」当成唯一意图：格子里点一下就 `openTaskPage`。测试也照着这个写，没人体会过「点完想改状态，还得退回来再找那天」这条路径。本质是实现者只对了自己的思路，没有对着「用户在这一屏要干什么」走一遍 | 0.8.4（`data-act` 从 `open` 改 `cal-focus`：换 `selDay`、把右侧清单滚到那一条并高亮 2.2 秒，状态就地改；详情留给那一行的「详情」按钮。e2e 新增 3 条从界面出发：不弹详情、右侧切到那天且高亮、那一行有状态下拉和详情入口） |
+ | 62 | 「非工作日不铺活」的用例靠数据巧合才能成立：拿「今天之后第一个周末」，那天未必被任何长时间区间盖住 | `testcase_gap` | 断言里 `coveredSpecial && coveredRoutine` 被当成先验事实，日期一律取 `cells.find(!isWorkday && >=TODAY)`。11-06 跑时那个周末正好在「月度薪酬 10/28→11/13」里，11-09 再跑就落在断档上，用例变成「这天本来就没活」，红了也说明不了问题 | 0.8.4（改成向后扫 90 天，专项阶段盖住的周末、常规跨月区间盖住的周末各找一个，拆成两条断言；找不到数据就明确失败，不再静默通过） |
++| 63 | 子任务派给下属后完成状态方向反了：上级勾会把下属副本改成完成，下属勾自己那份上级毫无变化；上级拿旧快照改标题又会把下属的完成冲掉 | `requirement_gap` | 决策只定义了「加入待办生成副本」，从没定义完成状态的权威方向与回流路径；实现只好单向镜像父阶段 → 副本，方向自然反了。#13 的后写覆盖又让整段 stages 写入能回退别人的完成 | 0.8.5（完成态只由责任人维护并上行汇总；判权收紧到责任人；非责任人整段写入不覆盖他人完成；补 e2e 正向 + 三条反向） |
+ 
+ ## 这份表在说什么
+ 
+-62 条（未解决 16、已解决 46）：`requirement_gap` 13、`testcase_gap` 18、
++63 条（未解决 16、已解决 47）：`requirement_gap` 14、`testcase_gap` 18、
+ `review_miss` 6、`machine_gate_miss` 7、`contract_gap` 3、`impl_bug` 15。
+ 真正的代码写错 15 条——其中 3 条是**第六轮独立复核**找出来的，自测和门禁全绿的时候它们都在。
+ 这不是复核运气好，是复核看的输入集不一样：实现者看「我改的地方对不对」，
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5d898e1..65dac8e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,26 @@
+ > 面向使用者的说明，按版本倒序。版本规则：新功能成批上线升 Y，修复与优化升 Z，不兼容的大改升 X。
+ > 更新提示的运行时数据同样来自 `version.js`，此处只是同一份内容的人读版本，不存在第二份真相。
+ 
++## v0.8.5 · 2026-11-09
++
++**子任务由干活的人勾完成，进度直接汇总到上级那边**
++
++### 问题修复
++
++- 把某一段派给下属后，他在自己待办里勾完成，上级的专项详情里那一段跟着变完成，进度和整条任务的状态一起更新——以前只有上级勾才会传到下属那份，方向是反的
++- 上级拿几分钟前的页面改个标题、顺手把整份阶段一起提交，会把下属刚勾的完成悄悄冲掉，还可能出现「子任务 0 / 2、整条却显示已完成」。现在别人负责那一段的完成态不会被这种整段写入覆盖
++- 专项任务的状态现在只看子任务：还有一段没勾，就不会显示「已完成」
++
++### 口径变更
++
++- 别人负责的那一段，上级只读：改期、换人、改总截止这些计划动作照旧，完成必须由责任人自己勾，避免上面替下面报完成
++- 派来的活「加入待办」之后只维护完成情况：标题、日期这些计划字段归派活的人，要调期找他
++
++### 体验增强
++
++- 下属勾完成或撤销，上级在承接台「有变动的任务」里看到一条「完成」，不弹窗、不打断手上的事
++- 子任务还没派发时谁都不能勾：先派发，责任人那边看得到之后，完成才有意义
++
+ ## v0.8.4 · 2026-11-09
+ 
+ **点日历上的一条活，先去右边那一天找到它，不再直接翻详情**
+@@ -545,4 +565,4 @@
+ 
+ ---
+ 
+-当前版本：**v0.8.4**（完整串见顶栏或 `node version.js`）
++当前版本：**v0.8.5**（完整串见顶栏或 `node version.js`）
+diff --git a/_dev/e2e.mjs b/_dev/e2e.mjs
+index 1ce4ad5..d5165ed 100644
+--- a/_dev/e2e.mjs
++++ b/_dev/e2e.mjs
+@@ -1820,6 +1820,143 @@ async function main() {
+     await push('1012', { del: { tasks: [UIW] } });
+   }
+ 
++  /* ---------- 9.11 子任务完成：责任人维护、向上汇总（v0.8.5 修复项） ----------
++     方向反了的旧行为：上级勾子任务 → 下属副本被动变完成；下属勾自己那份 → 上级毫无变化。
++     现在只允许「责任人自己那侧 → 上级」，上级对别人那段只读，旧快照也冲不掉。
++     每一步都断言到具体字段，不是「页面没报错」。 */
++  {
++    const T = 't_e2e_upstream';
++    const SUB = '1003', OTHER = '1004';
++    const d = n => addDaysStr('2026-11-10', n);
++    const login = async no => {
++      await js(`localStorage.setItem('pm_mvp_me','${no}');'ok'`);
++      await goto(BASE); await sleep(1400);
++      if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
++        await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(800);
++      }
++    };
++    const plan = [
++      { id: 'p1', pid: null, name: '阶段一', start: d(0), end: d(6), done: false },
++      { id: 'c1', pid: 'p1', name: '子任务A', who: SUB, start: d(0), end: d(2), done: false },
++      { id: 'c2', pid: 'p1', name: '子任务B', start: d(3), end: d(6), done: false }
++    ];
++    await push('1012', { del: { tasks: [T] } });
++    await push('1003', { del: { tasks: ['st_' + T + '_c1'] } });
++    await pushJ('1012', { tasks: [{ id: T, type: 'special', title: 'E2E子任务上行',
++      ownerNo: '1012', assigneeNo: '1012', start: d(0), end: d(6), dueDate: d(6), status: 'todo', stages: plan }] });
++    await act('/api/task/dispatch', { me: '1012', id: T });
++    /* 先把上级的旧提醒读掉：上一轮残留的 stage_done 不能替这一轮的正向断言交差。 */
++    await act('/api/notice/seen', { me: '1012' });
++
++    /* 上级侧：别人负责的那段没有勾选框，自己那段还在 */
++    await login('1012');
++    await js(`openTaskPage('${T}');'ok'`); await sleep(700);
++    const supRow = await js(`(function(){
++      const rows=[...document.querySelectorAll('#view .stage.sub')];
++      const a=rows.find(r=>r.textContent.includes('子任务A'));
++      const b=rows.find(r=>r.textContent.includes('子任务B'));
++      return {aTick:!!(a&&a.querySelector('[data-act="stage-toggle"]')),
++        bTick:!!(b&&b.querySelector('[data-act="stage-toggle"]'))};})()`);
++    check('上级详情页：别人负责的子任务没有勾选框，自己那段还能勾',
++      supRow.aTick === false && supRow.bTick === true, JSON.stringify(supRow));
++
++    const supTry = await act('/api/stage/toggle', { me: '1012', id: T, stageId: 'c1', done: true });
++    check('上级绕过界面直接勾别人那段 → 被拒', supTry.ok === false, JSON.stringify(supTry));
++
++    /* 责任人侧：加入待办 → 副本只读计划字段 */
++    await login(SUB);
++    const jr = await act('/api/stage/join', { me: SUB, id: T, stageId: 'c1' });
++    const tempId = jr.id || ('st_' + T + '_c1');
++    check('责任人「加入待办」：拿到反指父任务那一段的副本', jr.ok === true && jr.id === tempId, JSON.stringify(jr));
++
++    await goto(BASE); await sleep(1500); /* 接口建出来的副本要重新拉一次状态才在 S.tasks 里 */
++    await js(`openTaskPage('${tempId}');'ok'`); await sleep(800);
++    const mirrorUi = await js(`(function(){
++      const ti=document.querySelector('#dTitle');
++      return {titleRO:!!ti&&ti.readOnly===true,
++        hasStart:!!document.querySelector('[data-field="start"]'),
++        del:!!document.querySelector('[data-act="task-del"]'),
++        statusSel:!!document.querySelector('[data-field="status"]')};})()`);
++    check('副本只留「完成情况」：标题/起止只读、没有删除按钮，状态下拉还在',
++      mirrorUi.titleRO === true && mirrorUi.hasStart === false && mirrorUi.del === false
++        && mirrorUi.statusSel === true, JSON.stringify(mirrorUi));
++
++    /* 正向：责任人在自己那侧把状态改成已完成 */
++    await js(`(function(){
++      const sel=document.querySelector('#view [data-field="status"]');
++      sel.value='done'; sel.dispatchEvent(new Event('change',{bubbles:true})); return 'ok';})()`);
++    await sleep(1400);
++    const supAfter = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
++      const t=(j.tasks||[]).find(x=>x.id==='${T}');
++      const s=(t.stages||[]).find(x=>x.id==='c1');
++      return {done:!!s.done, by:s.doneBy, status:t.status,
++        doneNotice:(j.notices||[]).filter(n=>n.taskId==='${T}'&&n.kind==='stage_done').length};})()`);
++    check('责任人勾完成 → 上级那一段变完成、任务转进行中、承接台收到完成提醒',
++      supAfter.done === true && supAfter.by === SUB && supAfter.status === 'doing'
++        && supAfter.doneNotice === 1, JSON.stringify(supAfter));
++
++    await login('1012');
++    await js(`openTaskPage('${T}');'ok'`); await sleep(700);
++    const supKpi = await js(`(function(){
++      const k=[...document.querySelectorAll('#view .td-kpis > div')].map(x=>x.innerText.replace(/\\s+/g,' '));
++      return {txt:k.join(' | ')};})()`);
++    check('上级详情页的完成计数跟着变（1 / 2，不再停在 0 / 2）',
++      supKpi.txt.includes('1 / 2'), supKpi.txt.slice(0, 160));
++
++    /* 提醒落在承接台「有变动的任务」：标签是「完成」，不是只有 API 里的 kind */
++    await nav('intake'); await sleep(700);
++    const noticeUi = await js(`(function(){
++      const c=[...document.querySelectorAll('#view .card')].find(x=>x.textContent.includes('有变动的任务'));
++      return {n:c?c.querySelectorAll('.rule-card').length:0,
++        tags:c?[...c.querySelectorAll('.tag')].map(x=>x.textContent.trim()):[],
++        txt:(c?c.innerText:'').replace(/\\s+/g,' ').slice(0, 200)};})()`);
++    check('承接台「有变动的任务」：下属完成后上级看到「完成」标签',
++      noticeUi.n >= 1 && noticeUi.tags.includes('完成') && noticeUi.txt.includes('子任务A'),
++      JSON.stringify(noticeUi).slice(0, 220));
++
++    /* 反向：旧快照整段提交（标题和日期改了，stages 还是完成前的） */
++    const stale = JSON.parse(JSON.stringify(plan));
++    await push('1012', { tasks: [{ id: T, title: 'E2E子任务上行（改标题）', end: d(7),
++      ownerNo: '1012', assigneeNo: '1012', start: d(0), status: 'done', stages: stale }] });
++    const afterStale = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
++      const t=(j.tasks||[]).find(x=>x.id==='${T}');
++      const s=(t.stages||[]).find(x=>x.id==='c1');
++      const m=await (await fetch('/api/state?me=${SUB}')).json();
++      const mt=(m.tasks||[]).find(x=>x.id==='${tempId}');
++      return {title:t.title, end:t.end, done:!!s.done, status:t.status, mirrorStatus:mt&&mt.status};})()`);
++    check('上级用旧快照改标题：标题落库，但下属的完成态没被冲掉',
++      afterStale.title === 'E2E子任务上行（改标题）' && afterStale.done === true,
++      JSON.stringify(afterStale));
++    check('上级改计划字段（结束日）：计划真的落了库，完成态仍归责任人',
++      afterStale.end === d(7) && afterStale.done === true, JSON.stringify(afterStale));
++    check('旧快照里有别人未完成的段，任务也不会被写成「已完成」',
++      afterStale.status === 'doing', 'status=' + afterStale.status);
++    check('上级改计划不反向下写副本：下属那条仍是已完成',
++      afterStale.mirrorStatus === 'done', 'mirror=' + afterStale.mirrorStatus);
++
++    const otherTry = await act('/api/stage/toggle', { me: OTHER, id: T, stageId: 'c1', done: false });
++    check('非责任人（第三个人）勾这段 → 被拒', otherTry.ok === false, JSON.stringify(otherTry));
++
++    /* 段被移除：副本反指的那一段不存在了，服务端收走它——
++       副本界面没有删除入口，不收就是一条永远勾不动的待办。 */
++    await push('1012', { tasks: [{ id: T, ownerNo: '1012', assigneeNo: '1012', start: d(0), end: d(7),
++      status: 'doing', stages: [
++        { id: 'p1', pid: null, name: '阶段一', start: d(0), end: d(7), done: false },
++        { id: 'c2', pid: 'p1', name: '子任务B', start: d(3), end: d(6), done: false }
++      ] }] });
++    const afterRemove = await js(`(async()=>{const m=await (await fetch('/api/state?me=${SUB}')).json();
++      return {mirror:(m.tasks||[]).some(x=>x.id==='${tempId}')};})()`);
++    check('父任务移除这一段：责任人那条副本被服务端收走，不留孤儿待办',
++      afterRemove.mirror === false, JSON.stringify(afterRemove));
++
++    /* 清理：副本归 1003，父任务归 1012，各自删各自的；顺手把本轮产生的提醒标已读，
++       否则下一轮开头的「承接角标」会多算一组「有变动的任务」。 */
++    await push('1003', { del: { tasks: [tempId] } });
++    await push('1012', { del: { tasks: [T] } });
++    await act('/api/notice/seen', { me: SUB });
++    await act('/api/notice/seen', { me: '1012' });
++  }
++
+   /* 登录即激活——「派活能不能送到」全靠这一行。
+      基线用直连 sqlite 把 activated 钉死，等于把这条实现替换成了测试自己的断言；
+      所以必须单独验一次：登录真的会写标记，且登录后派活不再被拦。 */
+@@ -1998,16 +2135,24 @@ async function main() {
+     check('拖有子任务的阶段，子任务跟着平移同样的天数',
+       moved.ps === '2026-11-10' && moved.ks === '2026-11-10', JSON.stringify(moved));
+ 
+-    /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动 */
+-    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(500);
+-    await js(`document.querySelector('#view .stage.sub .n[data-act="stage-toggle"]').click();'ok'`);
+-    await sleep(900);
++    /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动。
++       这段派给了 1002（未派发），按口径只能他勾——先派发，再以他的身份勾。 */
++    await act('/api/task/dispatch', { me: '1012', id: tree.id });
++    const subStageId = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
++      const t=j.tasks.find(x=>x.id==='${tree.id}'); const k=t.stages.find(s=>s.pid);
++      return k?k.id:'';})()`);
++    await act('/api/stage/toggle', { me: '1002', id: tree.id, stageId: subStageId, done: true });
++    await goto(BASE); await sleep(1200); /* 接口勾的，页面得重新拉一次状态 */
++    await js(`openTaskPage('${tree.id}');'ok'`); await sleep(700);
+     const prog = await js(`(function(){const b=document.querySelectorAll('#view .td-kpis b');
+       return {prog:b[0]?b[0].innerText:'',cnt:b[1]?b[1].innerText:''}})()`);
+     check('勾完唯一的子任务 → 进度 100%，父阶段不重复计数',
+       prog.prog === '100%' && prog.cnt === '1 / 1', JSON.stringify(prog));
+ 
+     await push('1012', { del: { tasks: [tree.id] } });
++    /* 派发提醒给 1002，完成提醒给承接人 1012——两边都要读掉，别留给下一轮角标 */
++    await act('/api/notice/seen', { me: '1002' });
++    await act('/api/notice/seen', { me: '1012' });
+   }
+ 
+   const tempForm = await js(`(function(){openNewTask('temp');
+diff --git a/public/app.js b/public/app.js
+index 84ff1bc..df54fd4 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -1259,18 +1259,18 @@ function viewIntake() {
+             <div class="spacer"></div><span class="tag red">最早 ${fmt(g.earliest)}</span></div>
+           ${g.stages.map(s => `<div class="kv"><span>${esc(s.name || '子任务')} · ${fmt(s.start || s.date)} → ${fmt(s.end || s.date)}</span>
+             <b><button class="btn sm ghost" data-act="stage-join" data-id="${g.id}" data-sid="${esc(s.id)}">加入待办</button></b></div>`).join('')}
+-          <div class="mini" style="margin-top:6px;line-height:1.5">加入后变成一条临时任务，日期跟着上面走，你改不了期——要调找承接人。</div>
++          <div class="mini" style="margin-top:6px;line-height:1.5">加入后变成一条待办：计划和日期由承接人维护，你这边只勾完成；要调期找承接人。</div>
+         </div>`).join('') : '<div class="empty">没有分给你的子任务</div>'}
+       </div>
+ 
+       <div class="card">
+-        <div class="card-h"><h2>有变动的任务</h2><span class="hint">派发之后改期、换人、删除，都会记在这里</span>
++        <div class="card-h"><h2>有变动的任务</h2><span class="hint">派发之后改期、换人、删除、完成，都会记在这里</span>
+           <div class="spacer"></div><span class="pill warn">${groups.length} 条</span></div>
+         ${groups.length ? groups.map(g => `<div class="rule-card">
+           <div class="card-h" style="margin-bottom:6px"><h2>${esc(g.title)}</h2>
+             <div class="spacer"></div><button class="btn sm ghost" data-act="notice-seen" data-tid="${g.taskId}">知道了</button></div>
+-          ${g.items.map(n => `<div class="mini" style="padding:3px 0"><span class="tag ${n.kind === 'removed' ? 'red' : n.kind === 'moved' ? 'warn' : ''}">${
+-            n.kind === 'removed' ? '已移除' : n.kind === 'moved' ? '改期' : n.kind === 'reassigned' ? '换人' : '新派'}</span> ${esc(n.summary || '')}</div>`).join('')}
++          ${g.items.map(n => `<div class="mini" style="padding:3px 0"><span class="tag ${n.kind === 'removed' ? 'red' : n.kind === 'moved' ? 'warn' : n.kind === 'stage_done' ? 'done' : ''}">${
++            n.kind === 'removed' ? '已移除' : n.kind === 'moved' ? '改期' : n.kind === 'reassigned' ? '换人' : n.kind === 'stage_done' ? '完成' : '新派'}</span> ${esc(n.summary || '')}</div>`).join('')}
+         </div>`).join('') : '<div class="empty">没有变动</div>'}
+       </div>
+     </div>
+@@ -1601,6 +1601,9 @@ function taskDetailHTML(t) {
+   /* 编辑权只看 owner。发布人把活交出去之后是只读，只剩总截止能动；
+      子任务责任人更窄：只能勾自己那一段。 */
+   const canEdit = t.ownerNo === S.me.no;
++  /* 「加入待办」出来的那条是承接人某一段的派生副本：完成之外都归承接人。 */
++  const isMirror = !!(t.stageRef && t.stageRef.taskId);
++  const canPlan = canEdit && !isMirror;
+   const pub = t.publisherNo || t.ownerNo;
+   const imPublisher = pub === S.me.no;
+   const stages = t.stages || [];
+@@ -1622,12 +1625,13 @@ function taskDetailHTML(t) {
+   const head = `<div class="td-head">
+       <button class="btn sm ghost" data-act="close">← 返回</button>
+       <div style="flex:1;min-width:0">
+-        <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canEdit ? '' : 'readonly'}
+-          class="td-title${canEdit ? '' : ' ro'}"/>
++        <input id="dTitle" value="${esc(t.title)}" data-field="title" ${canPlan ? '' : 'readonly'}
++          class="td-title${canPlan ? '' : ' ro'}"/>
+         <div class="split" style="margin-top:6px">${typeChip(t)}${stTag(t.status)}${prioBadge(t)}${overdue(t) ? '<span class="tag red">已逾期</span>' : ''}
+           ${t.ownerNo !== S.me.no ? `<span class="tag">${esc(nameOf(t.ownerNo))} 承接</span>` : ''}
+           ${imPublisher && t.ownerNo !== S.me.no ? '<span class="tag">你发布</span>' : ''}
+           ${canEdit ? '' : (mySubs.length ? '<span class="tag">你负责其中一段</span>' : '<span class="tag">只读</span>')}
++          ${isMirror ? `<span class="tag">${esc(nameOf(t.ownerNo))} 派给你的一段</span>` : ''}
+         </div>
+       </div>
+     </div>
+@@ -1654,11 +1658,13 @@ function taskDetailHTML(t) {
+       </div>`
+     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
+         <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
+-        ${canEdit ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
++        ${canPlan ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
+           <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之前，对方那边什么都看不到。
+           <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}">派发</button></div>` : ''}
+-        ${stages.length ? stageTreeHTML(t, canEdit) : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>'}
+-        ${canEdit ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
++        ${stages.length ? stageTreeHTML(t, canPlan) : (isMirror
++          ? '<div class="mini">这段的计划由承接人维护，你只需要做完后勾完成。</div>'
++          : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>')}
++        ${canPlan ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
+           <div class="sec-title" style="margin:0 0 7px">再加一段 <span class="mini">名称写清这一段交付什么</span></div>
+           <input id="sName" placeholder="例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
+           <div class="row">
+@@ -1676,8 +1682,7 @@ function taskDetailHTML(t) {
+     : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
+        <div class="mini" style="margin-top:5px;line-height:1.5">整件事要交给别人，去「发布任务」新建一条；只想把其中一段分给同事，在左边的阶段里拆子任务、选上谁做就行。</div>`;
+ 
+-  const infoCard = canEdit
+-    ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
++  const infoCard = canPlan ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
+         <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
+         <div class="field"><label>起止时间</label><div class="row">
+           <input type="date" value="${t.start}" data-field="start"/>
+@@ -1694,7 +1699,17 @@ function taskDetailHTML(t) {
+           <select data-field="urg">${lvOpts(t.urg).replace('未设置', '紧急度：未设置')}</select>
+         </div></div>`}
+       </div>`
+-    : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
++    : isMirror
++      ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">计划由承接人维护</span></div>
++        <div class="field"><label>完成情况</label><select data-field="status">${stOpts}</select></div>
++        <div class="kv"><span>谁派的</span><b>${esc(nameOf(t.ownerNo))}</b></div>
++        <div class="kv"><span>计划起止</span><b>${fmt(t.start)}${t.time ? ' ' + t.time : ''} → ${fmt(t.end)}</b></div>
++        <div class="kv"><span>达成标准</span><b style="font-weight:500;text-align:right">${esc(t.std || '未填写')}</b></div>
++        <div class="kv"><span>分类</span><b>${catName(t.cat1, t.cat2)}</b></div>
++        <div class="kv"><span>优先级</span><b>${prioLabel(t) || '未设置'}</b></div>
++        <div class="mini" style="margin-top:8px;line-height:1.5">标题和日期归承接人，要调期找他；你勾完成，他那边会同步看到。</div>
++      </div>`
++      : `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">只读</span></div>
+         <div class="kv"><span>状态</span><b>${ST[t.status] ? ST[t.status].name : '—'}</b></div>
+         <div class="kv"><span>承接人</span><b>${esc(nameOf(t.assigneeNo))}</b></div>
+         <div class="kv"><span>发布人</span><b>${esc(nameOf(pub))}</b></div>
+@@ -1714,9 +1729,10 @@ function taskDetailHTML(t) {
+   const roWhy = mySubs.length
+     ? `你负责其中 ${mySubs.length} 段，只能勾自己那段的完成；计划由 ${esc(nameOf(t.ownerNo))} 排`
+     : (imPublisher ? '这条已经交出去了，你只能看进度；要改总截止点「改」' : '你没有这条任务的编辑权');
++  const mirrorWhy = isMirror ? `这段由 ${esc(nameOf(t.ownerNo))} 派给你：计划归他维护，你只勾完成` : '';
+   const foot = `<div class="td-foot">
+-      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? '' : ' · ' + roWhy}</div>
+-      ${!isRoutine && canEdit ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
++      <div class="mini" style="line-height:1.6">${srcLine ? srcLine + '<br/>' : ''}分类 ${catName(t.cat1, t.cat2)} · 进度 ${prog}%${canEdit ? (mirrorWhy ? ' · ' + mirrorWhy : '') : ' · ' + roWhy}</div>
++      ${!isRoutine && canPlan ? `<button class="btn danger" data-act="task-del" data-id="${t.id}">删除这条任务</button>` : ''}
+     </div>`;
+ 
+   /* ---- 知情人：专项任务才有。看得到进展，改不了任何东西 ---- */
+@@ -1806,7 +1822,7 @@ function refreshDispatchNote(t) {
+ function stageTreeHTML(t, canEdit) {
+   const stages = t.stages || [];
+   const tops = stages.filter(s => !s.pid);
+-  const myTick = s => canEdit || (s.who === S.me.no && s.whoAt);
++  const myTick = s => s.who ? (s.who === S.me.no && s.whoAt) : canEdit;
+   const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
+     title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
+   let n = 0;
+@@ -1829,7 +1845,7 @@ function stageTreeHTML(t, canEdit) {
+       const ki = stages.indexOf(k);
+       const tick = myTick(k);
+       return `<div class="stage sub ${k.done ? 'on' : ''}">
+-        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : 'title="这段由别人负责"'} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
++        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责'}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
+         <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
+         ${canEdit ? `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>` : `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`}
+         ${canEdit ? whoSel(k, ki) : ''}
+diff --git a/server.js b/server.js
+index fef770b..8313ddf 100644
+--- a/server.js
++++ b/server.js
+@@ -531,6 +531,97 @@ function applyStageOwners(stages, prev, assigneeNo, meNo) {
+   });
+ }
+ 
++/* 已派给别人的叶子，完成态只归责任人：上级整理自己那条任务时，整段 stages 里
++   带回来的旧 done/doneBy/doneAt 一律以库为准。新加的段、换了人的段一律从
++   「未完成」开始——客户端不能顺手带一个 done 把别人那段点亮。 */
++function keepForeignDone(stages, prev, meNo) {
++  const prevById = {};
++  for (const s of prev) if (s && s.id) prevById[s.id] = s;
++  for (const s of stages) {
++    if (!s || !s.pid || !s.who || s.who === meNo) continue;
++    const p = s.id ? prevById[s.id] : null;
++    if (p && p.who === s.who) {
++      s.done = !!p.done;
++      s.doneBy = p.doneBy || null;
++      s.doneAt = p.doneAt || null;
++    } else {
++      s.done = false;
++      s.doneBy = null;
++      s.doneAt = null;
++    }
++  }
++}
++
++/* 换人或移除之后，旧责任人「加入待办」出来的那份副本要收走：
++   留着就是一条他永远勾不动、也永远不知道已经失效的待办。
++   副本在界面上没有删除入口（只留完成情况），服务端不收就没人能收。 */
++function dropStaleMirrors(taskId, prev, stages) {
++  const prevById = {};
++  for (const s of prev) if (s && s.id) prevById[s.id] = s;
++  const nextIds = new Set(stages.filter(s => s && s.id).map(s => s.id));
++  const drop = sid => db.prepare('DELETE FROM task WHERE stage_ref LIKE ?')
++    .run(`%"taskId":"${taskId}","stageId":"${sid}"%`);
++  for (const s of stages) {
++    const p = s && s.id ? prevById[s.id] : null;
++    if (p && p.who && s.who !== p.who) drop(s.id);
++  }
++  /* 段被移除：副本反指的那一段已经不存在，留着也勾不动 */
++  for (const p of prev) {
++    if (p && p.pid && p.id && !nextIds.has(p.id)) drop(p.id);
++  }
++}
++
++/* 叶子完成态 → 父任务状态。勾选和上行回写共用同一口径，避免两处算出两个结论。
++   有子任务时状态跟着叶子走：全部完成才算完成，一段没勾就不许挂「已完成」。
++   「暂缓」是执行人自己的节奏，「进行中」同理——只把不该成立的状态掰回来，
++   不替人把「已开始但还没勾完」改回「未开始」。 */
++function stageStatusFromLeaves(stages, prevStatus) {
++  const leaves = stages.filter(x => x && x.pid);
++  if (!leaves.length) return prevStatus;
++  if (leaves.every(x => x.done)) return 'done';
++  if (prevStatus === 'paused') return 'paused';
++  if (leaves.some(x => x.done)) return 'doing';
++  return prevStatus === 'done' ? 'todo' : (prevStatus || 'todo');
++}
++
++/* 完成/撤销完成落到承接台的「有变动的任务」——不弹窗，攒在那一栏里看。
++   自己勾自己负责的整条任务时不提醒自己。 */
++function notifyStageDone(parent, s, on, byNo) {
++  if (parent.owner_no === byNo) return;
++  const emp = getEmp(byNo);
++  const nm = emp ? emp.name : byNo;
++  db.prepare(`INSERT INTO stage_notice(task_id,stage_id,emp_no,kind,summary,at)
++              VALUES(?,?,?,?,?,?)`).run(parent.id, s.id, parent.owner_no, 'stage_done',
++    on ? `${nm}完成了「${s.name || '子任务'}」` : `${nm}取消了「${s.name || '子任务'}」的完成标记`, nowStr());
++}
++
++/* 派生副本完成 → 回写父任务那一段，并把父任务状态推一遍。
++   方向只允许「责任人自己那侧 → 上级」：这是唯一的上行通道。 */
++function pullStageFromMirror(taskId) {
++  const mirror = db.prepare('SELECT * FROM task WHERE id=?').get(taskId);
++  if (!mirror || !mirror.stage_ref) return null;
++  let ref; try { ref = JSON.parse(mirror.stage_ref); } catch (e) { return null; }
++  if (!ref || !ref.taskId || !ref.stageId) return null;
++  const parent = db.prepare('SELECT * FROM task WHERE id=?').get(ref.taskId);
++  if (!parent) return null;
++  const stages = parseStages(parent.stages);
++  const s = stages.find(x => x && x.id === ref.stageId && x.pid);
++  if (!s) return null;
++  /* 副本必须真的属于这一段的责任人，且这一段已经派发：换人之后旧副本不许再写回，
++     伪造出来的副本也点不动别人的段。 */
++  if (!s.who || s.who !== mirror.owner_no || !s.whoAt) return null;
++  const on = mirror.status === 'done';
++  if (!!s.done === on) return null;
++  s.done = on;
++  s.doneBy = on ? mirror.owner_no : null;
++  s.doneAt = on ? todayStr() : null;
++  const status = stageStatusFromLeaves(stages, parent.status);
++  db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
++    .run(JSON.stringify(stages), status, nowStr(), parent.id);
++  notifyStageDone(parent, s, on, mirror.owner_no);
++  return parent.id;
++}
++
+ /* 派发之后的变更要落到责任人的承接台（决策⑨：不设第二次按钮，靠这条通道兜住）。
+    只对「已派发」的段写：没派发的段，改了也没人知道过，提醒反而制造噪音。 */
+ function notifyStageChanges(taskId, prev, next) {
+@@ -651,11 +742,23 @@ function upsertTask(meNo, t, opts) {
+       if (!emp.activated) return { ok: false, msg: `${emp.name} 还没有登录过工作台，子任务派过去他收不到。` };
+     }
+   }
++  /* 别人的完成态不许被整段写入带回旧值（上级只改标题也会把 stages 一起提交）。 */
++  keepForeignDone(stages, prevStages, meNo);
++  /* 新任务不能一出生就带着别人的完成态。 */
++  if (!exist && (!opts || !opts.demo)) {
++    for (const s of stages) {
++      if (!s.pid) continue;
++      s.done = false; s.doneBy = null; s.doneAt = null;
++    }
++  }
++  dropStaleMirrors(t.id, prevStages, stages);
++  let status = t.status || 'todo';
++  if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stages, status);
+ 
+   if (exist) {
+     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
+                 imp=?,urg=?,stages=?,detached=?,assignee_no=?,intake_status=?,type=?,due_date=?,updated_at=? WHERE id=?`)
+-      .run(t.title, t.std || '', t.start, t.end, t.time || '', t.status || 'todo',
++      .run(t.title, t.std || '', t.start, t.end, t.time || '', status,
+         t.cat1 || null, t.cat2 || null,
+         t.imp == null || t.imp === '' ? null : Number(t.imp),
+         t.urg == null || t.urg === '' ? null : Number(t.urg),
+@@ -674,18 +777,20 @@ function upsertTask(meNo, t, opts) {
+        routine_id,plan_date,source_id,stage_ref,detached,intake_status,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+       t.id, meNo, meNo, assigneeNo, type, t.title, t.std || '',
+-      t.start, t.end, dueDate, t.time || '', t.status || 'todo', t.cat1 || null, t.cat2 || null,
++      t.start, t.end, dueDate, t.time || '', status, t.cat1 || null, t.cat2 || null,
+       t.imp == null || t.imp === '' ? null : Number(t.imp),
+       t.urg == null || t.urg === '' ? null : Number(t.urg),
+       JSON.stringify(stages), t.routineId || null, t.planDate || null,
+-      t.sourceId || null, t.stageRef ? JSON.stringify(t.stageRef) : null,
++      /* 派生副本只能由 /api/stage/join 建（服务端写 stage_ref）；客户端提交的
++         stageRef 一律丢弃，否则任何人都能伪造一份副本去点亮别人的段。 */
++      t.sourceId || null, null,
+       t.detached ? 1 : 0, intake, now, now
+     );
+   }
+ 
+-  /* 责任人「加入待办」出来的临时任务是镜像：父任务那边勾了，它也得跟着变，
+-     否则两边看同一件事结论不同。权威源永远是 stages[i].done。 */
+-  mirrorStageDone(t.id, stages);
++  /* 责任人自己的派生副本变了，往上汇总到父任务那一段——只走这一个方向。
++     上级侧的改动不再往下写副本（那会变成双向循环，谁最后写谁说了算）。 */
++  pullStageFromMirror(t.id);
+ 
+   /* 知情人：只有任务 owner 能定。整体替换——payload 里带了 observers 就以它为准，
+      不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。
+@@ -796,16 +901,15 @@ function applySync(meNo, body) {
+    「谁的行谁提交」，所以各有一个人少的专用接口。四个动作都只做一件事，
+    权限判定写在函数第一行——绕过界面直接打接口也拦得住。 */
+ 
+-/** 临时任务镜像父任务的某一段：勾哪边都同步，权威源是 stages[i].done */
+-function mirrorStageDone(taskId, stages) {
+-  const rows = db.prepare('SELECT id,stage_ref FROM task WHERE stage_ref LIKE ?').all(`%"taskId":"${taskId}"%`);
+-  for (const r of rows) {
+-    let ref; try { ref = JSON.parse(r.stage_ref); } catch (e) { continue; }
+-    const s = stages.find(x => x && x.id === ref.stageId);
+-    if (!s) continue;
+-    const st = s.done ? 'done' : 'todo';
+-    db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=? AND status<>?').run(st, nowStr(), r.id, st);
+-  }
++/** 责任人自己在父任务里勾了那一段时，把他名下的派生副本对齐到同一个结论。
++    只在「勾的人就是这一段的责任人」时调用；上级侧不碰副本。 */
++function syncMirrorStatus(taskId, stageId, done) {
++  const ref = `%"taskId":"${taskId}","stageId":"${stageId}"%`;
++  const mir = db.prepare('SELECT id,status FROM task WHERE stage_ref LIKE ?').get(ref);
++  if (!mir) return;
++  const st = done ? 'done' : 'todo';
++  if (mir.status === st) return;
++  db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?').run(st, nowStr(), mir.id);
+ }
+ 
+ /* 接收：所有权转移。不派发、不通知、不生成副本——这是它和「派发」的分界线。 */
+@@ -882,7 +986,8 @@ function joinStage(meNo, id, stageId) {
+   return { ok: true, id: tid, existed: false };
+ }
+ 
+-/* 勾选：承接人勾任何一段，责任人也只能勾自己那段。两边都落到同一处。 */
++/* 勾选：只认这一段的责任人。承接人只维护计划（拆段、派发、改期、换人），
++   别人负责的那段他勾不动——完成状态必须由干活的人往上汇总。 */
+ function toggleStage(meNo, id, stageId, done) {
+   const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
+   if (!r) return { ok: false, msg: '这条任务已经不在你手上了' };
+@@ -890,8 +995,12 @@ function toggleStage(meNo, id, stageId, done) {
+   const s = stages.find(x => x && x.id === stageId && x.pid);
+   if (!s) return { ok: false, msg: '这一段已经从任务里移除了' };
+   const isOwner = r.owner_no === meNo;
+-  const isWho = s.who === meNo && s.whoAt;
+-  if (!isOwner && !isWho) return { ok: false, msg: '这一段不归你勾' };
++  if (s.who) {
++    if (s.who !== meNo) return { ok: false, msg: '这一段由别人负责，只有他能勾完成' };
++    if (!s.whoAt) return { ok: false, msg: '这一段还没派发，派发后由你勾完成' };
++  } else if (!isOwner) {
++    return { ok: false, msg: '这一段不归你勾' };
++  }
+ 
+   const on = done === undefined ? !s.done : !!done;
+   /* 父阶段没有独立的勾选态：它的完成由子任务推出来，这里只动叶子。 */
+@@ -899,13 +1008,14 @@ function toggleStage(meNo, id, stageId, done) {
+   s.doneBy = on ? meNo : null;
+   s.doneAt = on ? todayStr() : null;
+   /* 状态跟着叶子走，别让「3/3 已完成」还挂在「进行中」上 */
+-  const leaves = stages.filter(x => x && x.pid);
+-  const allDone = leaves.length > 0 && leaves.every(x => x.done);
+-  const anyDone = leaves.some(x => x.done);
+-  const status = allDone ? 'done' : (anyDone && r.status === 'todo' ? 'doing' : (anyDone ? r.status : 'todo'));
++  const status = stageStatusFromLeaves(stages, r.status);
+   db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
+     .run(JSON.stringify(stages), status, nowStr(), id);
+-  mirrorStageDone(id, stages);
++  /* 他自己在父任务里勾的，副本那份也对齐；不做反向下写。 */
++  if (s.who === meNo) {
++    syncMirrorStatus(id, stageId, on);
++    notifyStageDone(r, s, on, meNo);
++  }
+   bumpRev();
+   return { ok: true, done: on };
+ }
+diff --git a/specs/modules/app-ui.md b/specs/modules/app-ui.md
+index 50b5114..5ecdfa2 100644
+--- a/specs/modules/app-ui.md
++++ b/specs/modules/app-ui.md
+@@ -9,6 +9,8 @@
+ 
+ ## 不变量
+ - `ownRows()` 只提交 `owner_no=我` 的行；发布人对已交出的任务是只读。
++- **子任务勾选框只给责任人**：`who` 非空时只有 `who === 我`（且已派发）能勾，承接人对别人那段不渲染 `data-act="stage-toggle"`；`who` 为空时承接人自己勾。
++- **派生副本（`stageRef` 有值）只维护完成**：标题/起止/时间点/达成标准/分类/优先级只读，无删除按钮；计划归承接人。
+ - **两份 UI 各写各的，改一处必须改另一处**（#47 弹窗有「谁做」、详情页漏了）。每行有可辨认身份：编号 `1 / 1.1` + 子行缩进竖线。
+ - **列表卡片按层级排，不按数组顺序排**：`stageRows()` 一级阶段后紧跟其子任务；阶段数只数一级。
+ - **阶段时间是人设的，不从子任务反推**；子任务只排窗口内，装不下拦下并说清谁出界。
+@@ -24,3 +26,4 @@
+ | task_id | commit | verdict_digest | 摘要 |
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
++| TASK-20261109-subtask-upstream | 见 git | — | 勾选框按责任人渲染；派生副本只留完成；承接台新增「完成」提醒标签 |
+diff --git a/specs/modules/server-api.md b/specs/modules/server-api.md
+index 56da45f..f402475 100644
+--- a/specs/modules/server-api.md
++++ b/specs/modules/server-api.md
+@@ -9,11 +9,13 @@
+ 
+ ## 不变量
+ - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
+-- 接收看 `assignee_no`、派发与改截止看 `owner_no`/`publisher_no`、加入待办与勾选看 `stages[].who`（须已派发）。
++- 接收看 `assignee_no`、派发与改截止看 `owner_no`/`publisher_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。
+ - **可见性五来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
+ - **接收 = 所有权转移**（`owner_no` 变承接人、`type` 变 `special`），不派生副本；`publisher_no` 永不改。
+-- 派发对象必须 `activated=1`；生成 temp 必须带 `stage_ref` 反指且幂等。
+-- 后写覆盖（已知边界）。
++- 派发对象必须 `activated=1`；生成 temp 必须带 `stage_ref` 反指且幂等。**`stage_ref` 只由服务端在 `/api/stage/join` 写入**：`/api/sync` 收到的 `stageRef` 一律丢弃（落库为 `null`），客户端造不出副本。
++- **完成态只有一条上行通道**：派生副本 status 变化 → 回写父任务 `stages[i].done/doneBy`、按叶子重算父任务 status、写 `stage_notice(kind=stage_done)`。不做反向下写（上级侧改动不碰副本）。回写前校验副本 `owner_no` 等于该段 `who` 且 `whoAt` 非空，换人后的旧副本、伪造副本都无效。
++- **已派给别人的叶子，完成态以库为准**：非责任人整段提交（哪怕是旧快照）不得覆盖 `done/doneBy/doneAt`；换人（`who` 变了）不算覆盖，新责任人从「未完成」开始，旧副本由服务端收走（段被移除同理）。
++- 有子任务的任务，status 由叶子推：全部完成才是 `done`，一段没勾不许挂 `done`；`paused` 与手选的 `doing` 保留（执行人自己的节奏），只有不该成立的 `done` 会被掰回。
+ 
+ ## 依赖与边界
+ - 依赖 `MOD-server-data`。
+@@ -23,3 +25,4 @@
+ | task_id | commit | verdict_digest | 摘要 |
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
++| TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
+diff --git a/version.js b/version.js
+index f6ef7a2..dd2ef15 100644
+--- a/version.js
++++ b/version.js
+@@ -28,7 +28,7 @@ const path = require('path');
+ const { execFileSync } = require('child_process');
+ 
+ /** 人工维护的唯一版本号。发版只改这一处。 */
+-const SEMVER = '0.8.4';
++const SEMVER = '0.8.5';
+ 
+ /** 分组白名单：写别的分组自检会报错，避免同类内容一会儿一个说法。 */
+ const GROUPS = ['新增能力', '体验增强', '口径变更', '问题修复'];
+@@ -38,6 +38,34 @@ const GROUPS = ['新增能力', '体验增强', '口径变更', '问题修复'];
+  * 键 = 版本号；新增版本在**最前面**加一块，不要动历史版本的文字。
+  */
+ const CHANGELOG = {
++  '0.8.5': {
++    date: '2026-11-09',
++    title: '子任务由干活的人勾完成，进度直接汇总到上级那边',
++    items: [
++      {
++        group: '问题修复',
++        lines: [
++          '把某一段派给下属后，他在自己待办里勾完成，上级的专项详情里那一段跟着变完成，进度和整条任务的状态一起更新——以前只有上级勾才会传到下属那份，方向是反的',
++          '上级拿几分钟前的页面改个标题、顺手把整份阶段一起提交，会把下属刚勾的完成悄悄冲掉，还可能出现「子任务 0 / 2、整条却显示已完成」。现在别人负责那一段的完成态不会被这种整段写入覆盖',
++          '专项任务的状态现在只看子任务：还有一段没勾，就不会显示「已完成」',
++        ],
++      },
++      {
++        group: '口径变更',
++        lines: [
++          '别人负责的那一段，上级只读：改期、换人、改总截止这些计划动作照旧，完成必须由责任人自己勾，避免上面替下面报完成',
++          '派来的活「加入待办」之后只维护完成情况：标题、日期这些计划字段归派活的人，要调期找他',
++        ],
++      },
++      {
++        group: '体验增强',
++        lines: [
++          '下属勾完成或撤销，上级在承接台「有变动的任务」里看到一条「完成」，不弹窗、不打断手上的事',
++          '子任务还没派发时谁都不能勾：先派发，责任人那边看得到之后，完成才有意义',
++        ],
++      },
++    ],
++  },
+   '0.8.4': {
+     date: '2026-11-09',
+     title: '点日历上的一条活，先去右边那一天找到它，不再直接翻详情',

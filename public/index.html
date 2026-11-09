@@ -128,6 +128,10 @@ button{font-family:inherit}
 .trow.done .t b{color:var(--ink3);text-decoration:line-through}
 .trow .meta{color:var(--ink3);font-size:11.5px;display:flex;gap:10px;flex-wrap:wrap;margin-top:3px}
 .trow .right{display:flex;gap:6px;align-items:center}
+/* 从日历上点了某一条活之后，右边这一行亮一下再淡掉：
+   手不用重新找，眼睛跟着这块浅黄落到该改的那行 */
+.trow{transition:background .45s ease,box-shadow .45s ease}
+.trow.focus{background:#fff7dd;box-shadow:inset 0 0 0 1.5px #f0c04a;border-radius:8px}
 /* 列表里的状态快捷改：勾选框只解决「做完了」，暂缓/进行中在这里一步到位 */
 .qst{font-size:11px;font-family:inherit;border:1px solid var(--line);border-radius:6px;padding:2px 4px;
   background:#fff;color:var(--ink2);cursor:pointer;max-width:82px}

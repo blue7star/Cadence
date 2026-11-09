@@ -66,6 +66,9 @@ let syncing = false;
 let pendingRefresh = false;
 let pollTimer = null;
 let view = 'today', calCursor = monthStart(TODAY), calMode = 'month', selDay = TODAY;
+/* 从日历上点一条活时，不在日历上弹详情——多半是想改状态。
+   记下要定位的那一行（任务 id + 阶段序号），渲染完把右侧清单滚过去并高亮。 */
+let focusKey = '';
 let routineTab = 'month';
 let openMembers = {};
 let openSpecialBlock = false;   /* 「下属专项工作推进情况」整块默认收起 */
@@ -736,6 +739,7 @@ function qStatusHTML(t, step) {
     `</select>`;
 }
 function taskRow(t, step, si) {
+  const key = `${t.id}|${step ? si : ''}`;
   const done = step ? step.done : t.status === 'done';
   const delay = !step && t.auto && t.planDate && t.planDate !== t.start;
   const time = (step && step.time) || t.time;
@@ -750,7 +754,7 @@ function taskRow(t, step, si) {
   const pub = pubName(t);
   /* 有状态下拉的普通任务不再重复写一遍状态；常规实例写「节点进度」 */
   const stText = step ? `${si + 1}/${t.stages.length} 节点` : (t.type === 'routine' ? ST[t.status].name : '');
-  return `<div class="trow ${done ? 'done' : ''}">
+  return `<div class="trow ${done ? 'done' : ''}${focusKey === key ? ' focus' : ''}" data-key="${key}">
     <span class="bar ${t.type}"></span>
     <div class="cb ${done ? 'on' : ''}" data-act="${step ? 'toggle-step' : 'toggle'}" data-id="${t.id}"${step ? ` data-idx="${si}"` : ''}>${done ? '✓' : ''}</div>
     <div class="body">
@@ -1330,14 +1334,16 @@ function calChipHTML(t, step, si, label, maxLen) {
   const stKey = (step && step.done) ? 'done' : (ST[t.status] ? t.status : 'todo');
   const late = chipLate(t, step);
   const tip = (step && step.name ? t.title + ' · ' + step.name : t.title) + ' · ' + ST[stKey].name + (late ? ' · 已逾期' : '')
-    + (pubName(t) ? ' · ' + pubName(t) + ' 发布' : '');
+    + (pubName(t) ? ' · ' + pubName(t) + ' 发布' : '')
+    + '　（点一下：在右侧当天清单里定位，可直接改状态）';
   const adjusted = step ? false : (t.auto && t.planDate && t.planDate !== t.start);
   const stateText = late ? '逾期' : (CHIP_STATE[stKey] || '');
   /* 带阶段的任务，正文写的是阶段名，角标里补一句它属于哪件事。
      没有阶段的任务正文就是任务名，不用再重复一遍。 */
   const par = (step && step.name) ? t.title : '';
   return `<span class="chip cal ${t.type} s-${stKey}${late ? ' overdue' : ''}${adjusted ? ' adjusted' : ''}"
-    draggable="true" data-drag='${JSON.stringify({ id: t.id, s: si })}' data-act="open" data-id="${t.id}" data-st="${stKey}"${late ? ' data-late="1"' : ''}
+    draggable="true" data-drag='${JSON.stringify({ id: t.id, s: si })}' data-act="cal-focus"
+    data-id="${t.id}" data-si="${si == null ? -1 : si}" data-st="${stKey}"${late ? ' data-late="1"' : ''}
     title="${esc(tip)}"><span class="lbl">${esc(maxLen ? cut(label, maxLen) : label)}</span>${stateText ? `<i class="st">${stateText}</i>` : ''}${par ? `<span class="par">${esc(cut(par, 16))}</span>` : ''}</span>`;
 }
 /* 一格最多铺这么多条，再多就折成「还有 N 条」——点一下这格，右边当日清单是全的。
@@ -1368,6 +1374,20 @@ function cellHTML(c) {
     ${rest > 0 ? `<button class="more">还有 ${rest} 条，点开这天看</button>` : ''}
   </div>`;
 }
+/* 点日历上的一条活 → 在右侧当天清单里把它滚到眼前并高亮。
+   不在这里弹详情：人点日历上的卡，十有八九是想改状态或看看今天还剩什么，
+   就地改最省事；真想看全貌，那一行右边本来就有「详情」。 */
+function scrollToFocus() {
+  if (!focusKey) return;
+  const row = document.querySelector(`#view .tlist .trow[data-key="${focusKey}"]`);
+  if (!row) { focusKey = ''; return; }
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const mine = focusKey;
+  setTimeout(() => {
+    row.classList.remove('focus');
+    if (focusKey === mine) focusKey = '';
+  }, 2200);
+}
 function viewCalendar() {
   const cells = calCells();
   const head = calMode === 'month'
@@ -1388,7 +1408,7 @@ function viewCalendar() {
         <button class="btn sm" data-act="cal-nav" data-step="1">›</button>
         <button class="btn sm ghost" data-act="cal-today">回到今天</button>
         <div class="spacer"></div>
-        <span class="mini" id="dragHint">拖动卡片 = 改期</span>
+        <span class="mini" id="dragHint">拖动 = 改期 · 单击 = 在右侧清单里定位</span>
       </div>
       <div class="cal">
         ${['一', '二', '三', '四', '五', '六', '日'].map(x => `<div class="dow">周${x}</div>`).join('')}
@@ -2628,6 +2648,17 @@ document.addEventListener('click', e => {
     }
     case 'go': view = el.dataset.view; render(); break;
     case 'open': openTaskPage(id); break;
+    /* 日历上的卡片：定位到右侧当天清单，让人就地改状态；详情在那一行点 */
+    case 'cal-focus': {
+      const si = el.dataset.si == null || el.dataset.si === '' ? -1 : Number(el.dataset.si);
+      focusKey = `${el.dataset.id}|${si >= 0 ? si : ''}`;
+      const chipCell = el.closest('.cell[data-date]');
+      /* 右边「今日待办」那摞卡片不在格子里，它本来就是今天的活 */
+      selDay = chipCell ? chipCell.dataset.date : TODAY;
+      render();
+      scrollToFocus();
+      break;
+    }
     case 'close': closeTaskPage(); break;
     case 'toggle':
       if (t) {
@@ -3012,7 +3043,7 @@ document.addEventListener('click', e => {
 
 /* 日历拖拽：拖动过程中就把能不能放说清楚，别等松手才弹失败 */
 let dragCtx = null, dragBlocked = '';
-const DRAG_TIP = '拖动卡片 = 改期';
+const DRAG_TIP = '拖动 = 改期 · 单击 = 在右侧清单里定位';
 function setDragHint(text, warn) {
   const el = $('#dragHint');
   if (!el) return;
@@ -3079,10 +3110,10 @@ document.addEventListener('drop', e => {
   clearDragUI();
 });
 
-/* 日历点选日期 */
+/* 日历点选日期：点空地只换右边的日子；点卡片有它自己的动作（cal-focus 定位那一条） */
 document.addEventListener('click', e => {
   const cell = e.target.closest('.cell[data-date]');
-  if (cell && !e.target.closest('[data-drag]')) { selDay = cell.dataset.date; render(); }
+  if (cell && !e.target.closest('[data-drag]') && !e.target.closest('[data-act]')) { selDay = cell.dataset.date; focusKey = ''; render(); }
 });
 
 /* 抽屉内字段编辑 */

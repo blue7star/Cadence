@@ -423,6 +423,53 @@ async function main() {
     body:JSON.stringify({me:'1012',del:{tasks:['t_e2e_pack_1','t_e2e_pack_2','t_e2e_pack_3','t_e2e_pack_4','t_e2e_pack_5']}})});
     return 'ok'; })()`);
 
+  /* ---------- 6.0b 点日历上的卡片 = 定位到右侧那一条，不直接弹详情 ---------- */
+  /* 人点日历上的卡，多半是想改状态/看今天还剩什么，弹一整页详情等于把人赶走；
+     详情该留给那一行右边的「详情」。所以这里钉三件事：
+     格子里的卡点了不跳详情、右边当天清单换成被点的那天并高亮该条、那一行能就地改状态。 */
+  const FCUS = '2026-12-17';
+  await js(`(async()=>{ await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({me:'1012',tasks:[{id:'t_e2e_focus',ownerNo:'1012',assigneeNo:'1012',
+      type:'temp',title:'E2E定位试验',start:'${FCUS}',end:'${FCUS}',status:'todo'}]})});
+    return 'ok'; })()`);
+  await goto(BASE);
+  await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+  await js(`(function(){
+    view='calendar'; calCursor=monthStart('${FCUS}');
+    /* 故意把右边停在前一天，验证点卡会把右边的日子带过去 */
+    selDay='2026-12-16'; focusKey=''; render();
+    const chip=document.querySelector('.chip.cal[data-id="t_e2e_focus"]');
+    if(chip) chip.click();
+    return 'ok';
+  })()`);
+  await sleep(700);
+  const focusVis = await js(`(function(){
+    const row=document.querySelector('#view .tlist .trow[data-key="t_e2e_focus|"]');
+    const h2=document.querySelector('#view .card-h h2');
+    return {view:view, detailOpen:!!document.querySelector('#dTitle'),
+      row:!!row, focused:!!(row&&row.classList.contains('focus')),
+      selDay:selDay, head:(h2||{}).textContent||'',
+      statusSel:!!(row&&row.querySelector('select[data-act="qstatus"]')),
+      detailBtn:!!(row&&row.querySelector('[data-act="open"]')),
+      txt:row?row.innerText.replace(/\\s+/g,' ').trim().slice(0,40):''};
+  })()`);
+  check('点日历上的卡片不弹详情，留在日历页',
+    !!focusVis && focusVis.detailOpen === false && focusVis.view === 'calendar',
+    JSON.stringify(focusVis));
+  check('点卡片会把右侧清单切到那一天，并高亮被点的那一条',
+    !!focusVis && focusVis.selDay === FCUS && focusVis.row === true && focusVis.focused === true
+      && focusVis.head.includes('12-17'),
+    JSON.stringify(focusVis));
+  check('定位到的那一行能就地改状态，详情另有入口',
+    !!focusVis && focusVis.statusSel === true && focusVis.detailBtn === true,
+    JSON.stringify({ sel: focusVis && focusVis.statusSel, btn: focusVis && focusVis.detailBtn }));
+  await shot('16b-cal-focus');
+  await js(`(async()=>{ await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({me:'1012',del:{tasks:['t_e2e_focus']}})});
+    return 'ok'; })()`);
+  await goto(BASE);
+  await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+
   const spDetail = await js(`(function(){openTaskPage('${stageCal.id}');
     return {title:((document.querySelector('#dTitle')||{}).value||''),
       inputs:document.querySelectorAll('#view [data-field=\"cat1\"],#view [data-field=\"cat2\"]').length,
@@ -434,29 +481,48 @@ async function main() {
   await sleep(400);
 
   /* ---------- 6.1 非工作日不排活：专项阶段不铺到周末，常规实例不整段铺开 ---------- */
+  /* 别拿「今天之后第一个周末」凑数：跨月长的常规活（月度薪酬那类）中间会断档，
+     专项阶段又只盖住自己的那几周，两边不一定落在同一个周末。
+     各找一个确实被盖住的休息日，否则测出来的是「这天本来就没活」，等于没测。 */
   await nav('calendar');
-  const restDay = await js(`(function(){
-    calCursor=monthStart(TODAY); selDay=TODAY; view='calendar'; render();
-    const cells=[...document.querySelectorAll('[data-date]')];
-    const cell=cells.find(c=>!isWorkday(c.dataset.date)&&c.dataset.date>=TODAY);
-    if(!cell) return {err:'当前视图没有非工作日'};
-    const date=cell.dataset.date;
-    const chips=cell.querySelectorAll('.chip.cal').length;
-    cell.click();
-    return {date:date, chips:chips,
-      coveredSpecial:S.tasks.some(t=>isMineTask(t)&&t.type==='special'&&(t.stages||[]).some(s=>!s.done&&s.start&&s.end&&s.start<=date&&s.end>=date)),
-      coveredRoutine:S.tasks.some(t=>isMineTask(t)&&t.type==='routine'&&(t.stages||[]).length&&t.start<=date&&t.end>=date)};
+  const restSpots = await js(`(function(){
+    const sp = d => S.tasks.some(t=>isMineTask(t)&&t.type==='special'&&(t.stages||[]).some(s=>!s.done&&s.start&&s.end&&s.start<=d&&s.end>=d));
+    const rt = d => S.tasks.some(t=>isMineTask(t)&&t.type==='routine'&&(t.stages||[]).length&&t.start<=d&&t.end>=d);
+    let a='', b='';
+    for(let d=TODAY;d<=addDays(TODAY,90)&&!(a&&b);d=addDays(d,1)){
+      if(isWorkday(d)) continue;
+      if(!a&&sp(d)) a=d;
+      if(!b&&rt(d)) b=d;
+    }
+    return {specialDay:a, routineDay:b};
   })()`);
-  await sleep(500);
-  const restPanel = await js(`(function(){
-    return {rows:[...document.querySelectorAll('#view .tlist .trow')].map(r=>r.innerText.replace(/\\s+/g,' ').trim()),
-      empty:(document.querySelector('#view .tlist .empty')||{}).textContent||''};
-  })()`);
+  const probeRest = async (day) => {
+    const r = await js(`(function(){
+      calCursor=monthStart('${day}'); selDay=TODAY; view='calendar'; render();
+      const cell=document.querySelector('.cell[data-date="${day}"]');
+      if(!cell) return {err:'日历里没有这天'};
+      const chips=cell.querySelectorAll('.chip.cal').length;
+      cell.click();
+      return {date:'${day}', chips:chips};
+    })()`);
+    await sleep(350);
+    r.panel = await js(`(function(){
+      return {rows:document.querySelectorAll('#view .tlist .trow').length,
+        empty:(document.querySelector('#view .tlist .empty')||{}).textContent||''};
+    })()`);
+    return r;
+  };
+  const restSp = await probeRest(restSpots.specialDay || TODAY);
   await shot('16-restday');
-  check('非工作日不铺专项阶段，常规实例也不整段冒出来（格子和右栏都空）',
-    !restDay.err && restDay.coveredSpecial === true && restDay.coveredRoutine === true &&
-    restDay.chips === 0 && restPanel.rows.length === 0 && restPanel.empty.includes('休息日'),
-    JSON.stringify({ restDay, restPanel }));
+  check('被专项阶段盖住的周末，也不铺阶段条（格子和右栏都空）',
+    !!restSpots.specialDay && !restSp.err && restSp.chips === 0 &&
+    restSp.panel.rows === 0 && restSp.panel.empty.includes('休息日'),
+    JSON.stringify({ spots: restSpots, restSp }));
+  const restRt = await probeRest(restSpots.routineDay || TODAY);
+  check('常规的跨月区间也不整段铺到周末',
+    !!restSpots.routineDay && !restRt.err && restRt.chips === 0 &&
+    restRt.panel.rows === 0 && restRt.panel.empty.includes('休息日'),
+    JSON.stringify({ spots: restSpots, restRt }));
 
   /* ---------- 6.2 阶段能就地改名称和日期，不用删了重建 ---------- */
   /* 挑一个「至少有一段没子任务、没勾完成、够缩两天」的专项：有子任务的阶段日期是派生的、

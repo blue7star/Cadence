@@ -8,8 +8,11 @@ paths: server.js
 ## 公开行为
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
 - 六个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。
+- 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`（仅 `auth.admin_no`）。
+- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规与专项；一行一阶段，UTF-8 BOM + `\r\n`。
 
 ## 不变量
+- **身份只来自会话**：所有接口先过 `sid` cookie 的会话门，`me` 与会话不符 403、无会话 401；不接受「按请求里的 me 当身份」。导出因此没有「导别人」的口子。
 - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
 - 接收看 `assignee_no`、派发与改截止看 `owner_no`/`publisher_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。
 - **可见性五来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
@@ -29,3 +32,4 @@ paths: server.js
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |
+| TASK-20261110-auth-export | 见 git | — | 认证（login/logout/password/超管重置）与会话门；导出 `/api/export/tasks.csv` |

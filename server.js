@@ -1357,6 +1357,86 @@ function sidCookie(sid, maxAgeSec) {
   return `sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`;
 }
 
+/* ============ 导出（第一批） ============ */
+const EXPORT_COLUMNS = [
+  '任务编号', '标题', '类型', '状态', '所属人', '承接人', '分类一', '分类二', '重要', '紧急',
+  '开始日', '计划结束', '总截止', '完成日期', '更新时间', '分类一ID', '分类二ID',
+  '阶段编号', '阶段名称', '阶段开始', '阶段结束', '阶段负责人', '阶段完成', '阶段完成日', '父阶段编号'
+];
+const TYPE_OUT = { routine: '常规', special: '专项' };
+const STATUS_OUT = { todo: '待办', doing: '进行中', paused: '暂缓', done: '已完成' };
+
+/* RFC 4180：含逗号/引号/换行才加引号，内部引号翻倍。不做自定义转义——人看到的必须是原文。 */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+const csvRow = cells => cells.map(csvCell).join(',');
+
+function localIso(d) {
+  const off = -d.getTimezoneOffset();
+  const p2 = n => String(Math.abs(n)).padStart(2, '0');
+  const base = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+    + `T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  return `${base}${off >= 0 ? '+' : '-'}${p2(Math.floor(Math.abs(off) / 60))}:${p2(Math.abs(off) % 60)}`;
+}
+
+/* 范围（定义域）严格按 Spec §4.1：只要我直接负责或已承接的常规/专项。
+   不含 type='assign'（我发布、别人还没接）、type='temp'（stage_ref 派生副本）、
+   我只作为知情人的、我负责某一段但任务不在我名下的。 */
+function exportTasksCsv(meNo) {
+  const me = getEmp(meNo);
+  const catName = {};
+  for (const c of db.prepare('SELECT id,name FROM cat WHERE owner_no=?').all(meNo)) catName[c.id] = c.name;
+  const rows = db.prepare(`SELECT * FROM task
+      WHERE type IN ('routine','special') AND owner_no=?
+        AND (assignee_no IS NULL OR assignee_no='' OR assignee_no=?)
+      ORDER BY start_date, id`).all(meNo, meNo);
+
+  const lines = [
+    '# cadence-tasks v1',
+    `# 导出人：${meNo} ${me ? me.name : ''}`,
+    `# 导出时间：${localIso(new Date())}`,
+    csvRow(EXPORT_COLUMNS)
+  ];
+
+  for (const r of rows) {
+    /* 规则实例的步骤没有 id（ensureInstances 只给 name/plan/date/done）。
+       它们在前端就是阶段（stageRows 按同一份 stages 渲染），R1 要求「每个阶段正好一行」，
+       所以这里不能按 id 过滤——否则这类阶段会被静默丢掉，导出看起来比页面少一截。 */
+    const stages = parseStages(r.stages).filter(Boolean);
+    const parents = new Set(stages.map(s => s.pid).filter(Boolean));
+    /* 完成日期只到日期：取叶子阶段 doneAt 的最大值；无阶段任务这一列永远是空（现状，C3） */
+    let completed = '';
+    if (r.status === 'done') {
+      const dates = stages.filter(s => !parents.has(s.id) && s.doneAt).map(s => s.doneAt).sort();
+      if (dates.length) completed = dates[dates.length - 1];
+    }
+    const taskCells = [
+      r.id, r.title, TYPE_OUT[r.type] || '', STATUS_OUT[r.status] || '', r.owner_no, r.assignee_no || '',
+      catName[r.cat1] || '', catName[r.cat2] || '',
+      r.imp == null ? '' : String(r.imp), r.urg == null ? '' : String(r.urg),
+      r.start_date || '', r.end_date || '', r.due_date || r.end_date || '', completed, r.updated_at || '',
+      r.cat1 || '', r.cat2 || ''
+    ];
+    if (!stages.length) {
+      lines.push(csvRow([...taskCells, '', '', '', '', '', '', '', '']));
+      continue;
+    }
+    stages.forEach((s, i) => {
+      /* 规则实例的步骤只有 date（当天完成），没有起止区间——前端也是这么兜底的
+         （app.js 里 dayOf = s[k] || s.date），导出沿用同一口径，免得出现有名字没日期的空行。 */
+      const stageCells = [
+        s.id || '', s.name || '', s.start || s.date || '', s.end || s.date || '', s.who || '',
+        s.done ? '1' : '0', s.done ? (s.doneAt || '') : '', s.pid || ''
+      ];
+      /* 续行规则 R2：任务级列只在首行有值，后续行必须留空 */
+      lines.push(csvRow(i === 0 ? [...taskCells, ...stageCells] : [...Array(taskCells.length).fill(''), ...stageCells]));
+    });
+  }
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
+}
+
 /* ============ HTTP ============ */
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -1498,6 +1578,21 @@ const server = http.createServer(async (req, res) => {
       dropSessions(target);
       logOp(me, 'reset-password', target, ip);
       return sendJSON(res, 200, { ok: true, msg: `已把 ${target} 的密码重置为工号` });
+    }
+
+    /* 导出：只导当前会话这个人的任务，接口不带参数，也就没有「导别人」的口子 */
+    if (p === '/api/export/tasks.csv' && req.method === 'GET') {
+      const csv = exportTasksCsv(me);
+      const buf = Buffer.from(csv, 'utf8');
+      const day = todayStr().replace(/-/g, '');
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Length': buf.length,
+        'Content-Disposition': `attachment; filename="cadence-tasks-${me}-${day}.csv"`,
+        'Cache-Control': 'no-store'
+      });
+      logOp(me, 'export', 'tasks.csv', ip);
+      return res.end(buf);
     }
 
     if (p === '/api/state' && req.method === 'GET') {

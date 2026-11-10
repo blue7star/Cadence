@@ -1,8 +1,8 @@
-# 认证与任务导入导出 · 需求规格（DRAFT）
+# 认证与任务导入导出 · 需求规格
 
-> 状态：**草稿，待 Human 确认**。确认前不 `task start`，不改 `server.js` / `public/`。
+> 状态：**第一批（认证 + 导出）已生效**（2026-11-10，`TASK-20261110-auth-export`）；第四部分「导入」仍为草稿，按第二批推进。
 > 归属：Planner。基线：`41b9ae2`。
-> 对应契约草稿：`artifacts/contracts/TASK-20261110-auth-export.md`（第一批）、`artifacts/contracts/TASK-20261110-task-import.md`（第二批）。
+> 对应契约：`artifacts/runs/TASK-20261110-auth-export/task.md`（第一批，已 `task start`）、`artifacts/contracts/TASK-20261110-task-import.md`（第二批，未启动）。
 > 本文管**需求语义与对外契约**；模块职责看 `specs/modules/`，实现细节看 `DEVELOPMENT.md`。
 
 ## 0. 一句话

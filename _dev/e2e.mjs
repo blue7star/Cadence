@@ -2444,6 +2444,95 @@ async function main() {
     wrongPwd.ok === false && ghost.ok === false && wrongPwd.msg === ghost.msg && wrongPwd.msg === '工号或密码不正确',
     `密码错=${wrongPwd.msg} / 没这人=${ghost.msg}`);
 
+  /* --- 导出：结构 --- */
+  const exp = await fetch(BASE + '/api/export/tasks.csv', { headers: { Cookie: 'sid=' + (await sidOf('1012')) } });
+  const raw = Buffer.from(await exp.arrayBuffer());
+  check('导出是 CSV 且以 UTF-8 BOM 开头',
+    exp.status === 200 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf,
+    `${exp.status} / ${raw[0]},${raw[1]},${raw[2]}`);
+  const csvText = raw.slice(3).toString('utf8').replace(/^\uFEFF/, '');
+  const csvLines = csvText.split('\r\n').filter(l => l.length);
+  check('前 3 行是 # 注释：格式版本 / 导出人 / 导出时间',
+    csvLines[0] === '# cadence-tasks v1' && /^# 导出人：1012/.test(csvLines[1]) && /^# 导出时间：\d{4}-/.test(csvLines[2]),
+    csvLines.slice(0, 3).join(' | '));
+  const header = csvSplit(csvLines[3]);
+  check('第 4 行是 25 列中文表头（列名与顺序冻结）',
+    header.length === 25 && header[0] === '任务编号' && header[15] === '分类一ID' && header[24] === '父阶段编号',
+    header.length + ' 列');
+
+  /* --- 导出：范围与「一行一阶段」 --- */
+  const prep = await apiAs('1012', '/api/sync', { me: '1012', tasks: [
+    { id: 't_e2e_export', type: 'special', title: 'E2E导出,含"引号"', ownerNo: '1012', assigneeNo: '1012',
+      start: '2026-11-01', end: '2026-11-20', dueDate: '2026-11-20', status: 'paused', imp: 3, urg: 2,
+      cat1: '1012_c2', cat2: '1012_c22',
+      stages: [
+        { id: 'e1', pid: null, name: '段一', start: '2026-11-01', end: '2026-11-10', done: true, doneAt: '2026-11-09' },
+        { id: 'e2', pid: 'e1', name: '段二', start: '2026-11-11', end: '2026-11-20', done: false }
+      ] },
+    { id: 't_e2e_export_done', type: 'special', title: 'E2E导出已完成', ownerNo: '1012', assigneeNo: '1012',
+      start: '2026-11-01', end: '2026-11-08', dueDate: '2026-11-08', status: 'done',
+      stages: [{ id: 'd1', pid: null, name: '整段', start: '2026-11-01', end: '2026-11-08', done: true, doneAt: '2026-11-08' }] }
+  ] });
+  check('导出用例任务写入成功', (prep.json || {}).ok === true && ((prep.json || {}).errors || []).length === 0,
+    JSON.stringify((prep.json || {}).errors || []).slice(0, 200));
+
+  const exp2 = await fetch(BASE + '/api/export/tasks.csv', { headers: { Cookie: 'sid=' + (await sidOf('1012')) } });
+  const lines2 = Buffer.from(await exp2.arrayBuffer()).toString('utf8').split('\r\n').filter(l => l.length);
+  const rows2 = lines2.slice(4).map(csvSplit);
+
+  const stNow = (await stateAs('1012')) || {};
+  const mineTasks = (stNow.tasks || []).filter(t => (t.type === 'routine' || t.type === 'special')
+    && t.ownerNo === '1012' && (!t.assigneeNo || t.assigneeNo === '1012'));
+  const mineIds = new Set(mineTasks.map(t => t.id));
+  const fileIds = new Set(rows2.map(r => r[0]).filter(Boolean));
+  check('导出的任务集合 == 我直接负责/已承接的常规+专项',
+    fileIds.size === mineIds.size && [...fileIds].every(id => mineIds.has(id)),
+    `文件 ${fileIds.size} / 库里 ${mineIds.size}`);
+  check('导出不包含发布给别人的待接收任务与派生副本',
+    ![...fileIds].some(id => {
+      const t = (stNow.tasks || []).find(x => x.id === id);
+      return t && (t.type === 'assign' || t.type === 'temp');
+    }));
+
+  const expectRows = mineTasks.reduce((n, t) => n + Math.max(1, (t.stages || []).length), 0);
+  check('行数 = 任务数 + 阶段数（无阶段任务占一行）', rows2.length === expectRows, `实际 ${rows2.length} / 期望 ${expectRows}`);
+
+  const contBad = rows2.filter(r => !r[0]).filter(r => r.slice(0, 17).some(v => v !== '')).length;
+  check('续行规则：后续阶段行的任务级列必须全空', contBad === 0, `非空续行 ${contBad}`);
+
+  /* 规则实例的步骤没有 id：以前导出按 id 过滤，这些段在页面上有、文件里没有（静默吞掉 12 行）。
+     R1a 要求照样一行，这里卡住它别再退化。 */
+  const idless = mineTasks.reduce((n, t) => n + (t.stages || []).filter(s => s && !s.id && s.name).length, 0);
+  const blankIdRows = rows2.filter(r => r[17] === '' && (r[18] || '') !== '').length;
+  check('无编号阶段照样占一行（不按 id 静默丢掉）', idless > 0 && blankIdRows === idless,
+    `无编号阶段 ${idless} / 文件里 ${blankIdRows}`);
+
+  const expRow = rows2.filter(r => r[0] === 't_e2e_export');
+  const expCont = rows2.filter(r => !r[0] && r[17] === 'e2');
+  const expS1 = (((stNow.tasks || []).find(t => t.id === 't_e2e_export') || {}).stages || []).find(s => s.id === 'e1') || {};
+  check('一行一阶段：两段拆两行，第二行任务级列留空',
+    expRow.length === 1 && expCont.length === 1 && expCont[0][0] === '',
+    `${expRow.length} / ${expCont.length}`);
+  const r0 = expRow[0] || [];
+  check('暂缓任务原样导出为「暂缓」（四值不降级）', r0[3] === '暂缓', `状态=${r0[3]}`);
+  check('标题里的逗号和引号按 RFC4180 转义后能原样读回',
+    r0[1] === 'E2E导出,含"引号"', `读回=${r0[1]}`);
+  check('分类主列是名称、末尾 ID 列是原值', r0[6] === '业务交付' && r0[15] === '1012_c2' && r0[16] === '1012_c22',
+    `${r0[6]} / ${r0[15]} / ${r0[16]}`);
+  check('阶段列带编号/名称/负责人/完成/完成日/父阶段编号',
+    r0[17] === 'e1' && r0[18] === '段一' && r0[19] === '2026-11-01' && r0[20] === '2026-11-10'
+    && r0[21] === '' && r0[22] === '1' && r0[23] === String(expS1.doneAt || '') && r0[23] !== ''
+    && expCont[0][24] === 'e1',
+    JSON.stringify(expRow[0].slice(17)));
+
+  const doneRow = rows2.find(r => r[0] === 't_e2e_export_done') || [];
+  const doneSt = (((stNow.tasks || []).find(t => t.id === 't_e2e_export_done') || {}).stages || [])[0] || {};
+  check('已完成任务的「完成日期」取叶子阶段 doneAt',
+    doneRow[3] === '已完成' && doneSt.doneAt && doneRow[13] === doneSt.doneAt,
+    `${doneRow[3]} / ${doneRow[13]} vs ${doneSt.doneAt}`);
+
+  await apiAs('1012', '/api/sync', { me: '1012', del: { tasks: ['t_e2e_export', 't_e2e_export_done'] } });
+
   /* --- 改密：旧密码失效、新密码可用、其它会话被吊销 --- */
   const otherSid = (await loginSid('1004')).sid;
   const chg = await apiAs('1004', '/api/password', { me: '1004', old: '1004', new: 'E2ePassw0rd' });

@@ -1513,12 +1513,16 @@ function viewSettings() {
     <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已发布的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
   <div class="card" style="margin-bottom:14px">
-    <div class="card-h"><h2>修改密码</h2><span class="hint">初始密码=工号，改完请自己记住</span></div>
+    <div class="card-h"><h2>密码与数据出口</h2><span class="hint">初始密码=工号，改完请自己记住</span></div>
     <div class="split" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
       <div class="auth-field" style="margin:0"><label>原密码</label><input id="pwd_old" type="password" autocomplete="current-password"/></div>
       <div class="auth-field" style="margin:0"><label>新密码（至少 6 位）</label><input id="pwd_new" type="password" autocomplete="new-password"/></div>
       <button class="btn sm" data-act="change-pwd">修改密码</button>
     </div>
+    <div class="split" style="margin-top:12px">
+      <button class="btn sm primary" data-act="export-tasks">导出我的任务（CSV）</button>
+    </div>
+    <div class="note" style="margin-top:10px">导出只包含你直接负责或已承接的常规与专项任务，一行一个阶段；文件用 Excel 能直接打开，也可以原样导回来（导入在下一批）。</div>
   </div>
   ${S.me && S.me.admin ? `
   <div class="card" style="margin-bottom:14px">
@@ -2663,6 +2667,10 @@ document.addEventListener('click', e => {
           .catch(() => { })
           .finally(() => { localStorage.removeItem(ME_KEY); location.reload(); });
       }
+      break;
+    case 'export-tasks':
+      /* 走浏览器直接下载：带 cookie，服务端只按会话里的人导 */
+      location.href = '/api/export/tasks.csv';
       break;
     case 'change-pwd': {
       const oldPwd = ($('#pwd_old') || {}).value || '';

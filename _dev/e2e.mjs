@@ -2555,12 +2555,12 @@ async function main() {
 
   /* --- 超管 --- */
   const adminFlags = {};
-  for (const no of ['1012', '1101', '1001']) {
+  for (const no of ['005822', '1012', '1101', '1001']) {
     const s = (await stateAs(no)) || {};
     adminFlags[no] = !!(s.me && s.me.admin);
   }
   const adminNo = Object.keys(adminFlags).find(n => adminFlags[n]) || '';
-  check('超管身份可在会话里识别（未设置 CADENCE_ADMIN_NO 时这里会红）', !!adminNo, JSON.stringify(adminFlags));
+  check('超管身份可在会话里识别（按 meta.auth.admin_no，默认 005822）', !!adminNo, JSON.stringify(adminFlags));
   const plainNo = Object.keys(adminFlags).find(n => !adminFlags[n]) || '';
 
   if (adminNo && plainNo) {

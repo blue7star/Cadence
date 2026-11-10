@@ -182,6 +182,8 @@ const MAKEUP = ['2026-02-14', '2026-02-28', '2026-04-26', '2026-05-09', '2026-09
   if (!empCount) {
     const ins = db.prepare('INSERT INTO emp(no,name,role,dept,mgr_no,active,created_at) VALUES(?,?,?,?,?,1,?)');
     for (const [no, name, role, dept, mgr] of SEED_EMP) ins.run(no, name, role, dept, mgr, nowStr());
+    /* 只在「这次真的建了演示花名册」时打标：超管补号只对演示库生效，真实花名册不猜。 */
+    db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('demo_roster','1')").run();
   }
   const holCount = db.prepare('SELECT COUNT(*) c FROM holiday').get().c;
   if (!holCount) {
@@ -194,6 +196,23 @@ const MAKEUP = ['2026-02-14', '2026-02-28', '2026-04-26', '2026-05-09', '2026-09
   }
   const rev = db.prepare('SELECT v FROM meta WHERE k=?').get('rev');
   if (!rev) db.prepare('INSERT INTO meta(k,v) VALUES(?,?)').run('rev', '1');
+})();
+
+/* 演示库要能直接试超管：契约把超管工号定为 005822，而演示花名册里只有 1012 那一批。
+   只在「花名册就是内置演示集」时补一个 005822，正式库导入真实花名册后不会被塞进虚构账号。
+   名字用「王磊（超管）」是为了跟演示账号 1012 区分——同一个人在演示库里被拆成两条，
+   一条演普通组长、一条演超管，避免看的人以为花名册里有重名。 */
+(function seedDemoAdmin() {
+  /* 花名册是不是内置演示集，只认 meta 里这个标记。旧库没有标记时按「正好就是那 8 个人」补一次，
+     之后不再猜——真实花名册导进来以后，谁也不想因为「人少」被塞进一个虚构的超管。 */
+  const flag = () => db.prepare("SELECT v FROM meta WHERE k='demo_roster'").get();
+  const nos = db.prepare('SELECT no FROM emp').all().map((r) => r.no);
+  if (!flag() && nos.length === SEED_EMP.length && nos.every((n) => SEED_EMP.some((e) => e[0] === n))) {
+    db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('demo_roster','1')").run();
+  }
+  if (!flag() || nos.includes('005822')) return;
+  db.prepare('INSERT INTO emp(no,name,role,dept,mgr_no,active,created_at) VALUES(?,?,?,?,?,1,?)')
+    .run('005822', '王磊（超管）', '系统管理员', '信息中心', null, nowStr());
 })();
 
 /* ============ 工作日 / 节假日 ============ */
@@ -1271,11 +1290,12 @@ const SID_ABS_MS = 30 * 24 * 3600 * 1000;  /* 绝对 30 天 */
 const LOCK_FAILS = 5;                      /* 连续失败 5 次 */
 const LOCK_MS = 5 * 60 * 1000;             /* 锁 5 分钟 */
 
-/* 超管工号：环境变量 > meta.auth.admin_no > 默认 005822。
-   CADENCE_ADMIN_NO 是给测试环境用的覆盖口，生产写 meta 或环境变量都行。 */
+/* 超管工号只读库：`meta.auth.admin_no`。启动时若没有这个键就写 005822（契约定的那个人）。
+   不再用环境变量——测试与本地演示都改成改库，免得「同一份代码、两种行为」只差一个 env。 */
 const ADMIN_NO = (() => {
+  db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('auth.admin_no','005822')").run();
   const row = db.prepare("SELECT v FROM meta WHERE k='auth.admin_no'").get();
-  return String(process.env.CADENCE_ADMIN_NO || (row && row.v) || '005822');
+  return String((row && row.v) || '005822').trim();
 })();
 
 function newSalt() { return crypto.randomBytes(16).toString('hex'); }
@@ -1749,7 +1769,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  ⚠ 仅限可信内网：本服务是明文 HTTP，同网段可嗅探登录 cookie。');
   console.log('     不要暴露到公网、访客网络或端口映射；要出内网请先加反向代理与 TLS。');
   if (!getEmp(ADMIN_NO)) {
-    console.log(`  ⚠ 超管工号 ${ADMIN_NO} 不在花名册：重置密码与初始密码名单不可用（用 CADENCE_ADMIN_NO 指定）`);
+    console.log(`  ⚠ 超管工号 ${ADMIN_NO}（meta.auth.admin_no）不在花名册：重置密码与初始密码名单不可用`);
   }
   console.log('');
   console.log('  在浏览器打开上面「本机访问」那个地址就能用了。');

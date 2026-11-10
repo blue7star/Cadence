@@ -1,5 +1,7 @@
 # MOD-server-api · 同步、动作接口与可见性
 
+paths: server.js
+
 ## 职责
 `/api/sync` 增量提交、六个动作接口（accept/dispatch/join/toggle/due/notice-seen）的各自判权，以及 `stateFor()` 可见范围。
 
@@ -26,3 +28,4 @@
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
+| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |

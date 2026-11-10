@@ -1,5 +1,7 @@
 # MOD-server-data · 数据层与实例引擎
 
+paths: server.js, data/
+
 ## 职责
 建表（`emp/task/rule/cat/task_observer/stage_notice/watch/op_log/meta/holiday`）与常规实例生成引擎（`ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`）。
 
@@ -21,3 +23,4 @@
 | task_id | commit | verdict_digest | 摘要 |
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
+| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明 |

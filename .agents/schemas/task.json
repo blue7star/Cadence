@@ -9,7 +9,12 @@
     "gate_level",
     "status",
     "owner",
-    "modules"
+    "modules",
+    "requirement_quote",
+    "user_problem",
+    "out_of_scope",
+    "acceptance_command",
+    "stop_conditions"
   ],
   "additionalProperties": false,
   "properties": {
@@ -31,10 +36,30 @@
     },
     "parallel_group": { "type": "string" },
     "blueprint_impact": { "type": "string", "enum": ["pending", "none", "required"] },
+    "requirement_quote": {
+      "type": "string",
+      "minLength": 1,
+      "description": "用户原话，原样引用；M8 必填，占位符即 BLOCKED"
+    },
+    "user_problem": {
+      "type": "string",
+      "minLength": 1,
+      "description": "谁在什么场景卡住；只写问题，不写方案"
+    },
     "out_of_scope": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "G2 起必填；无此声明不得进入 G2"
+      "type": "string",
+      "minLength": 1,
+      "description": "M8 必填：这次明确不做什么（旧版写作数组，2026-11-09 起统一为字符串）"
+    },
+    "acceptance_command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "一条可执行命令 + 期望退出码"
+    },
+    "stop_conditions": {
+      "type": "string",
+      "minLength": 1,
+      "description": "什么情况必须停下问人"
     },
     "rollback": { "type": "string", "description": "G3 必填" }
   }

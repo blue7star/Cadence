@@ -36,7 +36,7 @@
 ## 3. 风险分级
 
 - **G0 文案、间距、颜色微调**：直接改，`node _dev/verify.mjs --fast` 过了就提交。
-- **G1 单页交互、表单校验**：改完必须 `--full`（e2e 里要有这条路径的断言）。
+- **G1 单页交互、表单校验**：动手前先写 `task.md`（受理五字段，见第 4 节 M8），改完必须 `--full`（e2e 里要有这条路径的断言）。
 - **G2 下面这些，动手前先写契约**（`.agents/templates/task.md`，见第 4 节三件套）：
   - `server.js` 的接口形状、`/api/sync` 的合并语义
   - 数据表结构与老数据兼容（`data/workbench.db`）
@@ -51,7 +51,7 @@
 | 轨 | 实现 | 管什么 |
 |---|---|---|
 | 代码门禁 | `_dev/verify.mjs` | 语法、版本一致性、CHANGELOG、服务版本、e2e、树摘要（含未提交/未跟踪文件） |
-| 契约门禁 | `.agents/gates/gate.py`（M1-M6） | 契约存在、证据绑定候选（哈希）、模块蓝图同步、版本权威、引用完整、快照封存 |
+| 契约门禁 | `.agents/gates/gate.py`（M1-M8） | 契约存在、证据绑定候选（哈希）、模块蓝图同步、版本权威、引用完整、快照封存、受理字段完备 |
 
 **G1-G3 改动走三 agent 闭环**（`ai-native-engineering` 采纳后，取代旧的一页三段契约）：
 
@@ -67,6 +67,12 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
 
 `gate.py` 三条边界要记牢：`NOT_RUN` 绝不等于 PASS；pre-commit 未建账本时只提示不拦，CI 对 `no_evidence` 退出 1；`--scope` 只能用 `project`。
 
+**M1 的受保护面是项目事实**：路径写在 `.agents/gates/protected.json`（`server.js`、`public/`、`_dev/`、`specs/`、`data/`、模板/门禁/钩子），不再用脚手架默认的 `app/`——那份默认值和本项目代码没有交集，等于没设防。模块归属由蓝图自己声明：`specs/modules/server-api.md` 写 `paths: server.js`，门禁**不再拿文件名当模块名猜**（`server.js` 的 stem 是 `server`，永远匹配不上 `server-api`）。
+
+**M8 受理闸**：触及受保护路径的提交，`task.md` 必须写满五问——`requirement_quote`（用户原话，不改写）、`user_problem`（谁在什么场景卡住）、`out_of_scope`（这次不做什么）、`acceptance_command`（命令 + 期望退出码）、`stop_conditions`（什么情况停）。缺一项或写 `<待填>` 直接 BLOCKED。一句话需求可以开工，但**答不完这五问不许动手**。
+
+门禁自己也要有反例：`python .agents/gates/gate.py --selftest` 用临时仓库证明「改 `server.js` 没契约会被拦」「受理字段缺一项/写占位符会被拦」「模块不拥有该文件会被拦」，并已接进 `verify.mjs`，每次 `--fast`/`--hook` 都跑一遍。
+
 ## 5. 提交纪律
 
 - **改完就提交，不要攒。** 一次提交只做一件事。发版单独一个 `release(vX.Y.Z): …`。
@@ -74,11 +80,12 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
 
 ```bash
 node _dev/verify.mjs --full                      # 代码门禁：语法 + 版本 + CHANGELOG + 服务版本 + e2e
-python .agents/gates/gate.py --ci --repo .       # 契约门禁：M1-M6（G1 以上改动）
+python .agents/gates/gate.py --ci --repo .       # 契约门禁：M1-M8（G1 以上改动）
 git add -A && git commit -m "feat(日历): 一句话"
 ```
 
 - 树摘要分三把尺子：代码摘要 `digest`（js/html/bat/库脚本）、证据摘要 `evidenceDigest`（契约/issue/蓝图/AGENTS/practice/SPEC）、文档摘要 `docsDigest`（其余文档）。前两把参与判定，别混。
+- `pre-commit` 自动跑**两条**：`verify.mjs --hook` 与 `gate.py --fast --staged`。缺 node 或 python 一律失败退出，不静默跳过——跳过等于把闸拆了。
 - `--full` 不通过时不覆盖已有绿证据；拦「失败后又改代码」靠摘要对不上，不靠销毁证据。
 - 新克隆的仓库启用钩子：`git config core.hooksPath .githooks`。**这是唯一「不做就静默失效」的一步。**
 
@@ -104,4 +111,7 @@ git add -A && git commit -m "feat(日历): 一句话"
 
 - **T1 单元测试**（暂时）：`public/app.js` 无模块导出，纯函数抽不出来。先按 `specs/modules/` 拆出纯逻辑层，再补单测——顺序反了只会写出一堆测 DOM 的假单测（issues #12）。
 - **改 `version.js` 为 `VERSION` 文件**：版本弹窗和 CHANGELOG 是产品功能；`gate.py` 的 M4 已支持 `version_authority: version.js`，无需换文件。
+- **M9「契约先行」闸（暂缓，不是否决）**：M9 要求契约在 `base_revision` 那个提交里就已存在，能机器证明「没有先写代码后补契约」。代价是每个 G1+ 要两次提交，摩擦一大就容易诱发 `--no-verify`（issues #9）。先看 M1+M8 的实际拦截率，再决定是否加。
+- **M7「模板测试引用可收集」**：不接。它只认 `tests/*.py` 与 pytest，本项目用 `_dev/e2e.mjs`；接进来永远「no tests referenced → PASS」，是假覆盖。若要等价能力，应另写「蓝图引用的 e2e 断言标签存在」这条检查，而不是抄 M7。
+- **`docs/adr/` 目录暂不建**：真有跨模块取舍时，决策写进 `docs/adr/NNNN-主题.md`（编号 + 背景 + 选项 + 结论 + 代价）。现在没有这类决策，建空目录只是多一份要维护的壳。
 - 其余红线见 `.agents/practice/adoption-log.md`。

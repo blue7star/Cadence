@@ -16,7 +16,8 @@ from typing import Any
 GENESIS_HASH = "0" * 64
 # Gate rules in force when a run is born. Old runs keep their own epoch, so
 # tightening the rules never rewrites or re-judges existing evidence.
-RULE_EPOCH = 3
+# 4 = M8 受理闸生效（task.md 受理五字段）；M2 仍按 >=3 判定，两个代次互不影响。
+RULE_EPOCH = 4
 ROLES = {name.casefold(): name for name in ("Planner", "Worker", "Reviewer", "Human")}
 REVIEW_VERDICTS = {
     "PASS",

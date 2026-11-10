@@ -1,5 +1,7 @@
 # MOD-version · 版本
 
+paths: version.js
+
 ## 职责
 版本号与每版更新内容的唯一归属者，并产出人读的 `CHANGELOG.md`。
 
@@ -20,3 +22,4 @@
 | task_id | commit | verdict_digest | 摘要 |
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
+| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: version.js`：模块归属由蓝图声明 |

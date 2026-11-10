@@ -1,0 +1,1594 @@
+﻿diff --git a/.agents/README.md b/.agents/README.md
+index ad6736a..42caef8 100644
+--- a/.agents/README.md
++++ b/.agents/README.md
+@@ -18,11 +18,14 @@
+ 
+ ## 门禁在哪
+ 
+-- `.agents/gates/gate.py` —— M1–M6 唯一实现，没有第二套逻辑。
+-- 在项目根运行：`python .agents/gates/gate.py --ci`（合并前/CI，按 `base...HEAD` 判）；`python .agents/gates/gate.py --fast --staged`（pre-commit，仅 M1/M3，只判索引区）。
++- `.agents/gates/gate.py` —— M1–M8 唯一实现，没有第二套逻辑。
++- 在项目根运行：`python .agents/gates/gate.py --ci`（合并前/CI，按 `base...HEAD` 判）；`python .agents/gates/gate.py --fast --staged`（pre-commit，M1/M8/M3，只判索引区）。
+ - `--staged` 的边界：**未 add 的工作区改动不拦**（草稿不该挡人）；**已 add 的受保护路径没有匹配契约 → `BLOCKED`**（拦在即将进入历史的那一刻）。CI 的 `pull_request` 仍按 `base...HEAD` 判。
++- 受保护面写在同一目录的 `protected.json`（本项目真实代码路径），**不是**脚手架默认的 `app/`；模块归属由蓝图 `paths:` 声明，不从文件名猜。
++- M8 受理闸：受保护改动对应的 `task.md` 必须有 `requirement_quote` / `user_problem` / `out_of_scope` / `acceptance_command` / `stop_conditions` 五个字段，缺项或占位符即 `BLOCKED`（只判 `rule_epoch>=4` 的新 run，旧证据不追溯）。
++- `--selftest`：用临时仓库证明 M1/M8 真的会拦，覆盖正例、无契约、字段缺失、占位符、模块不拥有该文件、旧 epoch 兼容六种情况；已接进 `verify.mjs`。
+ - `--scope` 默认 `project`：M2/M6 没有事件流时记 `NOT_RUN`，整体 `no_evidence`，退出 1。**项目仓库不得使用 `--scope suite`。**
+-- M4 需要版本权威：在 `.agents/SPEC.md` 里写 `version_authority: package.json`（或 `app/version.py`）。未声明时 M4 记 `NOT_RUN`（"项目未声明版本权威"），不会假装 PASS；套件仓库则要求版本声明恰好 1 处。
++- M4 需要版本权威：在 `.agents/SPEC.md` 里写 `version_authority: version.js`。未声明时 M4 记 `NOT_RUN`（"项目未声明版本权威"），不会假装 PASS；套件仓库则要求版本声明恰好 1 处。
+ - 提交点与合并点不同：pre-commit（`--staged`）在**尚未建立任务账本**时打印醒目提示但**不拦**（拦的是"没有契约的受保护改动"）；CI（`--ci`）对同样的 `no_evidence` **退出 1**（拦的是"没有证据的合并"）。
+ 
+ ## 账本长什么样
+@@ -43,8 +46,10 @@ python .agents/scripts/agent_workflow.py init artifacts/runs/<task_id> \
+ 
+ | 情况 | 结果 |
+ |---|---|
+-| 改动触及 `app/` `specs/` `data/` `AGENTS.md`，但没有 `Task:` trailer 或没有 `PLANNED` 事件 | M1 `BLOCKED` |
++| 改动触及受保护路径（`protected.json` 声明的 `server.js` `public/` `_dev/` `specs/` `data/` `AGENTS.md` 等），但没有 `Task:` trailer 或没有 `PLANNED` 事件 | M1 `BLOCKED` |
+ | 已 `git add` 的受保护路径没有匹配的 `PLANNED` 契约（pre-commit `--staged`） | M1 `BLOCKED` |
++| 契约声明的模块，其蓝图 `paths:` 不拥有改动的文件（含“拿文件名当模块名”的旧写法） | M1 `BLOCKED` |
++| 受理五字段缺一项，或值仍是 `<待填>` / `TBD` / `-` | M8 `BLOCKED` |
+ | `task.md` 在 `PLANNED` 之后被改写（契约摘要不符） | M1 `BLOCKED` |
+ | 有 `PASS` 事件但缺 `verdict.md` / `delivery.md`，或字段、摘要对不上 | M2 `BLOCKED` |
+ | `verdict` 说 FAIL 而事件流说 PASS；`evidence_status=NOT_RUN`；`not_run_count>0`；`max_severity` 为 P0/P1 | M2 `BLOCKED` |
+diff --git "a/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md" "b/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
+index c2dee25..aba1878 100644
+--- "a/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
++++ "b/.agents/archive/contracts/2026-11-03-\344\270\211\347\272\247\350\212\202\347\202\271.md"
+@@ -115,7 +115,7 @@ bump **Y**（0.4.13 → 0.5.0）：任务结构多一层，使用者能感知，
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` 走 A/B/C/D；只读代码与 e2e 断言，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `439e5de39605b8cd`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的三级节点行为）
++- 复核对象：树摘要 `1b67a03d6ffbca60`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的三级节点行为；2026-11-09 门禁改造只动 .agents/gates、.githooks、_dev/verify.mjs、specs/modules 与文档，未动 server.js/public，故按新树摘要重锚）
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B3、B5、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS），追认范围有边界——1.2 节「父阶段日期 = 子任务并集」不追认。
+ - 追认边界：
+diff --git "a/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md" "b/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
+index e0f9ccd..b7be423 100644
+--- "a/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
++++ "b/.agents/archive/contracts/2026-11-03-\344\270\213\346\264\276\350\207\252\347\224\261\351\200\211\346\213\251\344\270\216\347\237\245\346\203\205\344\272\272.md"
+@@ -142,7 +142,7 @@
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` A→B→C→D 过一遍；只读代码、跑 e2e、看界面截图，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `439e5de39605b8cd`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的下派自由选择与知情人行为）
++- 复核对象：树摘要 `1b67a03d6ffbca60`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败；本次改动只改子任务完成判权与上行汇总，未触及本契约描述的下派自由选择与知情人行为；2026-11-09 门禁改造只动 .agents/gates、.githooks、_dev/verify.mjs、specs/modules 与文档，未动 server.js/public，故按新树摘要重锚）
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B1、B3、B7、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS）
+ - 逐项：
+diff --git "a/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md" "b/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
+index 7f35aed..d890256 100644
+--- "a/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
++++ "b/.agents/archive/contracts/2026-11-04-\345\255\220\344\273\273\345\212\241\350\264\243\344\273\273\344\272\272\344\270\216\345\217\221\345\270\203\344\273\273\345\212\241.md"
+@@ -308,7 +308,7 @@ bump **Y**（0.6.2 → 0.7.0）：任务多一个发布人字段、所有权可
+ ## 3. 复核（**由没参与实现的人填**，自己填无效）
+ 
+ - 复核方式：新开一轮对话，按 `.agents/review-checklist.md` A→B→C→D 过一遍；只读代码、跑 e2e、看界面截图，不看实现者的解释。属 AI 复核而非人类独立复核，建议 lan 抽检。
+-- 复核对象：树摘要 `439e5de39605b8cd`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败）。**其中的「承接人可代勾任何一段」已被 TASK-20261109-subtask-upstream 取代**：完成只由该段责任人勾、向上汇总；派发、加入待办、知情人、发布任务等其余条款复核结论仍成立，新口径以 `specs/modules/server-api.md` / `app-ui.md` 为准
++- 复核对象：树摘要 `1b67a03d6ffbca60`（v0.8.5，`verify --full` 全绿，e2e 163 项 0 失败）。**其中的「承接人可代勾任何一段」已被 TASK-20261109-subtask-upstream 取代**：完成只由该段责任人勾、向上汇总；派发、加入待办、知情人、发布任务等其余条款复核结论仍成立，新口径以 `specs/modules/server-api.md` / `app-ui.md` 为准；2026-11-09 门禁改造只动 .agents/gates、.githooks、_dev/verify.mjs、specs/modules 与文档，未动 server.js/public，故按新树摘要重锚
+ - 逐条对照：`.agents/review-checklist.md` 第 A1-A4、B1、B3、B5、B7、B8、B9、C1、D1-D4 条
+ - 结论：通过（PASS）
+ - 四条重点（`issues.md` #45 点名的）：
+diff --git a/.agents/gates/gate.py b/.agents/gates/gate.py
+index b536ebc..bc3512b 100644
+--- a/.agents/gates/gate.py
++++ b/.agents/gates/gate.py
+@@ -1,4 +1,4 @@
+-"""Deterministic gates M1-M6.
++"""Deterministic gates M1-M8.
+ 
+ Pre-commit:  python gates/gate.py --fast --staged --repo .
+ CI:          python gates/gate.py --ci --repo .
+@@ -15,16 +15,26 @@ Exit codes: 0 = all blocking checks pass, 1 = blocked, 2 = usage/error.
+ from __future__ import annotations
+ 
+ import argparse
++import fnmatch
+ import hashlib
+ import json
+ import os
+ import re
++import shutil
+ import subprocess
+ import sys
++import tempfile
+ from pathlib import Path
+ 
+-PROTECTED_PREFIXES = ("app/", "specs/", "data/")
+-PROTECTED_FILES = ("AGENTS.md",)
++# 受保护面是项目事实，不抄脚手架默认值：路径写在 `.agents/gates/protected.json`，
++# 这里只留判定规则。旧默认值 `app/` 与本项目实际代码（server.js / public/）无关，
++# 于是「改一行产品代码」从来不会触发 M1——这正是「一句需求就开工」溜过去的那道缝。
++PROTECTED_CONFIG = ".agents/gates/protected.json"
++FALLBACK_RULES = {
++    "files": ("AGENTS.md",),
++    "prefixes": ("specs/", "data/"),
++    "globs": (),
++}
+ 
+ # Runs record the gate rules in force when they were created. Enhanced checks
+ # (M2 delivery/verdict reconciliation) apply only to RULE_EPOCH and later; older
+@@ -79,8 +89,45 @@ def trailer_value(message: str, key: str) -> str | None:
+     return match.group(1) if match else None
+ 
+ 
+-def is_protected(path: str) -> bool:
+-    return path.startswith(PROTECTED_PREFIXES) or path in PROTECTED_FILES
++def is_protected(path: str, rules: dict[str, tuple[str, ...]] | None = None) -> bool:
++    """Case- and separator-insensitive: `Server.js` is the same file as `server.js`.
++
++    Git on Windows is usually case-insensitive (core.ignorecase), so a path that
++    differs only in case still writes the same working tree file. Matching it
++    literally let that spelling slip past the protected surface (reviewer P3).
++    """
++    rules = rules or FALLBACK_RULES
++    normalised = path.replace("\\", "/").casefold()
++    return (
++        normalised in {item.replace("\\", "/").casefold() for item in rules["files"]}
++        or any(
++            normalised.startswith(prefix.replace("\\", "/").casefold())
++            for prefix in rules["prefixes"]
++        )
++        or any(
++            fnmatch.fnmatchcase(normalised, pattern.replace("\\", "/").casefold())
++            for pattern in rules["globs"]
++        )
++    )
++
++
++def protected_rules(repo: Path) -> dict[str, tuple[str, ...]]:
++    """Load the project's protected surface.
++
++    Fail closed: a missing config is not "nothing is protected". Deleting it is
++    itself a protected change, so a genuine project can always restore it.
++    """
++    path = repo / PROTECTED_CONFIG
++    if not path.is_file():
++        raise RuntimeError(
++            f"{PROTECTED_CONFIG} 缺失：受保护面是项目事实，缺了就不判定，"
++            "恢复该文件后再提交"
++        )
++    data = json.loads(path.read_text(encoding="utf-8"))
++    return {
++        key: tuple(str(item) for item in data.get(key, ()))
++        for key in ("files", "prefixes", "globs")
++    }
+ 
+ 
+ def sha256_file(path: Path) -> str:
+@@ -92,16 +139,17 @@ def sha256_file(path: Path) -> str:
+ 
+ 
+ def parse_text(text: str) -> dict[str, str]:
+-    """Parse the leading `key: value` block of a task.md / verdict.md.
++    """Collect `key: value` machine fields from anywhere in the document.
+ 
+-    Only snake_case keys count as fields: a contract may start with prose
+-    (验收标准) that contains colons, and prose must not poison the machine header.
++    Only snake_case keys count: a contract may start with prose (验收标准) that
++    contains colons, and prose must not poison the machine header. Scanning the
++    whole file instead of stopping at the first blank line is deliberate — the
++    real template keeps 元信息 and 受理 in two blocks, and a gate that only read
++    the first one would demand five fields it never sees (reviewer finding P1).
+     """
+     fields: dict[str, str] = {}
+     for line in text.splitlines():
+-        if line.startswith("#") or not line.strip():
+-            if fields:
+-                break
++        if line.startswith("#"):
+             continue
+         key, sep, value = line.partition(":")
+         if not sep:
+@@ -314,6 +362,7 @@ VERDICT_TOLERATED_SEVERITIES = ("P2", "P3")
+ 
+ 
+ MODULE_SEPARATOR = re.compile(r"[,\s]+")
++PATHS_LINE = re.compile(r"^paths\s*:\s*(.+)$", re.MULTILINE)
+ 
+ 
+ def declared_modules(fields: dict[str, str]) -> set[str]:
+@@ -326,14 +375,128 @@ def declared_modules(fields: dict[str, str]) -> set[str]:
+     return names - {"none"}
+ 
+ 
+-def module_intersects(names: set[str], paths: list[str]) -> bool:
+-    """A contract covers a path only when the file name names a declared module.
++def _rev_text(repo: Path, rev: str, relative: str) -> str | None:
++    result = subprocess.run(
++        ["git", "show", f"{rev}:{relative}"],
++        cwd=str(repo),
++        capture_output=True,
++        text=True,
++        encoding="utf-8",
++    )
++    return result.stdout if result.returncode == 0 else None
++
++
++def blueprint_paths(repo: Path, name: str, staged: bool = False) -> list[str]:
++    """File ownership declared by the blueprint itself (`paths: a, b/`).
++
++    Ownership used to be guessed from the file name (`server.js` -> module
++    `server`), which both missed real modules (`server-api` owns `server.js`)
++    and invented false ones. The blueprint now says what it owns.
+ 
+-    `specs/modules/excel-generator.md` and `app/utils/excel_generator.py` both name
+-    the module `excel_generator`; an unrelated module never matches by accident.
++    The text is read from the index (pre-commit) or from HEAD (CI), not from the
++    worktree: otherwise an unstaged blueprint edit would silently widen what a
++    contract may touch, and CI would never check ownership at all. A blueprint
++    that is in neither place declares nothing — falling back to the worktree let
++    an untracked blueprint with `paths: server.js` own any file at the moment it
++    was needed (reviewer F3, attempt 2).
+     """
++    names = (f"{name}.md", f"{name.replace('_', '-')}.md")
++    for filename in names:
++        relative = f"specs/modules/{filename}"
++        text = (
++            _index_text(repo, relative) if staged else _rev_text(repo, "HEAD", relative)
++        )
++        if text is None:
++            continue
++        match = PATHS_LINE.search(text)
++        if not match:
++            return []
++        raw = match.group(1).split("#")[0]
++        items = [item.strip().strip("`") for item in MODULE_SEPARATOR.split(raw) if item.strip()]
++        # `paths: *` 一条就能认领整棵受保护面，等于绕过「谁拥有这个文件」的讨论；
++        # 蓝图只声明具体文件/目录前缀，通配符一律当没声明（fail closed）。
++        return [item for item in items if "*" not in item and "?" not in item]
++    return []
++
++
++def path_covered(pattern: str, path: str) -> bool:
++    pattern, path = pattern.casefold(), path.casefold()
++    if pattern.endswith("/"):
++        return path.startswith(pattern)
++    return path == pattern or fnmatch.fnmatchcase(path, pattern)
++
++
++def module_intersects(
++    repo: Path, names: set[str], paths: list[str], staged: bool = False
++) -> bool:
++    """A contract covers a path when a declared module's blueprint owns it."""
+     return any(
+-        Path(path).stem.replace("-", "_").casefold() in names for path in paths
++        path_covered(pattern, path)
++        for name in names
++        for pattern in blueprint_paths(repo, name, staged)
++        for path in paths
++    )
++
++
++def uncovered_paths(
++    repo: Path, names: set[str], paths: list[str], staged: bool = False
++) -> list[str]:
++    """Touched paths that no declared module owns.
++
++    M1 used to accept a contract as soon as *one* path matched, so declaring
++    `app-ui` also let you rewrite `server.js` in the same commit (reviewer P2).
++    Every protected path in the change must be owned by something declared.
++    """
++    patterns = [
++        pattern
++        for name in names
++        for pattern in blueprint_paths(repo, name, staged)
++    ]
++    return [path for path in paths if not any(path_covered(p, path) for p in patterns)]
++
++
++def select_staged_contract(
++    repo: Path, touched: list[str], task: str | None
++) -> tuple[tuple[str, dict[str, str]] | None, str]:
++    """The single contract that owns the staged protected change, or why not."""
++    contracts = staged_contracts(repo)
++    if not contracts:
++        return None, (
++            f"protected staged change without contract (no matching PLANNED "
++            f"contract_digest): {touched[:5]}"
++        )
++    evaluated = [
++        (contract_task, fields, uncovered_paths(repo, declared_modules(fields), touched, True))
++        for contract_task, fields in contracts
++    ]
++    candidates = [
++        (contract_task, fields)
++        for contract_task, fields, missing in evaluated
++        if not missing
++    ]
++    if task:
++        chosen = next((item for item in candidates if item[0] == task), None)
++        if chosen is None:
++            missing = next(
++                (missing for outline, _, missing in evaluated if outline == task), touched
++            )
++            return None, (
++                f"--task {task} does not cover staged protected paths {missing[:5]} "
++                "(every protected path must be owned by a declared module)"
++            )
++        return chosen, ""
++    if len(candidates) == 1:
++        return candidates[0], ""
++    if candidates:
++        return None, (
++            f"ambiguous staged contract for {touched[:5]}: "
++            f"{[item[0] for item in candidates]} (pass --task <task_id>; "
++            "the gate does not guess)"
++        )
++    missing = min((item[2] for item in evaluated), key=len, default=touched)
++    return None, (
++        f"protected staged change without contract: no declared module owns "
++        f"{missing[:5]} (在模块蓝图里补 `paths:` 或修正 modules:)"
+     )
+ 
+ 
+@@ -344,7 +507,8 @@ def check_m1(
+     if staged and not paths:
+         # An empty index is not a pass: nothing was judged.
+         return None, "no staged changes: nothing evaluated"
+-    touched = [path for path in paths if is_protected(path)]
++    rules = protected_rules(repo)
++    touched = [path for path in paths if is_protected(path, rules)]
+     if not touched:
+         # Nothing to admit: this is a complete check, not a skipped one.
+         detail = "no protected path changed"
+@@ -356,37 +520,9 @@ def check_m1(
+         # demand. Enforcing here would wall off every first-time project.
+         return None, "NOT_RUN: 本仓库尚未采纳任务账本，M1 不执法"
+     if staged:
+-        contracts = staged_contracts(repo)
+-        if not contracts:
+-            return False, (
+-                f"protected staged change without contract (no matching PLANNED "
+-                f"contract_digest): {touched[:5]}"
+-            )
+-        candidates = [
+-            (contract_task, fields)
+-            for contract_task, fields in contracts
+-            if module_intersects(declared_modules(fields), touched)
+-        ]
+-        if task:
+-            chosen = next((item for item in candidates if item[0] == task), None)
+-            if chosen is None:
+-                return False, (
+-                    f"--task {task} does not cover staged protected paths {touched[:5]} "
+-                    "(declared modules must intersect the changed files)"
+-                )
+-        elif len(candidates) == 1:
+-            chosen = candidates[0]
+-        elif candidates:
+-            return False, (
+-                f"ambiguous staged contract for {touched[:5]}: "
+-                f"{[item[0] for item in candidates]} (pass --task <task_id>; "
+-                "the gate does not guess)"
+-            )
+-        else:
+-            return False, (
+-                f"protected staged change without contract (no matching PLANNED "
+-                f"contract_digest): {touched[:5]}"
+-            )
++        chosen, reason = select_staged_contract(repo, touched, task)
++        if chosen is None:
++            return False, reason
+         task_id, fields = chosen
+         grade = fields.get("gate_level", "")
+         if grade not in GRADE_RANK:
+@@ -400,11 +536,18 @@ def check_m1(
+     task = task_file(repo, task_id)
+     if not task.is_file():
+         return False, f"task.md missing for {task_id}"
+-    grade = parse_record(task).get("gate_level", "")
++    fields = parse_record(task)
++    grade = fields.get("gate_level", "")
+     if grade not in GRADE_RANK:
+         return False, f"task.md has invalid gate_level={grade!r}"
+     if GRADE_RANK[grade] == 0:
+         return False, f"{task_id} declared G0 but touches contract-face paths: {touched[:5]}"
++    uncovered = uncovered_paths(repo, declared_modules(fields), touched, staged=False)
++    if uncovered:
++        return False, (
++            f"{task_id} 声明的模块不拥有 {uncovered[:5]}"
++            "（每个受保护路径都要有归属；在模块蓝图补 `paths:`）"
++        )
+     events = read_events(repo)
+     planned = [event for event in events if event.get("task") == task_id and event.get("to") == "PLANNED"]
+     if not planned:
+@@ -424,6 +567,125 @@ def check_m1(
+     return True, f"{task_id} ({grade}) admitted, {len(touched)} protected paths"
+ 
+ 
++INTAKE_FIELDS = (
++    "requirement_quote",
++    "user_problem",
++    "out_of_scope",
++    "acceptance_command",
++    "stop_conditions",
++)
++# 受理闸生效的 run 代次：旧 run 保持自己的 epoch，不追溯（与 M2 的 RULE_EPOCH 同理）。
++INTAKE_EPOCH = 4
++PLACEHOLDER_VALUE = re.compile(
++    r"^(<.*>|…+|\.{3})$"
++    r"|(待填|待补|待定|待确认|稍后|回头看|回头再说|以后再说|看情况|暂无|未定"
++    r"|\btbd\b|\btodo\b|(?<![a-z])n/a(?![a-z]))",
++    re.IGNORECASE,
++)
++# 词表只是快速筛子：自然语言列不完（复核 attempt 2/3 的 F2 用「以后再补」溜过去）。
++# 真正的判定靠形状——原话要带引号、验收命令要像命令且写明期望结果、
++# 「不做什么」要含排除词、「何时停」要含停止/上报词，其余字段要有实质内容。
++INTAKE_MIN_SUBSTANCE = {
++    "requirement_quote": 6,
++    "user_problem": 8,
++    "out_of_scope": 3,
++    "acceptance_command": 8,
++    "stop_conditions": 5,
++}
++QUOTE_MARK = re.compile(r"[「『\"'“”‘’`]")
++COMMAND_SHAPE = re.compile(
++    r"(python3?|node|npm|npx|git|pwsh|powershell|bash|\./|\.\\)"
++    r"|\b[A-Za-z0-9_./-]+\.(mjs|js|py|bat|cmd|sh)\b",
++    re.IGNORECASE,
++)
++EXPECTED_RESULT = re.compile(
++    r"(退出码|exit\s*code|exit=|\bexit\s+\d|返回\s*0|期望\s*0|期望.*(通过|成功))",
++    re.IGNORECASE,
++)
++SCOPE_MARKER = re.compile(r"(不|无|排除|仅|只|暂缓|暂不|禁止)")
++STOP_MARKER = re.compile(r"(停|中止|终止|上报|回退|放弃|提问|问人|中断|不继续|blocked)", re.IGNORECASE)
++SUBSTANCE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]")
++
++
++def contract_epoch(repo: Path, task_id: str) -> int:
++    epochs = [
++        int(event.get("rule_epoch") or 0)
++        for event in read_events(repo)
++        if event.get("task") == task_id and event.get("to") == "PLANNED"
++    ]
++    return max(epochs) if epochs else 0
++
++
++def intake_problems(fields: dict[str, str]) -> list[str]:
++    problems: list[str] = []
++    for name in INTAKE_FIELDS:
++        value = (fields.get(name) or "").strip()
++        if not value:
++            problems.append(f"{name} 缺失")
++            continue
++        if value.casefold() in {"-", "none", "null", "n/a", "na", "—", "–"} or PLACEHOLDER_VALUE.search(value):
++            problems.append(f"{name} 仍是占位符 {value!r}")
++            continue
++        if len(SUBSTANCE.findall(value)) < INTAKE_MIN_SUBSTANCE[name]:
++            problems.append(f"{name} 没有实质内容 {value!r}")
++            continue
++        if name == "requirement_quote" and not QUOTE_MARK.search(value):
++            problems.append(f"{name} 必须引用用户原话（带引号）{value!r}")
++            continue
++        if name == "acceptance_command" and not (
++            COMMAND_SHAPE.search(value) and EXPECTED_RESULT.search(value)
++        ):
++            problems.append(f"{name} 必须是一条可执行命令 + 期望结果 {value!r}")
++            continue
++        if name == "out_of_scope" and not SCOPE_MARKER.search(value):
++            problems.append(f"{name} 要说清不做什么（含「不/无/仅/只/暂缓」）{value!r}")
++            continue
++        if name == "stop_conditions" and not STOP_MARKER.search(value):
++            problems.append(f"{name} 要说清何时停（含「停/中止/上报/回退」）{value!r}")
++    return problems
++
++
++def check_m8(
++    repo: Path, base: str, staged: bool = False, task: str | None = None
++) -> tuple[bool | None, str]:
++    """受理闸：一句话可以开工，但五个字段必须先写清。
++
++    用户原话 / 真实场景 / 不做什么 / 验收命令 / 停条件——缺一项或写占位符
++    就 BLOCKED。它拦的不是「一句话需求」，而是「一句话之后什么都没问就动手」。
++    """
++    paths = changed_paths(repo, base, staged)
++    if staged and not paths:
++        return None, "no staged changes: nothing evaluated"
++    touched = [path for path in paths if is_protected(path, protected_rules(repo))]
++    if not touched:
++        return True, "no protected path changed"
++    if not run_directories(repo):
++        return None, "NOT_RUN: 本仓库尚未采纳任务账本"
++    if staged:
++        chosen, reason = select_staged_contract(repo, touched, task)
++        if chosen is None:
++            return None, f"NOT_RUN: 没有可判定的契约（M1 已阻断：{reason}）"
++        task_id, fields = chosen
++    else:
++        task_id = trailer_value(commit_message(repo), "Task")
++        if not task_id:
++            return None, "NOT_RUN: 提交信息没有 `Task:` trailer（M1 已阻断）"
++        fields = parse_record(task_file(repo, task_id))
++    epoch = contract_epoch(repo, task_id)
++    if epoch < INTAKE_EPOCH:
++        return None, (
++            f"NOT_RUN: {task_id} 建于 rule_epoch {epoch} < {INTAKE_EPOCH}；"
++            "规则升级不追溯旧契约"
++        )
++    problems = intake_problems(fields)
++    if problems:
++        return False, (
++            f"{task_id} 受理信息不完整：{'；'.join(problems)}"
++            "（先写清用户原话 / 真实场景 / 不做什么 / 怎么算成 / 何时停，再开工）"
++        )
++    return True, f"{task_id} 受理五字段齐备"
++
++
+ def check_m2(repo: Path) -> tuple[bool | None, str]:
+     events = read_events(repo)
+     if not events:
+@@ -544,7 +806,7 @@ def check_m3(repo: Path, base: str, staged: bool = False) -> tuple[bool | None,
+     paths = changed_paths(repo, base, staged)
+     if staged and not paths:
+         return None, "no staged changes: nothing evaluated"
+-    touched = [path for path in paths if is_protected(path)]
++    touched = [path for path in paths if is_protected(path, protected_rules(repo))]
+     if not touched:
+         detail = "no protected path changed"
+         if staged:
+@@ -704,6 +966,7 @@ def run(args: argparse.Namespace) -> dict:
+     checks: list[dict] = []
+     plan = [
+         ("M1", lambda: check_m1(repo, base, staged, getattr(args, "task", None))),
++        ("M8", lambda: check_m8(repo, base, staged, getattr(args, "task", None))),
+         ("M3", lambda: check_m3(repo, base, staged)),
+     ]
+     if args.ci:
+@@ -754,11 +1017,367 @@ def run(args: argparse.Namespace) -> dict:
+     return payload
+ 
+ 
++SELFTEST_TASK = "TASK-SELFTEST-gate"
++SELFTEST_FIELDS = {
++    "requirement_quote": "用户说「改一行代码也要先有契约」",
++    "user_problem": "改 server.js 时门禁不亮，一句话需求可以直接开工",
++    "out_of_scope": "不接 M9 契约先行；不改产品行为",
++    "acceptance_command": "python .agents/gates/gate.py --fast --staged --repo . 期望退出码 0",
++    "stop_conditions": "发现必须改产品行为才能继续时停下上报",
++}
++
++
++def _selftest_git(repo: Path, *args: str) -> None:
++    result = subprocess.run(
++        ["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8"
++    )
++    if result.returncode != 0:
++        raise RuntimeError(f"selftest git {' '.join(args)} failed: {result.stderr.strip()}")
++
++
++def _selftest_events(repo: Path, task_id: str, digest: str, epoch: int) -> None:
++    event = {
++        "seq": 1,
++        "previous_hash": GENESIS_HASH,
++        "event_hash": "",
++        "state": "PLANNED",
++        "role": "Planner",
++        "metadata": {
++            "task_id": task_id,
++            "contract_version": 1,
++            "base_revision": "selftest-base",
++            "rule_epoch": epoch,
++            "contract_digest": digest,
++        },
++        "evidence": {},
++    }
++    event["event_hash"] = event_hash(event)
++    (repo / RUNS / task_id / EVENTS_FILE).write_text(
++        json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
++    )
++
++
++def _selftest_contract(
++    repo: Path,
++    task_id: str,
++    modules: str = "server-api",
++    epoch: int = 4,
++    fields: dict[str, str] | None = None,
++    keep_digest: bool = False,
++    sections: bool = False,
++) -> None:
++    values = dict(SELFTEST_FIELDS if epoch >= INTAKE_EPOCH else {})
++    values.update({"task_id": task_id, "contract_version": "1", "gate_level": "G2",
++                   "status": "PLANNED", "modules": modules, "blueprint_impact": "none"})
++    values.update(fields or {})
++    task = repo / RUNS / task_id / "task.md"
++    task.parent.mkdir(parents=True, exist_ok=True)
++    lines: list[str] = []
++    for key, value in values.items():
++        if sections and key == INTAKE_FIELDS[0]:
++            lines.extend(["", "## 受理", ""])
++        lines.append(f"{key}: {value}")
++    task.write_text("\n".join(lines) + "\n", encoding="utf-8")
++    digest = sha256_file(task)
++    if keep_digest:
++        recorded = json.loads((repo / RUNS / task_id / EVENTS_FILE).read_text(encoding="utf-8"))
++        digest = recorded["metadata"]["contract_digest"]
++    _selftest_events(repo, task_id, digest, epoch)
++
++
++def _selftest_repo(
++    root: Path,
++    modules: str = "server-api",
++    epoch: int = 4,
++    fields: dict[str, str] | None = None,
++    sections: bool = False,
++) -> None:
++    (root / ".agents" / "gates").mkdir(parents=True)
++    shutil.copy(
++        Path(__file__).resolve().parent / "protected.json",
++        root / ".agents" / "gates" / "protected.json",
++    )
++    module_dir = root / "specs" / "modules"
++    module_dir.mkdir(parents=True)
++    (module_dir / "server-api.md").write_text(
++        "# MOD-server-api\n\npaths: server.js\n\n## 变更历史\n"
++        f"| task_id |\n|---|\n| {SELFTEST_TASK} |\n",
++        encoding="utf-8",
++    )
++    (module_dir / "server.md").write_text(
++        "# MOD-server\n\npaths: version.js\n", encoding="utf-8"
++    )
++    (module_dir / "app-ui.md").write_text(
++        "# MOD-app-ui\n\npaths: public/\n", encoding="utf-8"
++    )
++    (root / "public").mkdir()
++    (root / "public" / "app.js").write_text("// ui\n", encoding="utf-8")
++    (root / "server.js").write_text("// v1\n", encoding="utf-8")
++    _selftest_contract(
++        root, SELFTEST_TASK, modules=modules, epoch=epoch, fields=fields, sections=sections
++    )
++    _selftest_git(root, "init", "-q", "-b", "main")
++    _selftest_git(root, "config", "user.email", "selftest@example.invalid")
++    _selftest_git(root, "config", "user.name", "selftest")
++    _selftest_git(root, "add", ".")
++    _selftest_git(root, "commit", "-q", "-m", "selftest base")
++
++
++def _selftest_run(root: Path) -> tuple[int, dict[str, dict]]:
++    (root / "server.js").write_text("// v2\n", encoding="utf-8")
++    _selftest_git(root, "add", "server.js")
++    result = subprocess.run(
++        [sys.executable, str(Path(__file__).resolve()), "--fast", "--staged",
++         "--repo", str(root)],
++        capture_output=True, text=True, encoding="utf-8",
++    )
++    try:
++        payload = json.loads(result.stdout or "{}")
++    except json.JSONDecodeError:
++        payload = {}
++    return result.returncode, {item["id"]: item for item in payload.get("checks", [])}
++
++
++def run_selftest() -> int:
++    """用临时仓库把 M1/M8 的拦与不拦都跑一遍。
++
++    门禁自己也需要反例：只宣称「会拦」没有意义，要有一条命令能证明它真的红过。
++    每个用例都是独立临时仓库，不动当前工作区。
++    """
++    def expect(name, case):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            problem = ""
++            try:
++                verify = case(root)
++                code, checks = _selftest_run(root)
++                problem = verify(root, code, checks)
++            except Exception as exc:  # selftest must report, not explode
++                problem = f"用例执行出错：{exc}"
++        if problem:
++            print(f"[失败] {name}：{problem}")
++            return 1
++        print(f"[通过] {name}")
++        return 0
++
++    def cases():
++        def admitted(root):
++            _selftest_repo(root)
++
++            def verify(_root, code, checks):
++                if code != 0:
++                    return f"期望放行，实际退出 {code}：{checks.get('M1', {}).get('detail')}"
++                if checks.get("M1", {}).get("state") != "PASS":
++                    return f"M1 应 PASS，实际 {checks.get('M1')}"
++                if checks.get("M8", {}).get("state") != "PASS":
++                    return f"M8 应 PASS，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def drifted(root):
++            _selftest_repo(root)
++            _selftest_contract(root, SELFTEST_TASK, fields={"stop_conditions": "改了但没同步账本"},
++                               keep_digest=True)
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M1", {}).get("state") != "BLOCKED":
++                    return f"契约摘要漂移应被 M1 拦，实际 {checks.get('M1')}"
++                return ""
++            return verify
++
++        def missing_field(root):
++            _selftest_repo(root, fields={"stop_conditions": ""})
++
++            def verify(_root, code, checks):
++                if checks.get("M1", {}).get("state") != "PASS":
++                    return f"本用例只想验证 M8，M1 却先红了：{checks.get('M1')}"
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"停条件为空应被 M8 拦，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def placeholder(root):
++            _selftest_repo(root, fields={"out_of_scope": "<待填>"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"占位符应被 M8 拦，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def stem_guess(root):
++            _selftest_repo(root, modules="server")
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M1", {}).get("state") != "BLOCKED":
++                    return f"模块不拥有 server.js 时应拦（不再按文件名猜），实际 {checks.get('M1')}"
++                return ""
++            return verify
++
++        def sectioned(root):
++            # 真实模板把受理字段放在第二个小节里；门禁只读第一段的实现曾在这里全绿（P1）。
++            _selftest_repo(root, sections=True)
++
++            def verify(_root, code, checks):
++                if code != 0:
++                    return f"受理字段写在第二个小节时应能读到，实际退出 {code}：{checks.get('M8')}"
++                if checks.get("M8", {}).get("state") != "PASS":
++                    return f"跨小节读取失败：{checks.get('M8')}"
++                return ""
++            return verify
++
++        def partial_cover(root):
++            # 只声明 app-ui（paths: public/），却改了 server.js —— 旧实现判「有交集」就放行。
++            _selftest_repo(root, modules="app-ui")
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M1", {}).get("state") != "BLOCKED":
++                    return f"未覆盖的受保护路径应拦，实际 {checks.get('M1')}"
++                return ""
++            return verify
++
++        def weak_placeholder(root):
++            _selftest_repo(root, fields={"out_of_scope": "TBD 稍后补"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"「TBD 稍后补」也应算占位符，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def placeholder_variants(root):
++            # 复核 attempt 2 的 F2：「待定，回头再补」「N/A」都能溜过上一版正则。
++            _selftest_repo(root, fields={"out_of_scope": "待定，回头再补"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"「待定，回头再补」应算占位符，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def untracked_blueprint(root):
++            # F3：蓝图不在索引/HEAD 时旧实现回退读工作区，于是临时写一份就能扩权。
++            _selftest_repo(root, modules="ops", epoch=4)
++            blueprint = root / "specs" / "modules" / "ops.md"
++            blueprint.parent.mkdir(parents=True, exist_ok=True)
++            blueprint.write_text("# MOD-ops\n\npaths: server.js\n", encoding="utf-8")
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M1", {}).get("state") != "BLOCKED":
++                    return f"未跟踪的蓝图不应扩权，实际 {checks.get('M1')}"
++                return ""
++            return verify
++
++        def scope_word_salad(root):
++            # 复核 attempt 3：词表列的「以后再补」不算占位符，但「不做什么」必须含排除词。
++            _selftest_repo(root, fields={"out_of_scope": "以后再补"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"「以后再补」应被形状规则拦下，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def command_shape(root):
++            # 验收命令必须像命令，并写明期望结果。
++            _selftest_repo(root, fields={"acceptance_command": "python .agents/selftest.py 看看"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"没有期望结果的命令应拦，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def quote_required(root):
++            # 「用户原话」必须真的是引用。
++            _selftest_repo(root, fields={"requirement_quote": "用户要求引入门禁系统"})
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M8", {}).get("state") != "BLOCKED":
++                    return f"没有引号的原话应拦，实际 {checks.get('M8')}"
++                return ""
++            return verify
++
++        def wildcard_blueprint(root):
++            # `paths: *` 等于认领整棵树，必须当没声明。
++            _selftest_repo(root)
++            (root / "specs" / "modules" / "server-api.md").write_text(
++                "# MOD-server-api\n\npaths: *\n", encoding="utf-8"
++            )
++            _selftest_git(root, "add", "specs/modules/server-api.md")
++
++            def verify(_root, code, checks):
++                if code == 0 or checks.get("M1", {}).get("state") != "BLOCKED":
++                    return f"通配符蓝图不应认领 server.js，实际 {checks.get('M1')}"
++                return ""
++            return verify
++
++        def case_insensitive(root):
++            # F4：Windows 上 Server.js 和 server.js 是同一个文件，判定不能大小写敏感。
++            _selftest_repo(root)
++
++            def verify(_root, code, checks):
++                rules = protected_rules(root)
++                if not is_protected("Server.js", rules):
++                    return "大小写变体应该仍在受保护面内"
++                if not path_covered("server.js", "Server.js"):
++                    return "归属判定应大小写不敏感"
++                if code != 0:
++                    return f"本用例仍是正例，期望放行，实际 {code}"
++                return ""
++            return verify
++
++        def legacy_epoch(root):
++            _selftest_repo(root, epoch=3, fields={})
++
++            def verify(_root, code, checks):
++                if checks.get("M1", {}).get("state") != "PASS":
++                    return f"旧 run 的 M1 应放行，实际 {checks.get('M1')}"
++                if checks.get("M8", {}).get("state") != "NOT_RUN":
++                    return f"旧 run 的 M8 应 NOT_RUN，实际 {checks.get('M8')}"
++                if code != 0:
++                    return f"pre-commit 对旧 run 不应拦，实际退出 {code}"
++                return ""
++            return verify
++
++        return [
++            ("正例：server-api 的 paths 覆盖 server.js → 放行", admitted),
++            ("反例：契约摘要漂移（等于没有契约）→ M1 拦", drifted),
++            ("反例：停条件为空 → M8 拦（M1 仍 PASS）", missing_field),
++            ("反例：范围外写 <待填> → M8 拦", placeholder),
++            ("反例：模块不拥有该文件（文件名不再当模块名）→ M1 拦", stem_guess),
++            ("反例：只覆盖一部分受保护路径 → M1 拦", partial_cover),
++            ("反例：范围外写「TBD 稍后补」→ M8 拦", weak_placeholder),
++            ("反例：范围外写「待定，回头再补」→ M8 拦", placeholder_variants),
++            ("反例：范围外写「以后再补」（无排除词）→ M8 拦", scope_word_salad),
++            ("反例：验收命令没有期望结果 → M8 拦", command_shape),
++            ("反例：原话没有引号 → M8 拦", quote_required),
++            ("反例：蓝图写 `paths: *` 不得认领整棵树 → M1 拦", wildcard_blueprint),
++            ("反例：蓝图不在索引/HEAD 时不得靠工作区扩权 → M1 拦", untracked_blueprint),
++            ("正例：Server.js 大小写变体仍在受保护面内", case_insensitive),
++            ("正例：受理字段写在第二个小节也能读到", sectioned),
++            ("兼容：rule_epoch<4 的旧 run 不追接受理字段", legacy_epoch),
++        ]
++
++    failed = 0
++    total = 0
++    for name, check in cases():
++        total += 1
++        failed += expect(name, check)
++    print(f"\n{'通过' if not failed else '失败'}：{total - failed}/{total} 个用例符合预期")
++    return 1 if failed else 0
++
++
+ def build_parser() -> argparse.ArgumentParser:
+     parser = argparse.ArgumentParser(description=__doc__)
+     mode = parser.add_mutually_exclusive_group()
+-    mode.add_argument("--fast", action="store_true", help="pre-commit subset (M1/M3)")
+-    mode.add_argument("--ci", action="store_true", help="full set (M1-M6)")
++    mode.add_argument("--fast", action="store_true", help="pre-commit subset (M1/M8/M3)")
++    mode.add_argument("--ci", action="store_true", help="full set (M1-M8)")
++    mode.add_argument(
++        "--selftest",
++        action="store_true",
++        help="用临时仓库证明 M1/M8 真的会拦（不判当前仓库）",
++    )
+     parser.add_argument("--repo", default=".")
+     parser.add_argument("--base", default=None)
+     parser.add_argument(
+@@ -795,6 +1414,8 @@ def exit_code(payload: dict) -> int:
+ 
+ def main(argv: list[str] | None = None) -> int:
+     args = build_parser().parse_args(argv)
++    if args.selftest:
++        return run_selftest()
+     payload = run(args)
+     payload["exit"] = exit_code(payload)
+     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+diff --git a/.agents/gates/protected.json b/.agents/gates/protected.json
+new file mode 100644
+index 0000000..362f0a3
+--- /dev/null
++++ b/.agents/gates/protected.json
+@@ -0,0 +1,23 @@
++{
++  "_comment": "受保护面：改动会改变运行行为或治理规则的文件。这里是最小可信集，抄脚手架默认值会漏掉真代码。新增受保护文件时必须同时给它在某个模块蓝图里写 paths:，否则 M1 会以「没有归属」拦截。",
++  "files": [
++    "server.js",
++    "version.js",
++    "import-emp.js",
++    "AGENTS.md",
++    ".agents/SPEC.md"
++  ],
++  "prefixes": [
++    "public/",
++    "_dev/",
++    "specs/",
++    "data/",
++    ".agents/templates/",
++    ".agents/gates/",
++    ".agents/scripts/",
++    ".agents/schemas/",
++    ".githooks/",
++    ".github/workflows/"
++  ],
++  "globs": ["*.bat"]
++}
+diff --git a/.agents/review-checklist.md b/.agents/review-checklist.md
+index a76a250..ebb381c 100644
+--- a/.agents/review-checklist.md
++++ b/.agents/review-checklist.md
+@@ -26,6 +26,7 @@
+ | B8 | **界面说不说得清「我是谁」** | 打开每个新改的输入区，逐行问一句：这一行是阶段还是子任务？加了之后落到哪里？选这个人会发生什么？**答不上来就是没做完**，不管断言多绿。两个长得一样的框并排出现，一律算缺陷（#48） |
+ | B9 | **同一件事的能力在各入口一致吗** | 新建弹窗能做的，详情页能不能做？（#47：弹窗有「谁做」，详情页没有，用户当场卡住）同一个动作如果两处各写一份 UI，按「迟早会漏」处理 |
+ | B10 | **点这一下，用户接下来想干什么** | 对每个可点的元素问一句：人为什么点它？点完他要去哪儿？**点完落到「下一步动作」那里，而不是落到「说明这是什么」那里**。（#61：日历上点一条活直接弹整页详情，而人多半是想改状态——把人从日历赶走，再让他自己找路回来）顺手再看：这一下点完，有没有别的东西替他做决定、把他刚点开的东西冲掉 |
++| B11 | **可见界面改动留没留证据** | 只要动了界面，就必须留截图（或录屏）并逐条勾 B8-B10；只有一句「我走查过」不算。截图放 `artifacts/runs/<task_id>/walkthrough/`，verdict 里写清看了哪几屏、哪一屏没过 |
+ 
+ ## C. 证据是不是真的
+ 
+diff --git a/.agents/schemas/task.json b/.agents/schemas/task.json
+index 667d0db..4b7d97a 100644
+--- a/.agents/schemas/task.json
++++ b/.agents/schemas/task.json
+@@ -9,7 +9,12 @@
+     "gate_level",
+     "status",
+     "owner",
+-    "modules"
++    "modules",
++    "requirement_quote",
++    "user_problem",
++    "out_of_scope",
++    "acceptance_command",
++    "stop_conditions"
+   ],
+   "additionalProperties": false,
+   "properties": {
+@@ -31,10 +36,30 @@
+     },
+     "parallel_group": { "type": "string" },
+     "blueprint_impact": { "type": "string", "enum": ["pending", "none", "required"] },
++    "requirement_quote": {
++      "type": "string",
++      "minLength": 1,
++      "description": "用户原话，原样引用；M8 必填，占位符即 BLOCKED"
++    },
++    "user_problem": {
++      "type": "string",
++      "minLength": 1,
++      "description": "谁在什么场景卡住；只写问题，不写方案"
++    },
+     "out_of_scope": {
+-      "type": "array",
+-      "items": { "type": "string" },
+-      "description": "G2 起必填；无此声明不得进入 G2"
++      "type": "string",
++      "minLength": 1,
++      "description": "M8 必填：这次明确不做什么（旧版写作数组，2026-11-09 起统一为字符串）"
++    },
++    "acceptance_command": {
++      "type": "string",
++      "minLength": 1,
++      "description": "一条可执行命令 + 期望退出码"
++    },
++    "stop_conditions": {
++      "type": "string",
++      "minLength": 1,
++      "description": "什么情况必须停下问人"
+     },
+     "rollback": { "type": "string", "description": "G3 必填" }
+   }
+diff --git a/.agents/scripts/agent_workflow.py b/.agents/scripts/agent_workflow.py
+index a61d026..881c7e3 100644
+--- a/.agents/scripts/agent_workflow.py
++++ b/.agents/scripts/agent_workflow.py
+@@ -16,7 +16,8 @@ from typing import Any
+ GENESIS_HASH = "0" * 64
+ # Gate rules in force when a run is born. Old runs keep their own epoch, so
+ # tightening the rules never rewrites or re-judges existing evidence.
+-RULE_EPOCH = 3
++# 4 = M8 受理闸生效（task.md 受理五字段）；M2 仍按 >=3 判定，两个代次互不影响。
++RULE_EPOCH = 4
+ ROLES = {name.casefold(): name for name in ("Planner", "Worker", "Reviewer", "Human")}
+ REVIEW_VERDICTS = {
+     "PASS",
+diff --git a/.agents/templates/delivery.md b/.agents/templates/delivery.md
+index 863154f..38008b3 100644
+--- a/.agents/templates/delivery.md
++++ b/.agents/templates/delivery.md
+@@ -1,5 +1,5 @@
+ contract_version: 1
+ candidate_revision: 1
+ candidate_digest: <sha256>
+-verify_commands: pytest -q; python gates/gate.py --ci --repo .
++verify_commands: node _dev/verify.mjs --full; python .agents/gates/gate.py --ci --repo .
+ not_run: none                     # 分号分隔的未执行检查项；空写 none，条数须等于 verdict.not_run_count
+diff --git a/.agents/templates/task.md b/.agents/templates/task.md
+index f910f58..9cab7f6 100644
+--- a/.agents/templates/task.md
++++ b/.agents/templates/task.md
+@@ -2,7 +2,7 @@
+ 
+ # Task Contract — <task_id>
+ 
+-> 由 Planner 写；`gate.py` 的 M1/M3 读本文件。字段名改动需同步 `schemas/task.json` 与 `gates/gate.py`。
++> 由 Planner 写；`gate.py` 的 M1/M8/M3 读本文件。字段名改动需同步 `schemas/task.json` 与 `gates/gate.py`。
+ 
+ ## 元信息
+ 
+@@ -17,11 +17,21 @@ sibling_tasks: none              # 并行分派时列出同批其他 task_id；
+ blueprint_impact: pending        # none 时 M3 放行，但该声明受 M2 核对
+ parallel_group: none             # 可选；并行组名
+ 
++## 受理（M8：缺一项或写占位符，pre-commit 直接 BLOCKED）
++
++> 一句话需求可以开工，但先把这五个问题答完——不答完就动手，返工算在 Planner 头上。
++
++requirement_quote: <用户原话，原样引用，不改写>
++user_problem: <谁在什么场景卡住；只写问题，不写方案>
++out_of_scope: <这次明确不做什么>
++acceptance_command: <一条可执行命令 + 期望退出码>
++stop_conditions: <什么情况必须停下问人>
++
+ ## 目标与范围
+ 
+ - 业务目标与用户可见的成功：
+ - 范围内（in scope）：
+-- 范围外（out_of_scope）：**必须写**——没有范围外声明的契约不得进入 G2
++- 范围外：见元信息 `out_of_scope`（空着会被 M8 拦）
+ - 已批准的 L0-L2a 决策：
+ - 受影响的事实归属者与契约：
+ 
+@@ -31,11 +41,11 @@ parallel_group: none             # 可选；并行组名
+ - Human 已决策事项：
+ - Worker 不得自行决定的事项：
+ - 允许的工作区与破坏性操作：
+-- 停止与上报条件：
++- 停止与上报条件：见元信息 `stop_conditions`
+ 
+ ## 验收证据
+ 
+-- 确定性检查（命令 + 期望退出码）：
++- 确定性检查：见元信息 `acceptance_command`
+ - 集成与反向路径：
+ - 文档同步（蓝图 / specs）：
+ - 安全、数据、迁移与回滚证据（G3 必填）：
+diff --git a/.githooks/pre-commit b/.githooks/pre-commit
+index b57688f..b04ab48 100755
+--- a/.githooks/pre-commit
++++ b/.githooks/pre-commit
+@@ -1,11 +1,13 @@
+ #!/bin/sh
+-# 提交门禁。规则见 AGENTS.md 第 3 节。
++# 提交门禁：双轨，缺一不可。规则见 AGENTS.md 第 3/4 节。
+ #
+ # 为什么不用 .git/hooks：那个目录不进版本库，换台机器就消失了。
+ # 启用方式（每台机器一次）：git config core.hooksPath .githooks
+ #
+-# 这道闸拦的是「改完代码没重跑校验就想提交」。不要用 git commit --no-verify 绕过去——
+-# 那等于把 issues.md #9 的坑再踩一次。
++# 这道闸拦的是两件事：
++#   ① 改完代码没重跑校验就想提交（verify.mjs --hook）
++#   ② 改了受保护路径却没有契约、或契约受理字段没写完（gate.py --fast --staged）
++# 不要用 git commit --no-verify 绕过去——那等于把 issues.md #9 的坑再踩一次。
+ 
+ cd "$(git rev-parse --show-toplevel)" || exit 1
+ 
+@@ -14,4 +16,11 @@ if ! command -v node >/dev/null 2>&1; then
+   exit 1
+ fi
+ 
+-exec node _dev/verify.mjs --hook
++if ! command -v python >/dev/null 2>&1; then
++  echo "[门禁] 找不到 python，契约门禁（M1/M8/M3）无法执行。"
++  echo "[门禁] 装 Python 3.10+ 再提交；缺了就跳过等于把这道闸拆了。"
++  exit 1
++fi
++
++node _dev/verify.mjs --hook || exit 1
++exec python .agents/gates/gate.py --fast --staged --repo .
+diff --git a/.github/workflows/ai-native-gate.yml b/.github/workflows/ai-native-gate.yml
+index 49e2df2..d8c6fb0 100644
+--- a/.github/workflows/ai-native-gate.yml
++++ b/.github/workflows/ai-native-gate.yml
+@@ -38,7 +38,7 @@ jobs:
+       - uses: actions/setup-python@v5
+         with:
+           python-version: '3.11'
+-      - name: gate (M1-M6)
++      - name: gate (M1-M8)
+         run: |
+           python .agents/gates/gate.py --ci --scope project \
+             --base "origin/${{ github.base_ref }}"
+diff --git a/AGENTS.md b/AGENTS.md
+index 7fdd0af..c8b77ff 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -36,7 +36,7 @@
+ ## 3. 风险分级
+ 
+ - **G0 文案、间距、颜色微调**：直接改，`node _dev/verify.mjs --fast` 过了就提交。
+-- **G1 单页交互、表单校验**：改完必须 `--full`（e2e 里要有这条路径的断言）。
++- **G1 单页交互、表单校验**：动手前先写 `task.md`（受理五字段，见第 4 节 M8），改完必须 `--full`（e2e 里要有这条路径的断言）。
+ - **G2 下面这些，动手前先写契约**（`.agents/templates/task.md`，见第 4 节三件套）：
+   - `server.js` 的接口形状、`/api/sync` 的合并语义
+   - 数据表结构与老数据兼容（`data/workbench.db`）
+@@ -51,7 +51,7 @@
+ | 轨 | 实现 | 管什么 |
+ |---|---|---|
+ | 代码门禁 | `_dev/verify.mjs` | 语法、版本一致性、CHANGELOG、服务版本、e2e、树摘要（含未提交/未跟踪文件） |
+-| 契约门禁 | `.agents/gates/gate.py`（M1-M6） | 契约存在、证据绑定候选（哈希）、模块蓝图同步、版本权威、引用完整、快照封存 |
++| 契约门禁 | `.agents/gates/gate.py`（M1-M8） | 契约存在、证据绑定候选（哈希）、模块蓝图同步、版本权威、引用完整、快照封存、受理字段完备 |
+ 
+ **G1-G3 改动走三 agent 闭环**（`ai-native-engineering` 采纳后，取代旧的一页三段契约）：
+ 
+@@ -67,6 +67,12 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
+ 
+ `gate.py` 三条边界要记牢：`NOT_RUN` 绝不等于 PASS；pre-commit 未建账本时只提示不拦，CI 对 `no_evidence` 退出 1；`--scope` 只能用 `project`。
+ 
++**M1 的受保护面是项目事实**：路径写在 `.agents/gates/protected.json`（`server.js`、`public/`、`_dev/`、`specs/`、`data/`、模板/门禁/钩子），不再用脚手架默认的 `app/`——那份默认值和本项目代码没有交集，等于没设防。模块归属由蓝图自己声明：`specs/modules/server-api.md` 写 `paths: server.js`，门禁**不再拿文件名当模块名猜**（`server.js` 的 stem 是 `server`，永远匹配不上 `server-api`）。
++
++**M8 受理闸**：触及受保护路径的提交，`task.md` 必须写满五问——`requirement_quote`（用户原话，不改写）、`user_problem`（谁在什么场景卡住）、`out_of_scope`（这次不做什么）、`acceptance_command`（命令 + 期望退出码）、`stop_conditions`（什么情况停）。缺一项或写 `<待填>` 直接 BLOCKED。一句话需求可以开工，但**答不完这五问不许动手**。
++
++门禁自己也要有反例：`python .agents/gates/gate.py --selftest` 用临时仓库证明「改 `server.js` 没契约会被拦」「受理字段缺一项/写占位符会被拦」「模块不拥有该文件会被拦」，并已接进 `verify.mjs`，每次 `--fast`/`--hook` 都跑一遍。
++
+ ## 5. 提交纪律
+ 
+ - **改完就提交，不要攒。** 一次提交只做一件事。发版单独一个 `release(vX.Y.Z): …`。
+@@ -74,11 +80,12 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
+ 
+ ```bash
+ node _dev/verify.mjs --full                      # 代码门禁：语法 + 版本 + CHANGELOG + 服务版本 + e2e
+-python .agents/gates/gate.py --ci --repo .       # 契约门禁：M1-M6（G1 以上改动）
++python .agents/gates/gate.py --ci --repo .       # 契约门禁：M1-M8（G1 以上改动）
+ git add -A && git commit -m "feat(日历): 一句话"
+ ```
+ 
+ - 树摘要分三把尺子：代码摘要 `digest`（js/html/bat/库脚本）、证据摘要 `evidenceDigest`（契约/issue/蓝图/AGENTS/practice/SPEC）、文档摘要 `docsDigest`（其余文档）。前两把参与判定，别混。
++- `pre-commit` 自动跑**两条**：`verify.mjs --hook` 与 `gate.py --fast --staged`。缺 node 或 python 一律失败退出，不静默跳过——跳过等于把闸拆了。
+ - `--full` 不通过时不覆盖已有绿证据；拦「失败后又改代码」靠摘要对不上，不靠销毁证据。
+ - 新克隆的仓库启用钩子：`git config core.hooksPath .githooks`。**这是唯一「不做就静默失效」的一步。**
+ 
+@@ -104,4 +111,7 @@ git add -A && git commit -m "feat(日历): 一句话"
+ 
+ - **T1 单元测试**（暂时）：`public/app.js` 无模块导出，纯函数抽不出来。先按 `specs/modules/` 拆出纯逻辑层，再补单测——顺序反了只会写出一堆测 DOM 的假单测（issues #12）。
+ - **改 `version.js` 为 `VERSION` 文件**：版本弹窗和 CHANGELOG 是产品功能；`gate.py` 的 M4 已支持 `version_authority: version.js`，无需换文件。
++- **M9「契约先行」闸（暂缓，不是否决）**：M9 要求契约在 `base_revision` 那个提交里就已存在，能机器证明「没有先写代码后补契约」。代价是每个 G1+ 要两次提交，摩擦一大就容易诱发 `--no-verify`（issues #9）。先看 M1+M8 的实际拦截率，再决定是否加。
++- **M7「模板测试引用可收集」**：不接。它只认 `tests/*.py` 与 pytest，本项目用 `_dev/e2e.mjs`；接进来永远「no tests referenced → PASS」，是假覆盖。若要等价能力，应另写「蓝图引用的 e2e 断言标签存在」这条检查，而不是抄 M7。
++- **`docs/adr/` 目录暂不建**：真有跨模块取舍时，决策写进 `docs/adr/NNNN-主题.md`（编号 + 背景 + 选项 + 结论 + 代价）。现在没有这类决策，建空目录只是多一份要维护的壳。
+ - 其余红线见 `.agents/practice/adoption-log.md`。
+diff --git a/_dev/verify.mjs b/_dev/verify.mjs
+index 065013a..0cbaee6 100644
+--- a/_dev/verify.mjs
++++ b/_dev/verify.mjs
+@@ -275,9 +275,28 @@ function gateSelftest() {
+   });
+   const out = ((r.stdout || '') + (r.stderr || '')).trim();
+   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
+-  return check('门禁反面用例（已知绕法全部被拦）', r.status === 0,
++  const okFast = check('门禁反面用例（已知绕法全部被拦）', r.status === 0,
+     r.status === 0 ? out.split('\n').filter((l) => l.startsWith('[通过]'))[0] || ''
+       : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
++  return okFast && gateContractSelftest();
++}
++
++/* 契约门禁自己的反例：M1（受保护面/模块归属）与 M8（受理五字段）各要证明它红过。
++   只宣称「会拦」不算数，得有命令跑给你看。 */
++function gateContractSelftest() {
++  const gate = path.join(ROOT, '.agents', 'gates', 'gate.py');
++  if (!fs.existsSync(gate)) return check('契约门禁反面用例', false, '找不到 .agents/gates/gate.py');
++  const python = process.env.CADENCE_PYTHON || 'python';
++  const g = spawnSync(python, [gate, '--selftest'], { encoding: 'utf8', maxBuffer: 1 << 24 });
++  const out = ((g.stdout || '') + (g.stderr || '')).trim();
++  if (g.error) {
++    return check('契约门禁反面用例（M1/M8 会拦）', false,
++      `跑不了 ${python}（${g.error.code || g.error.message}）——缺它等于这道闸不存在`);
++  }
++  const fails = out.split('\n').filter((l) => l.startsWith('[失败]'));
++  return check('契约门禁反面用例（M1/M8 会拦）', g.status === 0,
++    g.status === 0 ? (out.split('\n').find((l) => l.startsWith('通过：')) || '')
++      : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
+ }
+ 
+ /* ── 4. 这棵树的摘要 ─────────────────────────────────────── */
+@@ -289,12 +308,16 @@ function gateSelftest() {
+    2) 纯文档改动不改变任何可观察行为，为它重跑 90 秒 e2e 是浪费，
+       而 AGENTS.md 第 2 节本来就允许 G0 只跑 --fast。
+    文档单独算一个 docsDigest，只作记录，不参与放行判断。 */
+-const DOC_ONLY = /^(docs\/|\.agents\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
++/* `artifacts/` 是证据，不是运行行为：任务契约、交付、verdict、事件账本都在这儿。
++   把它算进代码摘要会让「写一条证据」就改一次代码摘要——刚验完的树立刻变成另一棵树，
++   归档契约的复核锚点永远落后一代，下次 `--full` 必红，最后只能 `--no-verify`（issues #64）。
++   所以它和 `.agents/` 一样：不进代码摘要，进证据摘要，让 `--hook` 仍能看见它变了。 */
++const DOC_ONLY = /^(docs\/|\.agents\/|artifacts\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
+ /* 「证据与规矩」类文件：不改变运行行为，但改变了「能不能信这棵树」。
+    它们也排除在代码摘要之外，所以单独算一个 evidenceDigest，让 --hook 也能看见——
+    否则改完契约第 3 段、改完 AGENTS.md 的 G 分级，门禁一律认为「这棵树没变过」。 */
+ /* 2026-11-05 文档归位后，契约/issue/复核/采纳记录全部收进 `.agents/`，一条前缀覆盖。 */
+-const EVIDENCE = [/^\.agents\//, /^AGENTS\.md$/];
++const EVIDENCE = [/^\.agents\//, /^artifacts\//, /^AGENTS\.md$/];
+ 
+ function treeDigest() {
+   const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+diff --git a/artifacts/runs/TASK-20261109-gate-hardening/events.jsonl b/artifacts/runs/TASK-20261109-gate-hardening/events.jsonl
+new file mode 100644
+index 0000000..6eca5db
+--- /dev/null
++++ b/artifacts/runs/TASK-20261109-gate-hardening/events.jsonl
+@@ -0,0 +1 @@
++{"event_hash": "39f66ed599f25b6194c0e19f98e9e78c772445128a96cf31599565310e9e5c73", "evidence": {"path": "D:\\ai_project\\ai_work\\Cadence\\artifacts\\runs\\TASK-20261109-gate-hardening\\evidence\\baseline-probe.txt", "sha256": "4f7c02a8def29cc54e001200e0d0acf05bd714516ebc4f78b8a1b9cda4f105a3"}, "metadata": {"base_revision": "f7469a0c17408735af4875be77f4e93f259dfb6f", "contract_digest": "821c1f2f07a0fd8902a6a102d2e139b2b1f6ec73a74acf1e5838b9888262af58", "contract_path": "D:\\ai_project\\ai_work\\Cadence\\artifacts\\runs\\TASK-20261109-gate-hardening\\task.md", "contract_version": 1, "rule_epoch": 4, "task_id": "TASK-20261109-gate-hardening"}, "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000", "role": "Planner", "seq": 1, "state": "PLANNED"}
+diff --git a/artifacts/runs/TASK-20261109-gate-hardening/evidence/baseline-probe.txt b/artifacts/runs/TASK-20261109-gate-hardening/evidence/baseline-probe.txt
+new file mode 100644
+index 0000000..261c789
+--- /dev/null
++++ b/artifacts/runs/TASK-20261109-gate-hardening/evidence/baseline-probe.txt
+@@ -0,0 +1,44 @@
++# 改造前探针（2026-11-09，改动前实测）
++
++目的：把「本来该拦却没拦」变成可复核的原始记录，而不是事后描述。
++
++## 1. 受保护面覆盖（直接调 gate.py 的 is_protected）
++
++```
++is_protected('server.js')            -> False
++is_protected('public/app.js')        -> False
++is_protected('public/index.html')    -> False
++is_protected('_dev/e2e.mjs')         -> False
++is_protected('_dev/verify.mjs')      -> False
++is_protected('version.js')           -> False
++is_protected('import-emp.js')        -> False
++is_protected('specs/modules/server-api.md') -> True
++is_protected('data/workbench.db')    -> True
++is_protected('AGENTS.md')            -> True
++```
++
++## 2. 模块归属匹配（旧实现按文件名 stem 猜模块）
++
++```
++契约 modules: server-api, app-ui
++module_intersects(['server.js'])      -> False
++module_intersects(['public/app.js'])  -> False
++```
++
++## 3. 真实提交上的表现
++
++```
++python .agents/gates/gate.py --ci --repo .
++-> M1 PASS: "TASK-20261109-subtask-upstream (G2) admitted, 2 protected paths"
++   那 2 条是 specs/modules/*.md；server.js / public/app.js 的改动不在受保护面里，
++   即使改了也不会触发 M1。
++```
++
++## 4. 门禁执行点
++
++```
++.githooks/pre-commit -> 只执行 node _dev/verify.mjs --hook，从不调用 gate.py
++```
++
++结论：四处（受保护面、模块匹配、受理字段、执行点）任一未补齐，「一句需求就开工」
++都能一路绿灯到提交。本 run 的作用就是把四处补上，并留下反例证明它们会红。
+diff --git a/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt1-fail.md b/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt1-fail.md
+new file mode 100644
+index 0000000..749530e
+--- /dev/null
++++ b/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt1-fail.md
+@@ -0,0 +1,67 @@
++# Verdict — TASK-20261109-gate-hardening
++
++> Reviewer 输出即不可改证据；Planner 原样落盘后由 `gate.py` 封存。字段改动需同步 `schemas/verdict.json`。
++
++## 身份（机器读）
++
++task_id: TASK-20261109-gate-hardening
++contract_version: 1
++candidate_revision: 1
++candidate_digest: fd13e3c61ca3db440ef7ff4dab7fcd2d4e9ca3bfc13c6b74475c1338c5c9fbd3
++base_revision: f7469a0c17408735af4875be77f4e93f259dfb6f
++reviewer: Reviewer
++reviewer_context: review-subagent-20261109-gate-hardening
++worker_context: planner-main-20261109-gate-hardening
++attempt: 1
++verdict: FAIL_IMPLEMENTATION
++max_severity: P1
++evidence_status: PARTIAL
++not_run_count: 1
++supersedes: none
++
++## max_severity 量表（就地定义，不依赖外部文件）
++
++- `P0` 主链路不可用或数据错误：用户可见的核心流程失败、写入错数据、越权可读。
++- `P1` 功能不可用但可绕过：某入口失效且无替代路径。
++- `P2` 语义偏差与风险项：契约边界、错误码、对账口径不一致，或存在明确隐患但当前不触发。
++- `P3` 体验与可维护性问题：命名、日志、性能余量。
++- `NONE` 本次无 finding。
++
++## 独立性
++
++- 独立声明：本上下文是独立 Reviewer 会话，未参与本次实现，未使用实现者的私有过程信息；只读 `task.md`、`delivery.md`、`candidate-a1.patch`、`evidence/baseline-probe.txt` 与仓库现状。所有反例都在**仓库外**的临时目录里用真实 `gate.py` 复现（脚本用完即删），未改动仓库任何文件、未提交、未执行 `git add`。按任务要求**未运行** `node _dev/verify.mjs --full`。
++- 本次读取的项目权威：`AGENTS.md` §1-§7；`.agents/README.md`；`.agents/templates/{task,delivery,verdict}.md`；`.agents/schemas/task.json`；`.agents/gates/{gate.py,protected.json}`；`.githooks/pre-commit`；`.github/workflows/ai-native-gate.yml`；`_dev/verify.mjs`（§3 契约状态 / §4 树摘要 / §5 入口）；`specs/modules/*.md`。
++- 已核对的 Task Contract 与 delivery 摘要：契约 5 个受理字段齐备、`gate_level: G2`、`base_revision` 与仓库 HEAD 一致；delivery 声称 `--selftest` 6/6、`--full` 8 项全绿、`--ci` 0、测试证据见 §验证证据。逐条复跑结论见下。
++
++## Findings
++
++| ID | Severity | Class（fail_source） | Evidence | Required route |
++|---|---|---|---|---|
++| F1 | **P1** | impl_bug | `python .agents/gates/gate.py --fast --staged --repo .` → **exit 1**，M8 `BLOCKED`：“requirement_quote 缺失；user_problem 缺失；out_of_scope 缺失；acceptance_command 缺失；stop_conditions 缺失”，而本 run 的 `task.md` 五项全都写了。直测 `gate.parse_record(artifacts/runs/TASK-20261109-gate-hardening/task.md)` 只得到 10 个元信息字段（`intake_missing` = 全部 5 个）。根因：`parse_text` 在元信息块后的第一个空行 `break`，而模板把受理五字段放在空行之后的 `## 受理` 小节。临时仓库对照：按模板版式填写 → M8 `BLOCKED`；压成单块 → M8 `PASS`。即**所有 rule_epoch≥4 的受保护提交恒被拦**，唯一出路是 `--no-verify`（AGENTS.md §4 称其为“把闸拆了”）。`--selftest` 之所以 6/6 绿，是因为 fixture 用扁平版式，从未覆盖仓库真实模板 | 修实现：M8 读全文键值（或在 `## 受理` 处继续解析），不要复用“只读头部块”的 `parse_text`；`--selftest` 增一条**直接以 `.agents/templates/task.md` 为版式**的用例，防止 fixture 与模板再次脱节 |
++| F2 | P2 | machine_gate_miss | 临时仓库：蓝图 `app-ui.md` 写 `paths: public/`，契约 `modules: app-ui`，同时暂存 `server.js` + `public/app.js` → M1 `PASS`（"TASK-PROBE (G2) admitted, 2 protected staged paths"）、M8 `PASS`、exit 0。覆盖判定是“存在一个被 covered 的路径”，不是“每个受保护改动都被 declared module 覆盖”。于是任何带一个 `_dev/`、`.agents/` 或 `public/` 文件的契约，都能顺带改 `server.js`（接口/数据层）而不被拦——正是本任务要堵的那条缝 | 改规则：`touched` 中每个受保护路径都必须被某个声明模块覆盖，否则 BLOCKED；或强制 `--task` 且 modules 必须覆盖全部 touched |
++| F3 | P2 | machine_gate_miss | 临时仓库：蓝图已提交为 `paths: public/`，仅在工作区（**未暂存**）改成 `paths: public/, server.js`，然后只暂存 `server.js` → M1 `PASS`；且 `git diff --cached --name-only` 里没有 `app-ui.md`。归属是从工作区文件读的，与 `--staged`“未暂存改动是草稿、不参与判定”的口径直接冲突；CI 分支（非 staged）则完全不调用 `module_intersects`，提交进历史后的归属声明无人校验 | 归属只读索引区/HEAD blob（`git show :specs/modules/<m>.md`）；CI 路径也校验 modules 与改动路径的交集 |
++| F4 | P2 | machine_gate_miss | 临时仓库：`requirement_quote: TBD 稍后补`、`user_problem: 暂无`、`out_of_scope: 待定，回头再补`、`acceptance_command: 看情况`、`stop_conditions: N/A` → M8 `PASS`（exit 0）。`PLACEHOLDER_VALUE` 只匹配“整值恰好等于 `<…>`/`TBD`/`-`/`none`”，带后缀或同义敷衍词全部放行，受理闸退化成“有五个 key 就算答完” | 判定改为包含式/前缀式，并对 `acceptance_command` 追加形状约束（含可执行命令 + 期望退出码）；`--selftest` 补“TBD 稍后补”“暂无”这类反例 |
++| F5 | P3 | machine_gate_miss | 探针直调 `is_protected`（同一份 `protected.json`）：`public/app.js`→True，但 `Public/app.js`→False、`PUBLIC/APP.JS`→False、`Server.js`→False、`./server.js`→False、`public\app.js`→False。本项目跑在 Windows（大小写不敏感），大小写变体命中的是同一个产品文件，却绕过了受保护面 | 判定前统一 `casefold()` 并规范化分隔符/前缀（仅在 Windows 语义下），CI 保留严格判定 |
++| F6 | P3 | machine_gate_miss | `protected.json` 未列 `启动工作台.bat` / `停止工作台.bat`（产品唯一启动入口，改它等于改运行行为）、`.agents/SPEC.md`（M4 的 `version_authority` 写在里面，改成 `none` 可让 M4 无条件 PASS）、`.pre-commit-config.yaml`（另一份钩子配置）；另 `data/` 列了但仓库里没有任何被跟踪文件，属空设。交付说明自称“按会改运行行为或治理规则枚举”，与事实不符 | 按该口径补全，或在 `protected.json` 注释与 `.agents/README.md` 逐条写明为何排除（像 `docs/`、`CHANGELOG` 那样有理由） |
++
++## 证据重建与残余风险
++
++- 重跑的命令、退出码与原始证据路径：
++  1. `python .agents/gates/gate.py --selftest` → **exit 0**，6/6 通过（与 delivery 一致）。
++  2. `python .agents/gates/gate.py --fast --staged --repo .` → **exit 1**。M1 `PASS`（"admitted, 15 protected staged paths"）、M3 `PASS`（5 blueprints updated）、**M8 `BLOCKED`**（五项全判缺失）——见 F1。
++  3. `python .agents/gates/gate.py --ci --repo .` → exit 0，但 M1/M8/M3 的 detail 都是 “no protected path changed”（`HEAD~1...HEAD` 是上一个 docs 提交）——这次绿**证明不了** M8 在新路径上会拦也会放，只能证明旧提交没碰受保护面。
++  4. `node _dev/verify.mjs --fast` → **exit 1**：`FAIL 契约状态 4 份`（归档契约写 `复核对象：树摘要 439e5de39605b8cd`，而本地 `_dev/verify-report.json` 的 `digest=a3066db43cdd6643`）。该失败与本次 diff 无关（两份输入都不在 diff 里），但说明 delivery 的 “8 项全绿” 属于 `06:01:56` 那次运行（报告 `head=f7469a0`、`digest=a3066db…`），而当前树的 fast 报告是 `517bd2df6979b52f`——`candidate-a1.patch`/`delivery.md` 落盘后 `artifacts/` 计入代码摘要，**交付态的绿证据不可复现**。
++  5. 用 git 自带 `sh` 执行 `.githooks/pre-commit` → **HOOK_EXIT=1**（verify 轨先红，`|| exit 1` 生效，`gate.py` 轨未被执行）。结论：pre-commit 失败确实非零退出（交付要点成立）；但当前两条轨都过不去，本候选无法经双轨提交。
++  6. 仓库外临时 git 仓库探针 A–E（真实 `gate.py`，`--fast --staged`）：A 存在覆盖即放行 → M1/M8 PASS；B 未暂存蓝图归属 → M1 PASS；C 宽松占位符 → M8 PASS；D 模板真实版式 → M8 BLOCKED；E 大小写/分隔符变体 → False。对应 F2–F5。
++- 与 Worker 证据的差异：`--selftest` 6/6 一致；`--ci` 0 一致但语义为空；`--full` 未跑（任务要求）；`--fast` 与 pre-commit 在本机为红，delivery 未记录这两项。delivery 对 M8 的描述“缺一项或写 `<…>`/`TBD`/`-` 等占位符 → BLOCKED”高估了实现（整值匹配，见 F4），对 selftest 的描述未说明 fixture 与模板版式不一致（见 F1）。
++- NOT_RUN 清单：1 项 —— `node _dev/verify.mjs --full`（任务明确要求不跑，太慢；其 `syntax/version/contracts` 三项已由 `--fast` 覆盖且 `contracts` 为红，e2e 与“服务在跑”未验）。
++- 残余风险：
++  - 事件流哈希链无密钥，`artifacts/runs/*/events.jsonl` 不在受保护面内，任何人可重算整条链伪造 PLANNED/PASS（既有设计限制，非本次引入）。
++  - 蓝图 `paths:` 是自声明：同一份契约内可以“改归属 + 改代码”一起过（`specs/` 自身受保护，但由 tooling 拥有 `specs/modules/`），`paths: *` 这类写法可一次性扩权。
++  - `--no-verify` 无服务端强制；钩子依赖每台机器执行 `git config core.hooksPath .githooks`，这条“不做就静默失效”的说明仍在 AGENTS.md §5。
++  - `verify.mjs` 的“复核对象 == 上一次绿报告摘要”机制会在一次成功 `--full` 后自我失效（写回的新 digest 立刻与归档契约对不上），表现为任何代码改动后 `--fast/--full` 长期为红——既有问题，但会持续逼人改归档契约或绕过。
++- 判定理由：本次交付的核心目标（M8 受理闸）在仓库真实契约版式下**恒为 BLOCKED**，而 `--selftest` 的 6/6 绿是 fixture 与模板脱节造成的假绿——这是“自证”的典型形态：用例与实现共享了同一套扁平假设，从未用仓库自己的模板跑一次。再加上 M1 覆盖判定是“存在即放行”、归属读未暂存草稿、占位符判定可敷衍三条可绕过路径，判定 FAIL_IMPLEMENTATION。受保护面接回真实代码、`paths:` 归属替代文件名 stem、pre-commit 双轨与非零退出这几项是有效的，返工时不必推翻。
++
++## 业务语义（仅 G3）
++
++- 不适用：本任务为 G2，diff 未触及 `server.js` / `public/`（`git diff --cached --name-only` 20 项中无这两处），产品行为零变化。
+diff --git a/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt2-fail.md b/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt2-fail.md
+new file mode 100644
+index 0000000..37530f3
+--- /dev/null
++++ b/artifacts/runs/TASK-20261109-gate-hardening/evidence/verdict-attempt2-fail.md
+@@ -0,0 +1,66 @@
++<!-- `task submit --evidence <路径>` 必填；本文件由 Reviewer 人写，工具只校验与封存，不代写。 -->
++
++# Verdict — TASK-20261109-gate-hardening（attempt 2）
++
++> Reviewer 输出即不可改证据；Planner 原样落盘后由 `gate.py` 封存。字段改动需同步 `schemas/verdict.json`。
++
++## 身份（机器读）
++
++task_id: TASK-20261109-gate-hardening
++contract_version: 1
++candidate_revision: 2
++candidate_digest: 493d87d721508d31d21a0e56992eb832f103439c16f327841227438896043ef8
++base_revision: f7469a0c17408735af4875be77f4e93f259dfb6f
++reviewer: Reviewer
++reviewer_context: review-subagent-20261109-gate-hardening-a2
++worker_context: planner-main-20261109-gate-hardening
++attempt: 2
++verdict: FAIL_IMPLEMENTATION
++max_severity: P1
++evidence_status: COMPLETE
++not_run_count: 0
++supersedes: 1
++
++## max_severity 量表（就地定义，不依赖外部文件）
++
++- `P0` 主链路不可用或数据错误：用户可见的核心流程失败、写入错数据、越权可读。
++- `P1` 功能不可用但可绕过：某入口失效且无替代路径。
++- `P2` 语义偏差与风险项：契约边界、错误码、对账口径不一致，或存在明确隐患但当前不触发。
++- `P3` 体验与可维护性问题：命名、日志、性能余量。
++- `NONE` 本次无 finding。
++
++## 独立性
++
++- 独立声明：本上下文是新开的 Reviewer 会话（`review-subagent-20261109-gate-hardening-a2`），未参与实现，未读取实现者的私有过程信息；只读仓库现状、契约、delivery、attempt 1 verdict 与候选补丁。先核对 `candidate-a2.patch` 的 sha256 = `493d87d7…043ef8`（与 delivery 一致）。所有对抗性探针都建在 `%TEMP%\a2probe\` 的独立 git 仓库里，用真实 `gate.py` 以子进程执行，未改动 Cadence 仓库任何文件、未 `git add`/`git commit`、未停 8799 端口服务（探针脚本导入 gate 模块时产生的 `__pycache__` 已清除，未进索引）。
++- 本次读取的项目权威：`AGENTS.md` §1-§7；`.agents/review-checklist.md`；`.agents/SPEC.md`；`.agents/gates/gate.py`（全文）；`.agents/gates/protected.json`；`.githooks/pre-commit`；`.github/workflows/ai-native-gate.yml`；`.agents/scripts/agent_workflow.py`（RULE_EPOCH）；`.agents/templates/{task,delivery,verdict}.md`；`.agents/schemas/task.json`；`_dev/verify.mjs`（`contracts()` 与 `treeDigest()`）；`specs/modules/*.md` 的 `paths:`。
++- 已核对的 Task Contract 与 delivery 摘要：契约 `gate_level: G2`、`base_revision` 与 HEAD 一致、五个受理字段齐备；delivery 自称 `--selftest` 9/9、`--full` 8 项全绿、`--ci` 0、`--fast --staged` 0、产品零改动。逐条复跑结论见下——`--selftest`/`--fast --staged`/`--ci` 与 delivery 一致，**`--full` 与 delivery 不一致**（本机实测红）。
++
++## Findings
++
++| ID | Severity | Class（fail_source） | Evidence | Required route |
++|---|---|---|---|---|
++| F1 | **P1** | impl_bug（证据与候选不一致） | 契约 `acceptance_command` 要求 `node _dev/verify.mjs --full` 退出码 0，本机实测 **exit 1**：`FAIL 契约状态 4 份`——三份历史 PASS 契约的「复核对象」写 `c007faff515c2418`，而 `_dev/verify-report.json` 的 `digest=f93c512665f816bf`。`node _dev/verify.mjs --hook`（pre-commit 第一条轨）同样 **exit 1**（1/5）。`_dev/verify-report-last-fail.json` 记录的当前树摘要也是 `f93c512665f816bf`，即**树自 06:37Z 那次绿跑之后没变过**，红来自重锚值本身。机制：`contracts()` 用「上一次绿报告」的 digest 做对账，绿跑结束后又把它覆盖成新 digest；本候选把契约重锚到 `c007faff…`（那一次的旧 live），却在新一次 `--full`（06:37Z）里被判绿并写入 `f93c5126…`——重锚值天生落后一代，此后**任何一次 `--full` 都红**，候选无法通过自己安装的 pre-commit（唯一出路是 `--no-verify`）。另：`--full` 因短路只跑了 6 项，`门禁反面用例`/`契约门禁反面用例` 两项根本没执行，delivery 引用的 8 项输出不可复现 | 重锚到**交付态这棵树**的摘要（当前 `f93c512665f816bf`），然后**连续跑两次 `--full`**，两次都必须 0；把「重锚后必须复跑并贴第二次输出」写进 delivery 模板。根因是自指对账，建议同时把 `artifacts/` 排除出代码摘要（issues #64），否则写完 verdict 又会失效 |
++| F2 | P2 | machine_gate_miss | 探针（真实模板版式、`modules: server-api`、改 `server.js`）：`out_of_scope: 待定，回头再补` → **M8 PASS**；`acceptance_command: 看情况` → **M8 PASS**；`acceptance_command: N/A` → **M8 PASS**。attempt 1 的 F4 正是点名了这几个字符串，要求「包含式判定 + acceptance_command 追加形状约束」，本版只补了 `TBD 稍后补`/`暂无`/`未定`，`待定`/`回头再补`/`看情况`/`N/A` 仍能过关。M8 仍可被一个敷衍词绕过 | `PLACEHOLDER_VALUE` 补 `待定|回头再补|看情况|待议|n/?a`；`acceptance_command` 增加形状约束（必须含可执行命令 + 「退出码」/期望值）；selftest 把这三条固定成反例 |
++| F3 | P2 | machine_gate_miss | `blueprint_paths()` 在索引/HEAD 取不到蓝图时**回退读工作区文件**（gate.py L393-397）。探针：`specs/modules/ghost.md` 未跟踪（`paths: *`），契约 `modules: app-ui, ghost`，只暂存 `server.js` → **M1 PASS**（"admitted, 1 protected staged paths"）；CI 模式同一条回退路径，提交里根本没有 `ghost.md`（`git ls-tree HEAD` 无此项）却 **M1 PASS**。这与 delivery 的「P2-2 修复：未暂存的蓝图扩权不算数 / `--ci` 读 HEAD」直接相反；且 `paths: *` 可一次覆盖全部受保护面（连自己 `specs/modules/ghost.md` 也覆盖） | staged/CI 模式去掉工作区回退：蓝图不在索引/HEAD 即视为「无归属」（`[]`），只有显式白名单才允许 worktree 读取；`paths:` 拒绝 `*`/`**`/裸 `/`，要求是具体文件或目录前缀 |
++| F4 | P3 | machine_gate_miss | `is_protected()` 仍区分大小写与分隔符：同一份 `protected.json` 下 `Server.js`/`Public/app.js`/`PUBLIC/app.js`/`./server.js`/`public\app.js` 全为 `False`。attempt 1 的 F5 要求的「判定前 casefold + 规范化」只落到了 `path_covered`（模块归属），没落到受保护面判定。实用性有限：本机 `git add Server.js` 被 `core.ignorecase` 归并成 `server.js`，探针结果为「no staged changes」，故只算 P3 | 在 Windows 语义下对 `is_protected` 统一 `casefold()` 并规范化 `./`、`\`；CI 保留严格判定，并补一条 selftest |
++
++## 证据重建与残余风险
++
++- 重跑的命令、退出码与原始要点：
++  1. `python .agents/gates/gate.py --selftest` → **exit 0**，9/9。逐条看过：`partial_cover`（只声明 `app-ui` 改 `server.js`）确实断言 M1 `BLOCKED` 且退出非 0；`sectioned` 用例把 `## 受理` 插在第一个受理字段之前，确实走跨小节解析；`weak_placeholder` 只覆盖 `TBD 稍后补`。用例本身没有「打印通过但其实没断言」的问题，但覆盖面比 delivery 的描述窄（未固定 `待定`/`看情况`/未跟踪蓝图）。
++  2. `python .agents/gates/gate.py --fast --staged --repo .` → **exit 0**；`M1 PASS "TASK-20261109-gate-hardening (G2) admitted, 15 protected staged paths"`、`M8 PASS "受理五字段齐备"`、`M3 PASS "5 blueprints updated"`。attempt 1 的 F1（真实契约恒 BLOCKED）**确实已修复**。
++  3. `python .agents/gates/gate.py --ci --repo .` → **exit 0**，但 M1/M8/M3 都是 `"no protected path changed"`（`HEAD~1...HEAD` 是上一份 docs 提交），这次绿**证明不了** M1/M8 在新提交上会拦也会放——与 attempt 1 同样的语义空洞。
++  4. `python .agents/gates/gate.py --fast --staged` 的等价物 + `node _dev/verify.mjs --hook`：后者 **exit 1**（1/5），见 F1。因 verify 轨先红，`.githooks/pre-commit` 在本机必然非零退出——「缺 python/node 失败退出、双轨」的接线本身成立，但本候选过不去。
++  5. `$env:CADENCE_BASE='http://127.0.0.1:8799'; node _dev/verify.mjs --full` → **exit 1**，1/6：`语法检查 12` / `版本 v0.8.5，34 个版本` / `CHANGELOG 一致` 通过，`契约状态 4 份` **FAIL**，`服务在跑 v0.8.5` 通过，`e2e 163 项` 通过，写 `_dev/verify-report-last-fail.json`（digest `f93c512665f816bf`）。服务未被杀。
++  6. `git diff HEAD -- server.js public/` → **空**（长度 0）；`docs/adr` 不存在；`gate.py` 无 M7/M9 实现，仅 selftest 文案提到「不接 M9」；`AGENTS.md` §7 明确写 M9 暂缓（给理由）、M7 不引入（只认 pytest，本项目用 e2e，接了是假覆盖）、ADR 只写落点 `docs/adr/NNNN-主题.md` 不建目录。用户第 4 条要求全部满足。
++  7. 临时仓库探针（`%TEMP%\a2probe`，真实 `gate.py --fast --staged`；每个用例独立重置到基线提交）：① `modules: app-ui` + 暂存 `server.js` → **M1 BLOCKED**（P2-1 已修）；② `modules: app-ui` + `public/app.js` → **exit 0，M1/M8 PASS**；③ 五字段写在第二个 `##` 小节 → **M8 PASS**（P1 已修）；④ 占位符：`TBD 稍后补`/`暂无`/`<待填>`/空 → 全部 **M8 BLOCKED**（P2-3 的四个指定变体已修），`待定，回头再补`/`看情况`/`N/A` → **PASS**（F2）；⑤ 蓝图只在工作区改成 `paths: public/, server.js`、只暂存 `server.js` → **M1 BLOCKED**（已暂存蓝图口径已修）；⑥ 未跟踪 `ghost.md` `paths: *` → **M1 PASS**（F3）；⑦ 同一文件暂存 `paths: *` 蓝图 → **M1 PASS**（F3 的普通形态）；⑧ `Server.js` → `git add` 后无暂存变化，`is_protected` 直测为 `False`（F4）。另 CI 模式探针：蓝图未提交、提交里无 `ghost.md`，`--ci --base HEAD~1` → **M1 PASS**（F3 在 CI 轨同样成立）。
++- 与 Worker 证据的差异：`--selftest`（9/9）、`--fast --staged`（0）、`--ci`（0）一致；`--full` **不一致**——delivery 贴的 8 项全绿是 06:37Z 那次（校验的是上一代 live `c007faff…`），本机交付态第一次复跑就红，且短路掉两项 selftest。delivery 未说明「重锚值与新报告摘要相差一代」，反而把这次绿当作可复现证据。
++- NOT_RUN 清单：none。补充说明：`.githooks/pre-commit` 这个 sh 包装没有整段执行（Windows 下等价性足够），而是分别跑了它调用的两条轨（`verify --hook` exit 1、`gate --fast --staged` exit 0），因此 hook 的实际结论是非零退出。e2e 由 `--full` 覆盖（163 项全绿），未单独复跑。
++- 残余风险：
++  - 候选补丁与交付态不是同一份东西：`candidate-a2.patch`（mtime 14:18）不含 14:32-14:34 才改的归档契约重锚，也不含 `delivery.md`；而 F1 的红恰恰由重锚引起。`candidate_digest` 只标识 diff，无法把「--full 绿证据」钉在候选上——这是流程层的证据绑定缺口。
++  - `events.jsonl` 哈希链无密钥，`artifacts/runs/*` 不在受保护面内，整条链可重算伪造（既有设计限制，非本次引入）。
++  - `paths: *` 是自声明归属的万能钥匙；M1 现在要求「每个受保护路径都有归属」，一把万能钥匙即可满足（F3 的第 7 条探针）。
++  - 交付态的暂存区里 `artifacts/runs/.../verdict.md` 处于 `AD`（索引有、工作区已删），提交时会把 attempt 1 的 verdict.md 复活成正式结论文件；若随后写入 PASS 事件，M2 可能读到这份 FAIL verdict。提交前应清掉该索引项。
++  - `.agents/README.md` 仍写 `--selftest` 覆盖「六种情况」，与实现的 9 个用例不符（文档漂移，P3 级，未单列 finding）。
++  - `--no-verify` 仍无服务端强制；钩子依赖每台机器 `git config core.hooksPath .githooks`，这条「不做就静默失效」的说明仍在 AGENTS.md §5。
++- 判定理由：attempt 1 的两个核心问题（M8 对真实契约恒 BLOCKED、M1「命中一个即放行」）都已用真实 `gate.py` 复现为修复状态，受保护面接回真实代码、pre-commit 双轨与 fail closed、M9/M7/ADR 的取舍也都成立。但交付态**过不了自己的验收命令**：`--full` 与 `--hook` 都 exit 1，原因是本候选自己写下的归档契约重锚值落后一代，而 delivery 把那一刻的绿当成了可复现证据（F1，P1）；同时 P2-2 声称的「未暂存/未提交蓝图不扩权」被工作区回退与 `paths: *` 击穿（F3），M8 仍可被 `待定`/`看情况` 绕过（F2）。故判 `FAIL_IMPLEMENTATION / P1`。返工时不必推翻整体设计，只需修 F1 的重锚与复跑流程、F2 的占位符形状、F3 的回退与通配（F4 可一并改）。
+diff --git a/artifacts/runs/TASK-20261109-gate-hardening/task.md b/artifacts/runs/TASK-20261109-gate-hardening/task.md
+new file mode 100644
+index 0000000..d12c0f1
+--- /dev/null
++++ b/artifacts/runs/TASK-20261109-gate-hardening/task.md
+@@ -0,0 +1,57 @@
++<!-- 治理改造：门禁接回真实代码面 + 受理闸。不改产品行为。 -->
++
++# Task Contract — TASK-20261109-gate-hardening
++
++> 由 Planner 写；`gate.py` 的 M1/M8/M3 读本文件。字段名改动需同步 `schemas/task.json` 与 `gates/gate.py`。
++
++## 元信息
++
++task_id: TASK-20261109-gate-hardening
++contract_version: 1
++base_revision: f7469a0c17408735af4875be77f4e93f259dfb6f
++gate_level: G2
++status: PLANNED
++owner: Planner
++modules: tooling, server-api, app-ui, server-data, version
++sibling_tasks: none
++blueprint_impact: required
++parallel_group: none
++
++## 受理
++
++requirement_quote: 用户原话「全量引入 ai-native-engineering，避免一句需求就开工，确保项目能长期稳定运行」；本轮拍板「闸 1/2/4 立即上，M9 暂不做，M7 不接」
++user_problem: 改 server.js / public/app.js 时契约门禁完全不触发——受保护面写的是脚手架默认的 app/，模块归属靠文件名猜；于是一句需求可以直接改代码并提交，门禁全绿
++out_of_scope: 不接 M9 契约先行闸；不接 M7（只认 pytest，本项目用 e2e）；不建 docs/adr 目录；不改 server.js / public/；不改任何产品行为
++acceptance_command: python .agents/gates/gate.py --selftest 期望退出码 0；node _dev/verify.mjs --full 期望退出码 0；python .agents/gates/gate.py --ci --repo . 期望退出码 0
++stop_conditions: 出现必须改产品行为才能继续、或反面用例构造不出来时停下上报，不擅自扩大范围
++
++## 目标与范围
++
++- 业务目标与用户可见的成功：产品行为零变化；同一句需求再来时，门禁先在「没有契约 / 受理字段没写完」处拦下。
++- 范围内（in scope）：
++  - `.agents/gates/protected.json`：受保护面改为项目真实代码路径。
++  - `gate.py`：M1 读配置 + 蓝图 `paths:` 声明归属；新增 M8 受理闸；新增 `--selftest` 反例。
++  - `.githooks/pre-commit`：追加 `gate.py --fast --staged`，缺 python 失败退出。
++  - `.agents/templates/task.md`：受理五字段；`delivery.md`：verify_commands 本地化。
++  - `.agents/scripts/agent_workflow.py`：新 run 的 rule_epoch 提到 4。
++  - 五份蓝图加 `paths:` 与变更历史行；AGENTS.md、`.agents/README.md`、`review-checklist.md`、CI job 名同步。
++- 范围外：见元信息 `out_of_scope`。
++- 已批准的 L0-L2a 决策：用户 2026-11-09 拍板闸 1/2/4 上、M9 暂缓、M7 不接、ADR 暂不建目录。
++- 受影响的事实归属者与契约：`.agents/README.md`（门禁说明）、`AGENTS.md` 第 3/4/5/7 节、`specs/modules/*.md`（归属声明）。
++
++## 风险与权限
++
++- 风险理由（为什么不是 G0）：改动的是「什么改动必须带契约」这条规则本身；配错会让门禁过松（回到原状）或过紧（正常提交被堵）。
++- Human 已决策事项：闸门取舍与优先级（见上）。
++- Worker 不得自行决定的事项：不得顺手做 M9；不得改产品代码；不得降低既有 M1-M6 标准。
++- 允许的工作区与破坏性操作：只改 `.agents/`、`.githooks/`、`.github/workflows/`、`specs/modules/`、`AGENTS.md`、`_dev/verify.mjs`；不动 `data/`、`server.js`、`public/`。
++- 停止与上报条件：见元信息 `stop_conditions`。
++
++## 验收证据
++
++- 确定性检查：见元信息 `acceptance_command`。
++- 集成与反向路径：
++  - `gate.py --selftest` 六个用例：正例放行；契约摘要漂移拦；受理字段缺失拦；占位符拦；模块不拥有该文件拦；旧 epoch 兼容。
++  - pre-commit 双轨：hook 内含 `verify.mjs --hook` 与 `gate.py --fast --staged`。
++- 文档同步（蓝图 / specs）：五份蓝图加 `paths:` 与变更历史行；AGENTS.md §3/§4/§5/§7 同步。
++- 安全、数据、迁移与回滚证据（G3 必填）：不适用（未触数据与接口）。回滚方式：还原本次提交即可。
+diff --git a/specs/modules/app-ui.md b/specs/modules/app-ui.md
+index 5ecdfa2..881f881 100644
+--- a/specs/modules/app-ui.md
++++ b/specs/modules/app-ui.md
+@@ -1,5 +1,7 @@
+ # MOD-app-ui · 前端状态层、阶段与分工 UI、日历
+ 
++paths: public/
++
+ ## 职责
+ 拉取 → 本地 `S` → 快照 diff → `save()` 的状态层；阶段树渲染（新建弹窗 `stageRowHTML` / 详情页 `stageTreeHTML` / 就地编辑 `sedit` / 加子任务 `subadd` / 列表卡片 `stageRows`）；日历（`occOn` / `calChipHTML` / `chipLate` / `calCells`）。
+ 
+@@ -27,3 +29,4 @@
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
+ | TASK-20261109-subtask-upstream | 见 git | — | 勾选框按责任人渲染；派生副本只留完成；承接台新增「完成」提醒标签 |
++| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: public/`：模块归属由蓝图声明 |
+diff --git a/specs/modules/server-api.md b/specs/modules/server-api.md
+index f402475..6c77b2a 100644
+--- a/specs/modules/server-api.md
++++ b/specs/modules/server-api.md
+@@ -1,5 +1,7 @@
+ # MOD-server-api · 同步、动作接口与可见性
+ 
++paths: server.js
++
+ ## 职责
+ `/api/sync` 增量提交、六个动作接口（accept/dispatch/join/toggle/due/notice-seen）的各自判权，以及 `stateFor()` 可见范围。
+ 
+@@ -26,3 +28,4 @@
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
+ | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
++| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |
+diff --git a/specs/modules/server-data.md b/specs/modules/server-data.md
+index 59d7f20..104ab7a 100644
+--- a/specs/modules/server-data.md
++++ b/specs/modules/server-data.md
+@@ -1,5 +1,7 @@
+ # MOD-server-data · 数据层与实例引擎
+ 
++paths: server.js, data/
++
+ ## 职责
+ 建表（`emp/task/rule/cat/task_observer/stage_notice/watch/op_log/meta/holiday`）与常规实例生成引擎（`ruleSteps` / `cyclesBetween` / `ensureInstances` / `maintain`）。
+ 
+@@ -21,3 +23,4 @@
+ | task_id | commit | verdict_digest | 摘要 |
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
++| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明 |
+diff --git a/specs/modules/tooling.md b/specs/modules/tooling.md
+index b175e5a..58eabde 100644
+--- a/specs/modules/tooling.md
++++ b/specs/modules/tooling.md
+@@ -1,5 +1,7 @@
+ # MOD-tooling · 花名册导入与自检门禁
+ 
++paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts/, .agents/schemas/, .agents/README.md, .agents/SPEC.md, .agents/review-checklist.md, .githooks/, .github/workflows/, specs/modules/, AGENTS.md
++
+ ## 职责
+ `import-emp.js`（CSV → `emp`）与自检（`_dev/e2e.mjs` 端到端断言、`_dev/verify.mjs` 提交门禁）。
+ 
+@@ -20,3 +22,4 @@
+ | task_id | commit | verdict_digest | 摘要 |
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
++| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths:`：门禁/模板/钩子归本模块；M8 受理闸与 `--selftest` 落地 |
+diff --git a/specs/modules/version.md b/specs/modules/version.md
+index c56cc2c..1e240af 100644
+--- a/specs/modules/version.md
++++ b/specs/modules/version.md
+@@ -1,5 +1,7 @@
+ # MOD-version · 版本
+ 
++paths: version.js
++
+ ## 职责
+ 版本号与每版更新内容的唯一归属者，并产出人读的 `CHANGELOG.md`。
+ 
+@@ -20,3 +22,4 @@
+ | task_id | commit | verdict_digest | 摘要 |
+ |---|---|---|---|
+ | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
++| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: version.js`：模块归属由蓝图声明 |

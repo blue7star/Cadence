@@ -1,0 +1,23 @@
+{
+  "_comment": "受保护面：改动会改变运行行为或治理规则的文件。这里是最小可信集，抄脚手架默认值会漏掉真代码。新增受保护文件时必须同时给它在某个模块蓝图里写 paths:，否则 M1 会以「没有归属」拦截。",
+  "files": [
+    "server.js",
+    "version.js",
+    "import-emp.js",
+    "AGENTS.md",
+    ".agents/SPEC.md"
+  ],
+  "prefixes": [
+    "public/",
+    "_dev/",
+    "specs/",
+    "data/",
+    ".agents/templates/",
+    ".agents/gates/",
+    ".agents/scripts/",
+    ".agents/schemas/",
+    ".githooks/",
+    ".github/workflows/"
+  ],
+  "globs": ["*.bat"]
+}

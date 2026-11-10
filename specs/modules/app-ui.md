@@ -1,5 +1,7 @@
 # MOD-app-ui · 前端状态层、阶段与分工 UI、日历
 
+paths: public/
+
 ## 职责
 拉取 → 本地 `S` → 快照 diff → `save()` 的状态层；阶段树渲染（新建弹窗 `stageRowHTML` / 详情页 `stageTreeHTML` / 就地编辑 `sedit` / 加子任务 `subadd` / 列表卡片 `stageRows`）；日历（`occOn` / `calChipHTML` / `chipLate` / `calCells`）。
 
@@ -27,3 +29,4 @@
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-subtask-upstream | 见 git | — | 勾选框按责任人渲染；派生副本只留完成；承接台新增「完成」提醒标签 |
+| TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: public/`：模块归属由蓝图声明 |

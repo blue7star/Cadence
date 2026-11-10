@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: gate (M1-M6)
+      - name: gate (M1-M8; M9 未启用)
         run: |
           python .agents/gates/gate.py --ci --scope project \
             --base "origin/${{ github.base_ref }}"

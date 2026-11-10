@@ -1,11 +1,13 @@
 #!/bin/sh
-# 提交门禁。规则见 AGENTS.md 第 3 节。
+# 提交门禁：双轨，缺一不可。规则见 AGENTS.md 第 3/4 节。
 #
 # 为什么不用 .git/hooks：那个目录不进版本库，换台机器就消失了。
 # 启用方式（每台机器一次）：git config core.hooksPath .githooks
 #
-# 这道闸拦的是「改完代码没重跑校验就想提交」。不要用 git commit --no-verify 绕过去——
-# 那等于把 issues.md #9 的坑再踩一次。
+# 这道闸拦的是两件事：
+#   ① 改完代码没重跑校验就想提交（verify.mjs --hook）
+#   ② 改了受保护路径却没有契约、或契约受理字段没写完（gate.py --fast --staged）
+# 不要用 git commit --no-verify 绕过去——那等于把 issues.md #9 的坑再踩一次。
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
@@ -14,4 +16,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-exec node _dev/verify.mjs --hook
+if ! command -v python >/dev/null 2>&1; then
+  echo "[门禁] 找不到 python，契约门禁（M1/M8/M3）无法执行。"
+  echo "[门禁] 装 Python 3.10+ 再提交；缺了就跳过等于把这道闸拆了。"
+  exit 1
+fi
+
+node _dev/verify.mjs --hook || exit 1
+exec python .agents/gates/gate.py --fast --staged --repo .

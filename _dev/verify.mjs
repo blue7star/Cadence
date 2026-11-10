@@ -275,8 +275,27 @@ function gateSelftest() {
   });
   const out = ((r.stdout || '') + (r.stderr || '')).trim();
   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
-  return check('门禁反面用例（已知绕法全部被拦）', r.status === 0,
+  const okFast = check('门禁反面用例（已知绕法全部被拦）', r.status === 0,
     r.status === 0 ? out.split('\n').filter((l) => l.startsWith('[通过]'))[0] || ''
+      : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
+  return okFast && gateContractSelftest();
+}
+
+/* 契约门禁自己的反例：M1（受保护面/模块归属）与 M8（受理五字段）各要证明它红过。
+   只宣称「会拦」不算数，得有命令跑给你看。 */
+function gateContractSelftest() {
+  const gate = path.join(ROOT, '.agents', 'gates', 'gate.py');
+  if (!fs.existsSync(gate)) return check('契约门禁反面用例', false, '找不到 .agents/gates/gate.py');
+  const python = process.env.CADENCE_PYTHON || 'python';
+  const g = spawnSync(python, [gate, '--selftest'], { encoding: 'utf8', maxBuffer: 1 << 24 });
+  const out = ((g.stdout || '') + (g.stderr || '')).trim();
+  if (g.error) {
+    return check('契约门禁反面用例（M1/M8 会拦）', false,
+      `跑不了 ${python}（${g.error.code || g.error.message}）——缺它等于这道闸不存在`);
+  }
+  const fails = out.split('\n').filter((l) => l.startsWith('[失败]'));
+  return check('契约门禁反面用例（M1/M8 会拦）', g.status === 0,
+    g.status === 0 ? (out.split('\n').find((l) => l.startsWith('通过：')) || '')
       : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
 }
 
@@ -289,12 +308,16 @@ function gateSelftest() {
    2) 纯文档改动不改变任何可观察行为，为它重跑 90 秒 e2e 是浪费，
       而 AGENTS.md 第 2 节本来就允许 G0 只跑 --fast。
    文档单独算一个 docsDigest，只作记录，不参与放行判断。 */
-const DOC_ONLY = /^(docs\/|\.agents\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
+/* `artifacts/` 是证据，不是运行行为：任务契约、交付、verdict、事件账本都在这儿。
+   把它算进代码摘要会让「写一条证据」就改一次代码摘要——刚验完的树立刻变成另一棵树，
+   归档契约的复核锚点永远落后一代，下次 `--full` 必红，最后只能 `--no-verify`（issues #64）。
+   所以它和 `.agents/` 一样：不进代码摘要，进证据摘要，让 `--hook` 仍能看见它变了。 */
+const DOC_ONLY = /^(docs\/|\.agents\/|artifacts\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
 /* 「证据与规矩」类文件：不改变运行行为，但改变了「能不能信这棵树」。
    它们也排除在代码摘要之外，所以单独算一个 evidenceDigest，让 --hook 也能看见——
    否则改完契约第 3 段、改完 AGENTS.md 的 G 分级，门禁一律认为「这棵树没变过」。 */
 /* 2026-11-05 文档归位后，契约/issue/复核/采纳记录全部收进 `.agents/`，一条前缀覆盖。 */
-const EVIDENCE = [/^\.agents\//, /^AGENTS\.md$/];
+const EVIDENCE = [/^\.agents\//, /^artifacts\//, /^AGENTS\.md$/];
 
 function treeDigest() {
   const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],

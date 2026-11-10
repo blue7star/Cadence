@@ -1,0 +1,44 @@
+# 改造前探针（2026-11-09，改动前实测）
+
+目的：把「本来该拦却没拦」变成可复核的原始记录，而不是事后描述。
+
+## 1. 受保护面覆盖（直接调 gate.py 的 is_protected）
+
+```
+is_protected('server.js')            -> False
+is_protected('public/app.js')        -> False
+is_protected('public/index.html')    -> False
+is_protected('_dev/e2e.mjs')         -> False
+is_protected('_dev/verify.mjs')      -> False
+is_protected('version.js')           -> False
+is_protected('import-emp.js')        -> False
+is_protected('specs/modules/server-api.md') -> True
+is_protected('data/workbench.db')    -> True
+is_protected('AGENTS.md')            -> True
+```
+
+## 2. 模块归属匹配（旧实现按文件名 stem 猜模块）
+
+```
+契约 modules: server-api, app-ui
+module_intersects(['server.js'])      -> False
+module_intersects(['public/app.js'])  -> False
+```
+
+## 3. 真实提交上的表现
+
+```
+python .agents/gates/gate.py --ci --repo .
+-> M1 PASS: "TASK-20261109-subtask-upstream (G2) admitted, 2 protected paths"
+   那 2 条是 specs/modules/*.md；server.js / public/app.js 的改动不在受保护面里，
+   即使改了也不会触发 M1。
+```
+
+## 4. 门禁执行点
+
+```
+.githooks/pre-commit -> 只执行 node _dev/verify.mjs --hook，从不调用 gate.py
+```
+
+结论：四处（受保护面、模块匹配、受理字段、执行点）任一未补齐，「一句需求就开工」
+都能一路绿灯到提交。本 run 的作用就是把四处补上，并留下反例证明它们会红。

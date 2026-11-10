@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const DIR = path.join(ROOT, '.agents', 'archive', 'contracts');
 const VERIFY = path.join(ROOT, '_dev', 'verify.mjs');
+/* 锚点账本是后加的，第一版提交前 HEAD 里没有它——「改写旧记录」这条用例只能等它进过版本库再跑。 */
+const anchorsAtHead = spawnSync('git', ['show', 'HEAD:.agents/archive/pass-anchors.md'],
+  { cwd: ROOT, encoding: 'utf8' }).status === 0;
 
 function runFast() {
   const r = spawnSync(process.execPath, [VERIFY, '--fast'], {
@@ -97,6 +100,24 @@ const cases = [
     mutate: (s) => s.replace(/- 结论：[^\n]*/, '- 结论：有条件通过（条件：补 e2e 断言）'),
     skip: !PASSED,
     skipWhy: '当前没有 PASS 状态的契约——等第一份转 PASS 后自动生效'
+  },
+  {
+    name: '复核对象写一个没登记锚点的历史摘要，不许当通过',
+    file: PASSED,
+    /* 第八种绕法（2026-11-10）：把「复核对象必须等于当前树」放宽成「可以是历史树」之后，
+       随手编一个摘要就可能蒙混过关。现在只在 pass-anchors.md 里登记过的摘要才算数。 */
+    mutate: (s) => s.replace(/树摘要\s*`[0-9a-f]{16}`/, '树摘要 `deadbeefdeadbeef`'),
+    skip: !PASSED,
+    skipWhy: '当前没有 PASS 状态的契约——等第一份转 PASS 后自动生效'
+  },
+  {
+    name: '锚点账本只许追加，改写旧记录要被拦',
+    file: '../pass-anchors.md',
+    /* 第九种绕法（2026-11-10）：账本既然能「提供出处」，就能被改成另一个出处。
+       改标题、改旧锚点都算改写——门禁拿 HEAD 里的那份做前缀比对。 */
+    mutate: (s) => s.replace(/^# 历史 PASS 的锚点关系/m, '# 历史锚点关系'),
+    skip: !anchorsAtHead,
+    skipWhy: '账本还没进过 HEAD——第一版提交后自动生效'
   }
 ];
 

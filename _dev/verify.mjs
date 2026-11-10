@@ -90,7 +90,7 @@ function version() {
    - 交付段空着，状态却是 READY_FOR_REVIEW / PASS → 红（说可以复核了，可什么都没交）；
    - 交付段有内容，状态却是 PLANNED / IN_PROGRESS → 红（做完了不往前走）；
    - 交付有内容、停在 READY_FOR_REVIEW → 必须在 issues.md「未解决」表里挂编号（欠债登记，不是豁免）；
-   - PASS 另外要：一次 --full 的绿证据 + 复核记录绑在**同一棵树**上 + 结论就是「通过」（「有条件通过」不算）；
+   - PASS 另外要：一次 --full 的绿证据 + 复核记录绑在**它复核的那棵树**上（当前树，或在 `.agents/archive/pass-anchors.md` 里登记过的历史树）+ 结论就是「通过」（「有条件通过」不算）；
    - 一个编号只能挂一份契约，PASS 之后也一样——否则它就从欠债凭证变成通用豁免券。
    机器只能证明「有人写下过一条指向这版代码的复核记录」，证明不了复核真的发生了——那部分仍归人。 */
 function contracts() {
@@ -98,6 +98,25 @@ function contracts() {
   if (!fs.existsSync(dir)) return check('契约状态与复核记录', false, '找不到 .agents/archive/contracts/');
   const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
   const live = rep && rep.full && rep.ok ? rep.digest : null;
+  /* 独立锚点记录：每份历史 PASS 当初复核的是哪棵树、之后的树怎么变的。
+     它不改契约原文，也不代替复核结论；只在「摘要不是当前树」时提供出处。 */
+  const anchorFile = path.join(ROOT, '.agents', 'archive', 'pass-anchors.md');
+  const anchors = () => (fs.existsSync(anchorFile)
+    ? fs.readFileSync(anchorFile, 'utf8').split('\n') : []);
+  /* 账本只许追加：锚点写进去之后不能再改。
+     拿 HEAD 里的那份做前缀比对——改一个旧锚点，等于把历史证据挪个位置，
+     而门禁只认账本里的原始锚点，改了就成「自己给自己发豁免券」。
+     第一版在 HEAD 里还不存在时（或不在 git 仓库里）不设限。 */
+  const anchorsAppendOnly = () => {
+    if (!fs.existsSync(anchorFile)) return true;
+    let head;
+    try {
+      head = execFileSync('git', ['show', 'HEAD:.agents/archive/pass-anchors.md'],
+        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { return true; }
+    const now = fs.readFileSync(anchorFile, 'utf8').replace(/\r\n/g, '\n');
+    return now.startsWith(head.replace(/\r\n/g, '\n'));
+  };
 
   const files = [];
   (function walk(d) {
@@ -114,8 +133,9 @@ function contracts() {
   const unresolved = fs.existsSync(path.join(ROOT, '.agents', 'issues.md'))
     ? fs.readFileSync(path.join(ROOT, '.agents', 'issues.md'), 'utf8').split('## 已解决')[0] : '';
   const bad = [];
-  const debts = {}; /* 欠债编号 → 挂了它的契约名，用来发现「一张豁免券被几份契约共用」 */
+  if (!anchorsAppendOnly()) bad.push('pass-anchors.md 改写了已提交的锚点（账本只许追加）');
   const nos = (t) => [...t.matchAll(/[#＃](\d+)/g)].map((x) => x[1]);
+  const debts = {}; /* 欠债编号 → 挂了它的契约名，用来发现「一张豁免券被几份契约共用」 */
 
   /* 段落锚定：**认编号，不认标题里的字**。
      上一版用 `includes('交付')` 找段落，于是「## 1. 任务（交付前必读）」这种标题
@@ -237,8 +257,16 @@ function contracts() {
     /* 模板写的是「新开一轮对话」，门禁原先只认「新开的对话」——按模板填的 PASS 会被误拦。
        这类「模板与门禁对不上」的错，机器只会报成「复核方式不合格」，人看了只会去改文档。 */
     if (!/^(新开(的对话|一轮对话)|独立的子代理|他人)/.test(way)) holes.push('复核方式（要写明是谁、哪种方式）');
-    if (!/树摘要\s*`?[0-9a-f]{16}`?/.test(obj)) holes.push('复核对象（必须写 16 位树摘要）');
-    else if (!obj.includes(live)) holes.push(`复核对象不是当前这棵树（报告是 ${live}）`);
+    /* PASS 绑的是「它复核时那棵树」，不是「现在这棵树」。
+       旧写法要求所有历史 PASS 契约都包含当前摘要——每改一次代码就得回去改历史结论，
+       等于把复核证据改成「看起来还绿」。现在：摘要等于当前树 → 通过；
+       摘要不是当前树 → 必须在 pass-anchors.md 里有一条同时写着这份契约名和这个摘要的锚点。
+       摘要写错、锚点缺失、表里查不到，照样红。 */
+    const dg = (obj.match(/树摘要\s*`?([0-9a-f]{16})`?/) || [])[1];
+    if (!dg) holes.push('复核对象（必须写 16 位树摘要）');
+    else if (dg !== live && !anchors().some((line) => line.includes(name) && line.includes(dg))) {
+      holes.push(`复核对象 ${dg} 既不是当前这棵树（${live}），也没有在 .agents/archive/pass-anchors.md 里登记锚点`);
+    }
     /* PASS 的结论只能是「通过」。「有条件通过」的意思是条件还没做完，那就是没通过。 */
     if (!/^通过/.test(verdict) || /有条件/.test(verdict)) {
       holes.push('结论（PASS 只能是「通过」；「有条件通过」说明条件还没做完）');

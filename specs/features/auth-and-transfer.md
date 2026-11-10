@@ -15,13 +15,13 @@
 
 ### C1（已由新格式消除）阶段原先把 `id` / `done` / `pid` 挤在一格里
 
-- 事实：`stages` 是 JSON 数组，元素 `{id,name,start,end,done,pid,who,whoAt,joinedAt,doneBy,doneAt}`；`applyStageOwners()` 先按 `id` 匹配旧段，匹配不到再按**下标**兜底（[server.js L509-L531](file:///d:/ai_project/ai_work/Cadence/server.js#L509-L531)）。`pid` 为空的段会被删掉 `who/whoAt/joinedAt`。
-- 原冲突：`名称@开始@结束@负责人工号;…` 没有 `id`/`done`/`pid`，回灌会把已完成阶段变未完成、让父任务从 `已完成` 掉回 `进行中`（[server.js L755-L756](file:///d:/ai_project/ai_work/Cadence/server.js#L755-L756)）、把子任务拉平并清掉责任人。
+- 事实：`stages` 是 JSON 数组，元素 `{id,name,start,end,done,pid,who,whoAt,joinedAt,doneBy,doneAt}`；`applyStageOwners()` 先按 `id` 匹配旧段，匹配不到再按**下标**兜底（[server.js L509-L531](../../server.js#L509-L531)）。`pid` 为空的段会被删掉 `who/whoAt/joinedAt`。
+- 原冲突：`名称@开始@结束@负责人工号;…` 没有 `id`/`done`/`pid`，回灌会把已完成阶段变未完成、让父任务从 `已完成` 掉回 `进行中`（[server.js L755-L756](../../server.js#L755-L756)）、把子任务拉平并清掉责任人。
 - **结论：改成「一行一阶段」后这条自动消失**——阶段编号、阶段完成、阶段完成日、父阶段编号各自成列，不再靠一格字符串表达，D1 不再需要拍板。留下的约束是：导入必须按「阶段编号」匹配旧段，不能按下标。
 
 ### C2 分类存的是 id，不是名称；而且分类按人隔离、无重名约束
 
-- 事实：`task.cat1/cat2` 存 `cat.id`（示例数据形如 `1012_c1`，[server.js L1082](file:///d:/ai_project/ai_work/Cadence/server.js#L1082)）；`cat` 表按 `owner_no` 隔离，`name` 上没有唯一约束；`stateFor()` 只返回**我自己的**分类树（[server.js L442-L446](file:///d:/ai_project/ai_work/Cadence/server.js#L442-L446)）。
+- 事实：`task.cat1/cat2` 存 `cat.id`（示例数据形如 `1012_c1`，[server.js L1082](../../server.js#L1082)）；`cat` 表按 `owner_no` 隔离，`name` 上没有唯一约束；`stateFor()` 只返回**我自己的**分类树（[server.js L442-L446](../../server.js#L442-L446)）。
 - 冲突：只导名称，回灌要靠「在我的分类树里按名称反查 id」。两个坑：
   1. 同级重名 → 无法确定 id；
   2. **接收来的任务，cat1/cat2 可能指向发布人的分类 id**，在我这棵树里根本查不到——现在界面上这类任务的分类就是显示空。
@@ -29,14 +29,14 @@
 
 ### C3 「完成日期」在库里没有任务级字段
 
-- 事实：只有阶段级的 `doneAt`，且格式是 `YYYY-MM-DD`（[server.js L527-L529](file:///d:/ai_project/ai_work/Cadence/server.js#L527-L529)）；`task` 表没有 `completed_at`。
+- 事实：只有阶段级的 `doneAt`，且格式是 `YYYY-MM-DD`（[server.js L527-L529](../../server.js#L527-L529)）；`task` 表没有 `completed_at`。
 - 口径：你已明确「接受只到日期、不为它改数据模型」。
 - 落地定义：导出列 `完成日期` = 当 `status=done` 时取所有叶子阶段 `doneAt` 的最大值，否则空；**导入时该列只读、忽略**（完成时间只能由勾选动作产生）。
 - 后果：无阶段的任务被标成 `done` 时，这一列永远是空。这是现状，不是缺陷。
 
 ### C4 常规任务实例回灌后会被系统删掉
 
-- 事实：`pruneOrphans()` 每次 `/api/state` 都会删掉 `type='routine'` 且 `detached=0`、`routine_id` 不在 `rule` 表里的任务（[server.js L332-L338](file:///d:/ai_project/ai_work/Cadence/server.js#L332-L338)）。
+- 事实：`pruneOrphans()` 每次 `/api/state` 都会删掉 `type='routine'` 且 `detached=0`、`routine_id` 不在 `rule` 表里的任务（[server.js L332-L338](../../server.js#L332-L338)）。
 - 冲突：导入新建的常规任务没有 `routine_id` → 下一次刷新就消失，用户看到的是「导入成功，但东西没了」。
 - 建议（需拍板 → D3）：新建的常规任务一律写 `detached=1`（语义就是「不跟规则走的脱钩实例」）。更新已有实例不动 `routine_id`。
 
@@ -48,13 +48,13 @@
 
 ### C6 `temp` 派生副本不能导
 
-- 事实：子任务责任人点「加入待办」会生成 `type='temp'` 的副本，`stage_ref` 指回父任务的某一段（[server.js L980](file:///d:/ai_project/ai_work/Cadence/server.js#L980)）。
+- 事实：子任务责任人点「加入待办」会生成 `type='temp'` 的副本，`stage_ref` 指回父任务的某一段（[server.js L980](../../server.js#L980)）。
 - 冲突：这些副本在承接人眼里也是「自己负责的任务」，但它们是从父任务阶段派生的镜像，导出再导入会变成独立任务，和父任务的勾选状态互相打架。
 - 结论：导出、导入都排除 `type='temp'`（或 `stage_ref` 非空）。
 
 ### C7 不上 TLS + 初始密码 = 工号，是明写记录的已知风险
 
-- 事实：`server.listen(PORT,'0.0.0.0')`，无 TLS、无反代（[server.js L1478](file:///d:/ai_project/ai_work/Cadence/server.js#L1478)）。
+- 事实：`server.listen(PORT,'0.0.0.0')`，无 TLS、无反代（[server.js L1478](../../server.js#L1478)）。
 - 风险 R1（**Human 已接受，写进文档，不含糊**）：
   1. 明文 HTTP，同一局域网内可嗅探 `sid` cookie；**拿到 cookie 等于拿到身份**，绕开密码；
   2. 初始密码 = 工号，属于弱口令；工号在内部通常是公开信息，等于「默认全员可登录」；
@@ -73,13 +73,13 @@
 
 ### C9 全部接口绑会话后，现有 e2e 会大面积红
 
-- 事实：`_dev/e2e.mjs` 163 项检查里，大量请求直接带 `me:'1012'` 之类参数（[app.js L2586-L2588](file:///d:/ai_project/ai_work/Cadence/public/app.js#L2586-L2588) 的同类用法）；Node 自带 `fetch`（undici）**不会自动保存 cookie**。
+- 事实：`_dev/e2e.mjs` 163 项检查里，大量请求直接带 `me:'1012'` 之类参数（[app.js L2586-L2588](../../public/app.js#L2586-L2588) 的同类用法）；Node 自带 `fetch`（undici）**不会自动保存 cookie**。
 - 冲突：`me ≡ session.no` 一上线，所有带 `me` 的请求都会 403；`node _dev/verify.mjs --full` 必红，而它是提交前必过的那道门。
 - 结论：e2e 改造是第一批的**正式工作项**，不是「顺手修一下」。需要：登录助手（每身份一次）+ 手动 cookie 头透传 + 换身份时重新登录。零依赖约束下不引 cookie jar 库。
 
 ### C10 新目录 `specs/features/` 没有任何蓝图声明归属，提交会被 M1 拦
 
-- 事实：M1 要求「每个受保护路径都要被某个声明模块的 `paths:` 覆盖」（[gate.py L441-L455](file:///d:/ai_project/ai_work/Cadence/.agents/gates/gate.py#L441-L455)），而现有蓝图只声明到 `specs/modules/`。
+- 事实：M1 要求「每个受保护路径都要被某个声明模块的 `paths:` 覆盖」（[gate.py L441-L455](../../.agents/gates/gate.py#L441-L455)），而现有蓝图只声明到 `specs/modules/`。
 - 处理：本文件放在 `specs/features/` 下（按你的要求「Spec 放 specs/ 下」），同时在 `specs/modules/tooling.md` 的 `paths:` 补 `specs/features/`。**这是提交这份 Spec 的前置条件**，不补就是 pre-commit 直接拦。
 
 ### C11 导入不用 multipart
@@ -89,24 +89,24 @@
 
 ### C12 登录错误文案必须合并
 
-- 事实：现在 `/api/login` 会分别提示「花名册里没有工号 X」和「姓名不是 X」（[server.js L1317-L1318](file:///d:/ai_project/ai_work/Cadence/server.js#L1317-L1318)）。
+- 事实：现在 `/api/login` 会分别提示「花名册里没有工号 X」和「姓名不是 X」（[server.js L1317-L1318](../../server.js#L1317-L1318)）。
 - 冲突：换成密码后若保留差异化文案，登录接口就是一个**工号枚举器**，锁 5 次也拦不住慢速枚举。
 - 结论：统一为「工号或密码不正确」。锁定提示单独一条，且不透露该工号是否存在。
 
 ### C13 状态枚举比你列的三项多一个「暂缓」（**已定：四值**）
 
-- 事实：状态是四值 `todo / doing / paused / done`（[app.js L49-L53](file:///d:/ai_project/ai_work/Cadence/public/app.js#L49-L53)），界面就叫「暂缓」。
+- 事实：状态是四值 `todo / doing / paused / done`（[app.js L49-L53](../../public/app.js#L49-L53)），界面就叫「暂缓」。
 - 冲突：你给的格式口径是「待办/进行中/已完成」三项。照办的话，暂缓任务要么导不出去、要么被硬塞进这三类——两种都是数据失真。
 - **结论（已拍板）**：导出枚举按 **待办 / 进行中 / 暂缓 / 已完成** 四值输出，导入只认这四个词。**不许降级合并**（暂缓不并入进行中，也不排除）。
 
 ### C14 「阶段负责人」回来了，但「派发时间」回不来
 
-- 事实：子任务责任人只有在 `stages[].whoAt` 有值时才算「已派发」（[server.js L363-L365](file:///d:/ai_project/ai_work/Cadence/server.js#L363-L365)）；`whoAt` 由派发动作产生，不是人填的。
-- 影响：已有任务按阶段编号匹配更新时，`who` 不变就会沿用库里的 `whoAt`（[server.js L519-L520](file:///d:/ai_project/ai_work/Cadence/server.js#L519-L520)），所以**更新路径不受影响**；但新建任务时阶段负责人只是「指定」，不是「已派发」——这是正确语义，不是缺陷，写在这里免得验收时被当成 bug。
+- 事实：子任务责任人只有在 `stages[].whoAt` 有值时才算「已派发」（[server.js L363-L365](../../server.js#L363-L365)）；`whoAt` 由派发动作产生，不是人填的。
+- 影响：已有任务按阶段编号匹配更新时，`who` 不变就会沿用库里的 `whoAt`（[server.js L519-L520](../../server.js#L519-L520)），所以**更新路径不受影响**；但新建任务时阶段负责人只是「指定」，不是「已派发」——这是正确语义，不是缺陷，写在这里免得验收时被当成 bug。
 
 ### C15 `doneBy`（谁勾的）不导出
 
-- 事实：阶段完成人 `doneBy` 由勾选动作写入（[server.js L527-L529](file:///d:/ai_project/ai_work/Cadence/server.js#L527-L529)）。
+- 事实：阶段完成人 `doneBy` 由勾选动作写入（[server.js L527-L529](../../server.js#L527-L529)）。
 - 口径：文件里只有「完成」和「完成日」，没有完成人。更新路径按阶段编号匹配、完成态不变时保留原 `doneBy`；新建路径由导入人成为 `doneBy`。
 - 验收时断言 **done / doneAt** 等价，不断言 `doneBy`。
 

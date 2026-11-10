@@ -153,7 +153,7 @@
 | `POST /api/logout` | 会话 | 删当前 `sess` 行 + 清 cookie |
 | `POST /api/password` | 会话 | body `{old,new}`；校验旧密码；改后 `initial=0`，**吊销该人其它会话**（保留当前） |
 | `POST /api/admin/reset-password` | 超管 | body `{no}`；把该人密码重置回工号、`initial=1`、吊销其全部会话 |
-| `GET /api/admin/initial-passwords` | 超管 | 返回 `{no,name,firstLoginAt,firstLoginIp}[]`，只列 `initial=1` 且已登录过的 |
+| `GET /api/admin/initial-passwords` | 超管 | 返回 `{no,name,firstLoginAt,firstLoginIp,neverLoggedIn}[]`，列**所有仍在用初始密码（=工号）的在职员工**：`cred.initial=1`，或**从没登录过、库里还没有 cred 行**的人（他们同样在用初始密码）。从未登录时 `firstLoginAt=null` |
 | 其余所有 `/api/*` | 会话 | 见 3.4 |
 
 `/api/version`、`/api/changelog` 保持公开（登录页要显示版本）。

@@ -1589,13 +1589,22 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/admin/initial-passwords' && req.method === 'GET') {
       if (me !== ADMIN_NO) return sendJSON(res, 403, { ok: false, msg: '只有超管能看' });
-      const list = db.prepare(`SELECT c.no, e.name FROM cred c JOIN emp e ON e.no=c.no
-          WHERE c.initial=1 AND e.active=1 ORDER BY c.no`).all()
+      /* 口径：还在用初始密码（=工号）的在职员工。
+         从没登录过的人库里连 cred 行都还没有，只筛 cred.initial=1 会把他们整批漏掉——
+         而他们恰恰是风险最大的一批（密码就是公开的工号，且从未改过）。 */
+      const list = db.prepare(`SELECT e.no, e.name FROM emp e
+          LEFT JOIN cred c ON c.no=e.no
+          WHERE e.active=1 AND (c.no IS NULL OR c.initial=1)
+          ORDER BY e.no`).all()
         .map(r => {
           const first = db.prepare("SELECT created_at, ip FROM op_log WHERE actor_no=? AND action='login' ORDER BY id LIMIT 1").get(r.no);
-          return { no: r.no, name: r.name, firstLoginAt: first ? first.created_at : null, firstLoginIp: first ? first.ip : null };
-        })
-        .filter(x => x.firstLoginAt);
+          return {
+            no: r.no, name: r.name,
+            firstLoginAt: first ? first.created_at : null,
+            firstLoginIp: first ? first.ip : null,
+            neverLoggedIn: !first
+          };
+        });
       return sendJSON(res, 200, { ok: true, adminNo: ADMIN_NO, list });
     }
 

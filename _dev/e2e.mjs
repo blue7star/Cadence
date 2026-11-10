@@ -2621,6 +2621,13 @@ async function main() {
   check('超管身份可在会话里识别（按 meta.auth.admin_no，默认 005822）', !!adminNo, JSON.stringify(adminFlags));
   const plainNo = Object.keys(adminFlags).find(n => !adminFlags[n]) || '';
 
+  /* 一个从没登录过的新人：库里连 cred 行都还没有，但密码同样是工号。
+     名单口径必须包含他，否则「还在用初始密码的人」这张表会漏掉风险最大的一批。 */
+  const NEVERNO = '1021';
+  runImport(writeCsv('t-never.csv', '工号,姓名,岗位,部门,上级工号\n1021,唐宁,专员,产品部,\n'));
+  const neverCred = dbGet('SELECT COUNT(*) c FROM cred WHERE no=?', NEVERNO);
+  const neverHasCred = !!neverCred && neverCred.c > 0;
+
   if (adminNo && plainNo) {
     const forbid = await apiAs(plainNo, '/api/admin/reset-password', { me: plainNo, no: '1004' });
     check('非超管重置密码 → 403', forbid.status === 403, String(forbid.status));
@@ -2639,7 +2646,20 @@ async function main() {
     check('初始密码名单列出重置回来的人，并带首次登录时间/IP',
       (list.json || {}).ok === true && one.no === '1004' && !!one.firstLoginAt && 'firstLoginIp' in one,
       JSON.stringify(one).slice(0, 160));
+
+    const never = ((list.json || {}).list || []).find(x => x.no === NEVERNO) || {};
+    check('初始密码名单包含「从没登录过、仍是默认密码」的人（firstLoginAt 为空）',
+      neverHasCred === false && never.no === NEVERNO && never.firstLoginAt === null && never.neverLoggedIn === true,
+      `cred=${neverHasCred} / ${JSON.stringify(never).slice(0, 120)}`);
   }
+
+  /* 临时工号用完删掉，别留在测试库花名册里 */
+  execFileSync(process.execPath, ['--no-warnings', '-e',
+    `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(DB)});
+     db.prepare('DELETE FROM cred WHERE no=?').run('${NEVERNO}');
+     db.prepare('DELETE FROM emp WHERE no=?').run('${NEVERNO}');
+     db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
+  { cwd: ROOT, stdio: 'ignore' });
 
   /* --- 失败锁定：用一次性账号，避免把演示账号锁给下一轮 --- */
   const lockMsgs = [];

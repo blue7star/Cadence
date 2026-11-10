@@ -226,9 +226,14 @@ node _dev/verify.mjs --full   # 上面全套 + 服务版本比对 + e2e 143 项�
 node _dev/e2e.mjs             # 只想要 e2e 时直接跑（调试用，默认 http://localhost:8788）
 ```
 
-`verify.mjs` 是提交门禁的本体。它先算「磁盘上这棵树」的摘要（**含未提交、未跟踪的文件**），
-五项全绿才把摘要写进 `_dev/verify-report.json`；`--hook` 模式再复核这个摘要没变过。
+`verify.mjs` 是提交门禁的本体。它算的是「已经 `git add` 的这棵树」的摘要：对索引里的 git blob 做
+LF 归一后逐个哈希，所以同一个 commit 在任何人机器上复算出来的值都一样（2026-11-10 之前读的是工作区原文，
+CRLF / LF 检出会得出两个值）。`--full` 另外要求**工作区干净**（没有未暂存的改动、没有未跟踪的文件），
+避免「验的是 A、提交的是 B」。全部绿才把摘要写进 `_dev/verify-report.json`；`--hook` 模式再复核摘要没变过。
 所以「验过之后又改了代码」会被拦，并列出改动了哪几个文件——这正是 0.4.7–0.4.13 七版积压时缺的那道闸。
+
+报告里同时记了 `head`（验证时的 HEAD）和 `each`（每个文件的哈希）；换台机器 checkout 后跑
+`node _dev/verify.mjs --recheck` 就能复算并逐文件核对，不需要重跑 e2e。
 
 钩子要在每台机器上启用一次，**不做就静默失效**：
 
@@ -237,8 +242,8 @@ git config core.hooksPath .githooks
 ```
 
 脚本里的 Chromium 路径取自本机 Playwright 缓存，换机器需要改 `_dev/e2e.mjs` 顶部的 `CHROME` 常量。
-`_dev/` 下的**脚本进版本库**（e2e 得能换机器复跑），产物不进：截图在 `_dev/shots/`，
-报告是 `_dev/verify-report.json`，两者都在 `.gitignore` 里。
+`_dev/` 下的**脚本进版本库**（e2e 得能换机器复跑），产物不进：截图在 `_dev/shots/`。
+唯一的例外是 `_dev/verify-report.json`——它是**证据**，跟着提交一起进库，否则「这棵树验过」无法被别人复算。
 
 ## 8. 换机器部署
 

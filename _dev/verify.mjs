@@ -4,12 +4,13 @@
  * 为什么自建而不用 ai-native-engineering 的 gates/gate.py：
  * 它的 M1/M3 只比 `HEAD~1...HEAD`，0.4.7–0.4.13 七个版本堆在工作区没提交时，
  * `gate.py --ci` 照样返回 pass。门禁看不见「即将提交的这棵树」，就等于没有门禁。
- * 这里换个口径：先算「现在磁盘上这棵树」的摘要（含未提交、未跟踪），
- * 校验通过才把摘要记下来；pre-commit 再复核摘要没变过。
+ * 这里换个口径：先算「已经 git add 的这棵树」的摘要（索引 blob，LF 归一），
+ * 校验通过才把摘要记下来；pre-commit 再复核摘要没变过。报告进版本库，任何人 checkout 后能复算。
  *
  *   node _dev/verify.mjs --fast   静态检查（秒级，改一行就跑得动）
  *   node _dev/verify.mjs --full   静态检查 + 版本自检 + e2e（提交前跑这个）
  *   node _dev/verify.mjs --hook   pre-commit 调用：静态检查 + 复核这棵树验过
+ *   node _dev/verify.mjs --recheck  换台机器 checkout 之后复算：与归档报告逐文件比对
  *
  * 退出码：0 通过；1 不通过（pre-commit 会据此拦下提交）。
  */
@@ -24,6 +25,9 @@ const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const REPORT = path.join(ROOT, '_dev', 'verify-report.json');
 const FAST_REPORT = path.join(ROOT, '_dev', 'verify-report-fast.json');
 const FAIL_REPORT = path.join(ROOT, '_dev', 'verify-report-last-fail.json');
+/* 生成物不参与摘要：报告里写着摘要，摘要又算报告 → 写完就自指。
+   它进版本库是为了让任何人复算，不是为了改变这棵树的身份。 */
+const GENERATED = /^_dev\/verify-report(-last-fail|-fast)?\.json$/;
 const BASE = process.env.CADENCE_BASE || 'http://localhost:8788';
 const MODE = process.argv[2] || '--fast';
 
@@ -347,32 +351,53 @@ const DOC_ONLY = /^(docs\/|\.agents\/|artifacts\/|CHANGELOG\.md$|README\.md$|DEV
 /* 2026-11-05 文档归位后，契约/issue/复核/采纳记录全部收进 `.agents/`，一条前缀覆盖。 */
 const EVIDENCE = [/^\.agents\//, /^artifacts\//, /^AGENTS\.md$/];
 
+/* 2026-11-10：摘要改成对**索引里的 git blob** 做 LF 归一后再算。
+   旧写法直接读工作区原文，有两个复算不出来的洞：
+   1) 同一份代码，CRLF 检出与 LF 检出会算出两个值——「任何人 checkout 后复算」就是句空话；
+   2) 工作区里没 add 的改动会混进摘要，验的和提交的可能不是同一份东西。
+   现在同样的 blob + 同样的归一，谁算都一样；`--full` 另外要求工作区干净（见 worktreeClean），
+   提交后 `git rev-parse HEAD^{tree}` 就是这份索引，报告里也记了它的 sha。 */
 function treeDigest() {
-  const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+  const raw = execFileSync('git', ['ls-files', '-s', '-z'],
     { cwd: ROOT, maxBuffer: 1 << 28 }).toString();
-  const files = out.split('\0').filter(Boolean).sort();
+  const entries = raw.split('\0').filter(Boolean).map((line) => {
+    const tab = line.indexOf('\t');
+    const [mode, sha, stage] = line.slice(0, tab).split(' ');
+    return { mode, sha, stage, path: line.slice(tab + 1) };
+  }).filter((e) => e.stage === '0' && !GENERATED.test(e.path))
+    .sort((a, b) => (a.path < b.path ? -1 : 1));
+
+  const batch = execFileSync('git', ['cat-file', '--batch'], {
+    cwd: ROOT, maxBuffer: 1 << 29,
+    input: entries.map((e) => e.sha).join('\n') + '\n'
+  });
   const h = crypto.createHash('sha256');
   const dh = crypto.createHash('sha256');
   const eh = crypto.createHash('sha256');
   const each = {};
   let codeFiles = 0;
   let evidenceFiles = 0;
-  for (const f of files) {
-    let buf;
-    try { buf = fs.readFileSync(path.join(ROOT, f)); } catch { continue; } /* 已删除、待提交 */
-    each[f] = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 12);
-    const isDoc = DOC_ONLY.test(f);
+  let pos = 0;
+  for (const e of entries) {
+    const nl = batch.indexOf(10, pos);
+    const size = Number(batch.toString('utf8', pos, nl).split(' ')[2]);
+    let buf = batch.subarray(nl + 1, nl + 1 + size);
+    pos = nl + 1 + size + 1; /* 跳过内容后面那个换行 */
+    /* LF 归一：仓库里同一个文件不管以什么行尾检出，摘要必须一样 */
+    if (buf.includes(13)) buf = Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+    each[e.path] = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 12);
+    const isDoc = DOC_ONLY.test(e.path);
     const hh = isDoc ? dh : h;
     if (!isDoc) codeFiles++;
-    if (EVIDENCE.some((re) => re.test(f))) {
+    if (EVIDENCE.some((re) => re.test(e.path))) {
       evidenceFiles++;
-      eh.update(f); eh.update('\0'); eh.update(String(buf.length)); eh.update('\0'); eh.update(buf);
+      eh.update(e.path); eh.update('\0'); eh.update(String(buf.length)); eh.update('\0'); eh.update(buf);
     }
-    hh.update(f); hh.update('\0'); hh.update(String(buf.length)); hh.update('\0'); hh.update(buf);
+    hh.update(e.path); hh.update('\0'); hh.update(String(buf.length)); hh.update('\0'); hh.update(buf);
   }
   return {
     digest: h.digest('hex').slice(0, 16), docsDigest: dh.digest('hex').slice(0, 16),
-    evidenceDigest: eh.digest('hex').slice(0, 16),
+    evidenceDigest: eh.digest('hex').slice(0, 16), algo: 2,
     files: Object.keys(each).length, codeFiles, evidenceFiles, each
   };
 }
@@ -381,6 +406,21 @@ function headRev() {
   try {
     return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT }).toString().trim();
   } catch { return ''; }
+}
+
+/* --full 只验「已经全部 add 的树」：人跑的是这份，提交的也得是这份。
+   报告是生成物，每跑一次都会变，不算脏。 */
+function worktreeClean() {
+  const list = (args) => execFileSync('git', args, { cwd: ROOT }).toString()
+    .split('\n').filter((f) => f && !GENERATED.test(f));
+  const bad = [...new Set([
+    ...list(['diff', '--name-only']),
+    ...list(['ls-files', '--others', '--exclude-standard'])
+  ])];
+  return check('工作区干净（只验已入索引的树）', bad.length === 0,
+    bad.length
+      ? `未暂存/未跟踪 ${bad.length} 个：${bad.slice(0, 5).join(', ')}${bad.length > 5 ? ' …' : ''} → git add 后重跑`
+      : '索引即待提交的树');
 }
 
 /* 摘要对不上时，指出是哪些文件变了——只说「树变了」等于让人自己猜 */
@@ -425,12 +465,27 @@ async function main() {
   let ok = syntax() && version() && contracts() && gateSelftest();
 
   if (MODE === '--full') {
+    ok = worktreeClean() && ok;
     const up = await served();
     /* 服务没起或版本旧，e2e 验的是旧代码，跑了也没意义 */
     ok = up ? e2e() && ok : false;
   }
 
   const tree = treeDigest();
+
+  if (MODE === '--recheck') {
+    /* 换台机器 checkout 之后，用同一份归档报告复算：摘要必须一样。
+       摘要只算索引 blob + LF 归一，所以「谁算都一样」这句才不是空话。 */
+    const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
+    const same = !!rep && rep.full === true && rep.ok === true
+      && rep.digest === tree.digest && rep.evidenceDigest === tree.evidenceDigest;
+    const d = rep ? diffPaths(rep.each, tree.each) : [];
+    const why = !rep ? '没有归档的报告 → 先跑 --full 并提交它'
+      : same ? `${rep.digest} · 报告 head ${rep.head} · 逐文件复算一致`
+        : `${d.length} 个文件与报告不一致${d.length ? '：' + d.slice(0, 5).join(', ') + (d.length > 5 ? ' …' : '') : ''}`;
+    check('复算：这棵树与归档报告一致', same, why);
+    ok = same && ok;
+  }
 
   if (MODE === '--hook') {
     /* 静态问题先报，报完再看有没有完整的验证记录 */
@@ -466,6 +521,7 @@ async function main() {
     const report = {
       at: new Date().toISOString(), mode: MODE, head: headRev(),
       digest: tree.digest, docsDigest: tree.docsDigest, evidenceDigest: tree.evidenceDigest,
+      algo: tree.algo,
       files: tree.files, codeFiles: tree.codeFiles, evidenceFiles: tree.evidenceFiles,
       each: tree.each, full: true, ok, checks
     };

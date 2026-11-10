@@ -17,11 +17,11 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 
 ## 依赖与边界
 - `e2e.mjs` 驱动本机 Chromium CDP，零依赖。
-- 脚本进版本库；截图/报告（`_dev/shots/`、`_dev/verify-report.json`）进 `.gitignore`。
+- 脚本进版本库；截图（`_dev/shots/`）进 `.gitignore`。`_dev/verify-report.json` 是证据，跟着提交进库（不忽略），否则任何人都复算不出「这棵树验过」。
 
 ## 变更历史
 | task_id | commit | verdict_digest | 摘要 |
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths:`：门禁/模板/钩子归本模块；M8 受理闸与 `--selftest` 落地 |
-| TASK-20261110-auth-export | 见 git | — | `paths:` 补 `specs/features/`；pre-commit 支持 `GATE_TASK`；e2e 改会话身份、新增认证与导出断言、错误汇总区分预期 401；历史 PASS 不再重锚树摘要，改由 `.agents/archive/pass-anchors.md` 记录锚点 |
+| TASK-20261110-auth-export | 见 git | — | `paths:` 补 `specs/features/`；pre-commit 支持 `GATE_TASK`；e2e 改会话身份、新增认证与导出断言、错误汇总区分预期 401；历史 PASS 不再重锚树摘要，改由 `.agents/archive/pass-anchors.md` 记录锚点；树摘要改为索引 blob + LF 归一、`--full` 要求工作区干净、报告进库并支持 `--recheck` 复算 |

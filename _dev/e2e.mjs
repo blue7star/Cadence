@@ -35,6 +35,10 @@ const dbGet = (sql, ...p) => {
   const db = new (require_('node:sqlite').DatabaseSync)(DB);
   try { return db.prepare(sql).get(...p); } finally { db.close(); }
 };
+const dbAll = (sql, ...p) => {
+  const db = new (require_('node:sqlite').DatabaseSync)(DB);
+  try { return db.prepare(sql).all(...p); } finally { db.close(); }
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* 日期加减：统一走 UTC，避免本地时区把日期推前一天 */
 const addDaysStr = (d, n) => new Date(new Date(d + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
@@ -2472,6 +2476,13 @@ async function main() {
     wrongPwd.ok === false && ghost.ok === false && wrongPwd.msg === ghost.msg && wrongPwd.msg === '工号或密码不正确',
     `密码错=${wrongPwd.msg} / 没这人=${ghost.msg}`);
 
+  /* --- 导出：鉴权反例（不能只靠 /api/state 的 401/403 倒推导出也挡住了） --- */
+  const expAnon = await fetch(BASE + '/api/export/tasks.csv');
+  check('导出：无 cookie → 401（不是回一份空 CSV）', expAnon.status === 401, String(expAnon.status));
+  const expOther = await fetch(BASE + '/api/export/tasks.csv?me=1002',
+    { headers: { Cookie: 'sid=' + (await sidOf('1012')) } });
+  check('导出：?me=别人 → 403（身份只认 cookie）', expOther.status === 403, String(expOther.status));
+
   /* --- 导出：结构 --- */
   const exp = await fetch(BASE + '/api/export/tasks.csv', { headers: { Cookie: 'sid=' + (await sidOf('1012')) } });
   const raw = Buffer.from(await exp.arrayBuffer());
@@ -2521,6 +2532,25 @@ async function main() {
       const t = (stNow.tasks || []).find(x => x.id === id);
       return t && (t.type === 'assign' || t.type === 'temp');
     }));
+
+  /* 用 DB 直查对账：上面那条是「文件 vs /api/state」，两边都出自同一个接口实现，
+     真出偏差时会一起错。这里换成与接口无关的 SQL，按 Spec §4.1 的定义域直接取。 */
+  const dbIds = new Set(dbAll(`SELECT id FROM task WHERE type IN ('routine','special') AND owner_no='1012'
+      AND (assignee_no IS NULL OR assignee_no='' OR assignee_no='1012')`).map(r => r.id));
+  check('导出集合与库里直查一致（不拿 /api/state 自证）',
+    dbIds.size === fileIds.size && [...dbIds].every(id => fileIds.has(id)),
+    `库 ${dbIds.size} / 文件 ${fileIds.size}`);
+
+  /* 换个人导出：文件里只能有他自己的任务。共用同一份数据时最容易漏的就是这条。 */
+  const expB = await fetch(BASE + '/api/export/tasks.csv', { headers: { Cookie: 'sid=' + (await sidOf('1002')) } });
+  const rowsB = expB.status === 200
+    ? Buffer.from(await expB.arrayBuffer()).toString('utf8').split('\r\n').filter(l => l.length).slice(4).map(csvSplit)
+    : [];
+  const ownersB = new Set(rowsB.map(r => r[4]).filter(Boolean));
+  check('第二个用户导出：只有他自己的任务，不含他人任务 id',
+    expB.status === 200 && rowsB.length > 0 && [...ownersB].every(no => no === '1002')
+      && !rowsB.some(r => r[0] === 't_e2e_export'),
+    `${expB.status} / 负责人列=${[...ownersB].join(',')} / ${rowsB.length} 行`);
 
   const expectRows = mineTasks.reduce((n, t) => n + Math.max(1, (t.stages || []).length), 0);
   check('行数 = 任务数 + 阶段数（无阶段任务占一行）', rows2.length === expectRows, `实际 ${rows2.length} / 期望 ${expectRows}`);

@@ -1,8 +1,8 @@
 {
- "at": "2026-11-10T14:55:15.215Z",
+ "at": "2026-11-10T15:03:56.140Z",
  "mode": "--full",
- "head": "dc28abe",
- "digest": "1e6acf5bd978773c",
+ "head": "45dd087",
+ "digest": "6dda229c81bf8c9d",
  "docsDigest": "76a0a8e2b55874ec",
  "evidenceDigest": "1aa7ef98a9f3266d",
  "algo": 2,
@@ -47,7 +47,7 @@
   "DEVELOPMENT.md": "e746d075a277",
   "README.md": "dc5eee0e855c",
   "_dev/dbg.mjs": "f1e71aeafd1b",
-  "_dev/e2e.mjs": "ac3fdc7f1320",
+  "_dev/e2e.mjs": "eb776671e894",
   "_dev/gate-selftest.mjs": "3f2d6cc6d7b8",
   "_dev/probe-intake.mjs": "ffa983e63c91",
   "_dev/probe-late.mjs": "4c7d78b0ac09",
@@ -154,7 +154,7 @@
    "info": "v0.8.5 · D:\\ai_project\\ai_work\\Cadence\\_dev\\.test-db\\workbench.db"
   },
   {
-   "name": "e2e 195 项",
+   "name": "e2e 199 项",
    "ok": true,
    "info": ""
   },

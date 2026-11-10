@@ -8,6 +8,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const CHROME = 'C:/Users/lanmingjian/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
@@ -28,6 +29,12 @@ if (!DB || DB === REAL_DB) {
   process.exit(2);
 }
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url));
+/* 直查数据库做对账：导出/接收这类断言如果回头再看 /api/state，等于让被测接口自己作证。 */
+const require_ = createRequire(import.meta.url);
+const dbGet = (sql, ...p) => {
+  const db = new (require_('node:sqlite').DatabaseSync)(DB);
+  try { return db.prepare(sql).get(...p); } finally { db.close(); }
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* 日期加减：统一走 UTC，避免本地时区把日期推前一天 */
 const addDaysStr = (d, n) => new Date(new Date(d + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
@@ -2391,6 +2398,15 @@ async function main() {
   const PUBCHK = 't_e2e_pubtag';
   await push('1012', { tasks: [{ id: PUBCHK, assigneeNo: '1002', type: 'assign',
     title: 'E2E发布人显示', start: T0, end: T0, status: 'todo' }] });
+  /* 反例：不是派给你的人，点「接收」必须无效，而且库里一个字都不能动。
+     只判 ok:false 不够——实现可能先改了行再返回 false；用 DB 直查看真实状态。 */
+  const badAcc = await apiAs('1003', '/api/task/accept', { me: '1003', id: PUBCHK });
+  const badRow = dbGet('SELECT owner_no, assignee_no, intake_status, type FROM task WHERE id=?', PUBCHK);
+  check('非承接人接收 → ok:false，intake_status / owner_no 都不变',
+    (badAcc.json || {}).ok === false && badRow.owner_no === '1012'
+      && badRow.intake_status === 'pending' && badRow.assignee_no === '1002' && badRow.type === 'assign',
+    JSON.stringify({ resp: badAcc.json, db: badRow }));
+
   const pubAcc = await act('/api/task/accept', { me: '1002', id: PUBCHK });
   check('（前置）1012 发布、1002 接收之后，这条活的发布人仍是 1012',
     pubAcc.ok === true, JSON.stringify(pubAcc));

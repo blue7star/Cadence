@@ -1332,6 +1332,35 @@ function verifyPwd(no, pwd) {
 
 /* 失败计数按「工号 + IP」，进程内即可：重启清零不影响安全边界（攻击者拿不到重启能力） */
 const LOGIN_FAILS = new Map();
+/* 上限：匿名请求可以用随机工号把这张表撑到几百万条，进程内存跟着涨。
+   20000 条 op_log 是磁盘侧的上限；5000 个失败计数是内存侧的上限。
+   两个都可以用环境变量调小，仅供自检用（默认值才是线上口径）。 */
+const LOGIN_FAILS_MAX = Number(process.env.CADENCE_LOGIN_FAILS_MAX || 5000);
+const OP_LOG_MAX = Number(process.env.CADENCE_OP_LOG_MAX || 20000);
+
+/* 先丢「没有锁定、或锁已过期」的键，再超限才按插入顺序丢最老的。
+   代价是极端情况下可能提前放掉某个正在锁定的键——用内存上限换这个边角，
+   因为不设上限时匿名请求能把进程直接打爆。 */
+function pruneLoginFails() {
+  if (LOGIN_FAILS.size <= LOGIN_FAILS_MAX) return;
+  const now = Date.now();
+  for (const [k, v] of LOGIN_FAILS) if (!v.until || v.until < now) LOGIN_FAILS.delete(k);
+  while (LOGIN_FAILS.size > LOGIN_FAILS_MAX) LOGIN_FAILS.delete(LOGIN_FAILS.keys().next().value);
+}
+
+/* 日志表只裁「不是某人第一条 login」的旧行：
+   首次登录时间是初始密码名单的证据，日志超限也不能把它删掉，否则名单会凭空少人。 */
+function pruneOpLog() {
+  const total = db.prepare('SELECT COUNT(*) c FROM op_log').get().c;
+  if (!total || total <= OP_LOG_MAX) return;
+  db.prepare(`DELETE FROM op_log WHERE id IN (
+      SELECT o.id FROM op_log o
+      WHERE NOT (o.action='login' AND o.id = (
+        SELECT MIN(x.id) FROM op_log x WHERE x.actor_no=o.actor_no AND x.action='login'))
+      ORDER BY o.id LIMIT ?)`).run(total - OP_LOG_MAX);
+}
+/* 启动先收一次：上次进程可能死在超限之后，不先裁的话要攒够 200 条才轮到修剪 */
+pruneOpLog();
 function lockLeft(key) {
   const rec = LOGIN_FAILS.get(key);
   if (!rec || !rec.until) return 0;
@@ -1478,8 +1507,13 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+let opLogN = 0;
 function logOp(actor, action, detail, ip) {
-  try { db.prepare('INSERT INTO op_log(actor_no,action,detail,ip,created_at) VALUES(?,?,?,?,?)').run(actor, action, detail || '', ip || '', nowStr()); } catch (e) { }
+  try {
+    db.prepare('INSERT INTO op_log(actor_no,action,detail,ip,created_at) VALUES(?,?,?,?,?)').run(actor, action, detail || '', ip || '', nowStr());
+    /* 每 200 条看一次总量，不为每条日志都做一次 COUNT */
+    if (++opLogN % 200 === 0) pruneOpLog();
+  } catch (e) { }
 }
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
@@ -1535,6 +1569,7 @@ const server = http.createServer(async (req, res) => {
         rec.n += 1;
         if (rec.n >= LOCK_FAILS) { rec.n = 0; rec.until = Date.now() + LOCK_MS; }
         LOGIN_FAILS.set(key, rec);
+        pruneLoginFails();
         logOp(no, 'login-fail', '', ip);
         return sendJSON(res, 200, { ok: false, msg: '工号或密码不正确' });
       }

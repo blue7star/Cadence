@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { SEMVER, getChangelog, getChangelogHistory, getFullVersion } = require('./version');
 
@@ -66,6 +67,14 @@ CREATE TABLE IF NOT EXISTS op_log(
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor_no TEXT, action TEXT, detail TEXT, ip TEXT, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
+/* 认证数据与花名册分表：import-emp.js 是花名册的写入口，密码不该混进它 upsert 的行里。
+   initial=1 表示「还在用初始密码（=工号）」，超管名单就按这个筛。 */
+CREATE TABLE IF NOT EXISTS cred(
+  no TEXT PRIMARY KEY, hash TEXT, salt TEXT, initial INTEGER DEFAULT 1, changed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sess(
+  sid TEXT PRIMARY KEY, no TEXT, created_at TEXT, last_seen TEXT, ip TEXT, ua TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner_no);
 CREATE INDEX IF NOT EXISTS idx_task_assignee ON task(assignee_no);
 CREATE INDEX IF NOT EXISTS idx_task_routine ON task(routine_id);
@@ -1252,6 +1261,102 @@ function seedDemo(meNo) {
   return T.length;
 }
 
+/* ============ 认证（第一批） ============
+   初始密码 = 本人工号；登录后自助改密；重置密码只有超管一人。
+   密码用 Node 内置 scrypt 存（零依赖），会话落 sess 表，全部 /api/* 绑会话。 */
+const SCRYPT_KEYLEN = 64;
+const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const SID_IDLE_MS = 8 * 3600 * 1000;       /* 滑动空闲 8 小时 */
+const SID_ABS_MS = 30 * 24 * 3600 * 1000;  /* 绝对 30 天 */
+const LOCK_FAILS = 5;                      /* 连续失败 5 次 */
+const LOCK_MS = 5 * 60 * 1000;             /* 锁 5 分钟 */
+
+/* 超管工号：环境变量 > meta.auth.admin_no > 默认 005822。
+   CADENCE_ADMIN_NO 是给测试环境用的覆盖口，生产写 meta 或环境变量都行。 */
+const ADMIN_NO = (() => {
+  const row = db.prepare("SELECT v FROM meta WHERE k='auth.admin_no'").get();
+  return String(process.env.CADENCE_ADMIN_NO || (row && row.v) || '005822');
+})();
+
+function newSalt() { return crypto.randomBytes(16).toString('hex'); }
+function hashPwd(pwd, salt) {
+  return crypto.scryptSync(String(pwd), salt, SCRYPT_KEYLEN, SCRYPT_OPTS).toString('hex');
+}
+/* 幂等：已经有密码的人不覆盖——跑多少次重启都不会把改过的密码冲回工号 */
+function ensureCred(no) {
+  if (db.prepare('SELECT no FROM cred WHERE no=?').get(String(no))) return;
+  const salt = newSalt();
+  db.prepare('INSERT INTO cred(no,hash,salt,initial,changed_at) VALUES(?,?,?,1,?)')
+    .run(String(no), hashPwd(no, salt), salt, nowStr());
+}
+function setPassword(no, pwd, initial) {
+  const salt = newSalt();
+  db.prepare(`INSERT INTO cred(no,hash,salt,initial,changed_at) VALUES(?,?,?,?,?)
+    ON CONFLICT(no) DO UPDATE SET hash=excluded.hash, salt=excluded.salt,
+      initial=excluded.initial, changed_at=excluded.changed_at`)
+    .run(String(no), hashPwd(pwd, salt), salt, initial ? 1 : 0, nowStr());
+}
+function verifyPwd(no, pwd) {
+  const row = db.prepare('SELECT hash,salt FROM cred WHERE no=?').get(String(no));
+  if (!row || !row.hash || !row.salt) return false;
+  const got = Buffer.from(hashPwd(pwd, row.salt), 'hex');
+  const want = Buffer.from(String(row.hash), 'hex');
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+(function seedCred() {
+  for (const e of db.prepare('SELECT no FROM emp WHERE active=1').all()) ensureCred(e.no);
+})();
+
+/* 失败计数按「工号 + IP」，进程内即可：重启清零不影响安全边界（攻击者拿不到重启能力） */
+const LOGIN_FAILS = new Map();
+function lockLeft(key) {
+  const rec = LOGIN_FAILS.get(key);
+  if (!rec || !rec.until) return 0;
+  return rec.until > Date.now() ? rec.until : 0;
+}
+
+function newSid() { return crypto.randomBytes(32).toString('hex'); }
+function createSession(no, ip, ua) {
+  const sid = newSid(), t = nowStr();
+  db.prepare('INSERT INTO sess(sid,no,created_at,last_seen,ip,ua) VALUES(?,?,?,?,?,?)')
+    .run(sid, no, t, t, ip || '', String(ua || '').slice(0, 200));
+  return sid;
+}
+function readSession(sid) {
+  if (!sid) return null;
+  const row = db.prepare('SELECT * FROM sess WHERE sid=?').get(String(sid));
+  if (!row) return null;
+  const now = Date.now();
+  const created = Date.parse(row.created_at || '');
+  const seen = Date.parse(row.last_seen || '');
+  if (!(now - seen < SID_IDLE_MS) || !(now - created < SID_ABS_MS)) {
+    db.prepare('DELETE FROM sess WHERE sid=?').run(row.sid);
+    return null;
+  }
+  /* 每分钟才写一次 last_seen：每个请求都写会把 WAL 打满，而 8 小时的空闲判定不需要秒级精度 */
+  if (now - seen > 60 * 1000) db.prepare('UPDATE sess SET last_seen=? WHERE sid=?').run(nowStr(), row.sid);
+  return row;
+}
+function dropSessions(no, keepSid) {
+  if (keepSid) db.prepare('DELETE FROM sess WHERE no=? AND sid<>?').run(String(no), keepSid);
+  else db.prepare('DELETE FROM sess WHERE no=?').run(String(no));
+}
+
+function cookieOf(req, name) {
+  const raw = String(req.headers.cookie || '');
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return '';
+}
+/* 明文 http 下不能加 Secure（加了就发不出去）——R1 已由 Human 接受，见 specs/features/auth-and-transfer.md C7 */
+function sidCookie(sid, maxAgeSec) {
+  return `sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`;
+}
+
 /* ============ HTTP ============ */
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -1309,24 +1414,96 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true, current: SEMVER, versions: getChangelogHistory() });
     }
 
+    /* 登录：工号 + 密码。错误文案合并成一条，否则这个接口就是个工号枚举器（C12）。 */
     if (p === '/api/login' && req.method === 'POST') {
       const b = await readBody(req);
-      const no = String(b.no || '').trim(), name = String(b.name || '').trim();
-      if (!no || !name) return sendJSON(res, 200, { ok: false, msg: '工号和姓名都要填' });
+      const no = String(b.no || '').trim(), pwd = String(b.password || '');
+      if (!no || !pwd) return sendJSON(res, 200, { ok: false, msg: '工号和密码都要填' });
+      const key = no + '|' + ip;
+      const until = lockLeft(key);
+      if (until) {
+        return sendJSON(res, 200, { ok: false, locked: true, msg: `尝试次数过多，请 ${Math.ceil((until - Date.now()) / 60000)} 分钟后再试` });
+      }
       const emp = getEmp(no);
-      if (!emp) return sendJSON(res, 200, { ok: false, msg: `花名册里没有工号「${no}」，请与管理员核对` });
-      if (emp.name !== name) return sendJSON(res, 200, { ok: false, msg: `工号「${no}」对应的姓名不是「${name}」，请核对后再登录` });
+      /* 花名册随时可能加人（import-emp.js），启动时那批初始化覆盖不到新人。
+         第一次登录补建初始密码，新人才能用工号进门。 */
+      if (emp) ensureCred(no);
+      if (!emp || !verifyPwd(no, pwd)) {
+        const rec = LOGIN_FAILS.get(key) || { n: 0, until: 0 };
+        rec.n += 1;
+        if (rec.n >= LOCK_FAILS) { rec.n = 0; rec.until = Date.now() + LOCK_MS; }
+        LOGIN_FAILS.set(key, rec);
+        logOp(no, 'login-fail', '', ip);
+        return sendJSON(res, 200, { ok: false, msg: '工号或密码不正确' });
+      }
+      LOGIN_FAILS.delete(key);
       /* 登录过一次就打上激活标记：以后下派任务时能判断「这个人到底收不收得到」。
          没有这个标记就没法在派之前拦住"派给一个从没开通过账号的人"。 */
       db.prepare('UPDATE emp SET activated=1, last_login=? WHERE no=?').run(nowStr(), emp.no);
       logOp(no, 'login', '', ip);
-      return sendJSON(res, 200, { ok: true, me: { no: emp.no, name: emp.name, role: emp.role, dept: emp.dept, mgrNo: emp.mgr_no || null } });
+      const sid = createSession(no, ip, req.headers['user-agent']);
+      res.setHeader('Set-Cookie', sidCookie(sid, Math.floor(SID_ABS_MS / 1000)));
+      return sendJSON(res, 200, {
+        ok: true,
+        me: { no: emp.no, name: emp.name, role: emp.role, dept: emp.dept, mgrNo: emp.mgr_no || null },
+        admin: no === ADMIN_NO
+      });
+    }
+
+    /* ---- 以下全部要求有效会话；身份只认 cookie，不再信任请求里的 me ---- */
+    const sid = cookieOf(req, 'sid');
+    const sess = readSession(sid);
+    if (!sess) return sendJSON(res, 401, { ok: false, msg: '登录已过期，请重新登录' });
+    const me = sess.no;
+    const body = req.method === 'POST' ? await readBody(req) : {};
+    /* 请求里仍带 me 且与会话不符 → 显式 403，便于抓旧客户端；不做静默兼容（Spec §3.4） */
+    const claimed = String((body && body.me) || url.searchParams.get('me') || '');
+    if (claimed && claimed !== me) return sendJSON(res, 403, { ok: false, msg: '身份与会话不一致' });
+
+    if (p === '/api/logout' && req.method === 'POST') {
+      db.prepare('DELETE FROM sess WHERE sid=?').run(sid);
+      res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (p === '/api/password' && req.method === 'POST') {
+      const oldPwd = String(body.old || ''), newPwd = String(body.new || '');
+      if (!verifyPwd(me, oldPwd)) return sendJSON(res, 200, { ok: false, msg: '原密码不正确' });
+      if (newPwd.length < 6) return sendJSON(res, 200, { ok: false, msg: '新密码至少 6 位' });
+      setPassword(me, newPwd, false);
+      /* 改密后吊销本人其它会话（保留当前这条，否则用户刚改完就被踢出去） */
+      dropSessions(me, sid);
+      logOp(me, 'password', '', ip);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (p === '/api/admin/initial-passwords' && req.method === 'GET') {
+      if (me !== ADMIN_NO) return sendJSON(res, 403, { ok: false, msg: '只有超管能看' });
+      const list = db.prepare(`SELECT c.no, e.name FROM cred c JOIN emp e ON e.no=c.no
+          WHERE c.initial=1 AND e.active=1 ORDER BY c.no`).all()
+        .map(r => {
+          const first = db.prepare("SELECT created_at, ip FROM op_log WHERE actor_no=? AND action='login' ORDER BY id LIMIT 1").get(r.no);
+          return { no: r.no, name: r.name, firstLoginAt: first ? first.created_at : null, firstLoginIp: first ? first.ip : null };
+        })
+        .filter(x => x.firstLoginAt);
+      return sendJSON(res, 200, { ok: true, adminNo: ADMIN_NO, list });
+    }
+
+    if (p === '/api/admin/reset-password' && req.method === 'POST') {
+      if (me !== ADMIN_NO) return sendJSON(res, 403, { ok: false, msg: '只有超管能重置密码' });
+      const target = String(body.no || '').trim();
+      if (!target) return sendJSON(res, 200, { ok: false, msg: '要重置谁？' });
+      if (!getEmp(target)) return sendJSON(res, 200, { ok: false, msg: '花名册里没有这个人' });
+      setPassword(target, target, true);
+      dropSessions(target);
+      logOp(me, 'reset-password', target, ip);
+      return sendJSON(res, 200, { ok: true, msg: `已把 ${target} 的密码重置为工号` });
     }
 
     if (p === '/api/state' && req.method === 'GET') {
-      const me = url.searchParams.get('me');
       const st = stateFor(me);
       if (!st) return sendJSON(res, 404, { ok: false, msg: '花名册里没有这个工号' });
+      st.me.admin = me === ADMIN_NO;
       return sendJSON(res, 200, { ok: true, ...st });
     }
 
@@ -1336,9 +1513,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/sync' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = applySync(me, b);
       logOp(me, 'sync', 'rows=' + r.n, ip);
       return sendJSON(res, 200, { ok: true, rows: r.n, errors: r.errors, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
@@ -1346,58 +1521,44 @@ const server = http.createServer(async (req, res) => {
 
     /* ---- 0.7.0 动作：接收 / 派发 / 加入待办 / 勾选 / 提醒已读 ---- */
     if (p === '/api/task/accept' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = acceptTask(me, String(b.id || ''));
       if (r.ok) logOp(me, 'accept', b.id, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/task/dispatch' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = dispatchTask(me, String(b.id || ''));
       if (r.ok) logOp(me, 'dispatch', b.id + ' n=' + r.n, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/stage/join' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = joinStage(me, String(b.id || ''), String(b.stageId || ''));
       if (r.ok) logOp(me, 'stage-join', b.id + '/' + b.stageId, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/stage/toggle' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = toggleStage(me, String(b.id || ''), String(b.stageId || ''), b.done);
       if (r.ok) logOp(me, 'stage-toggle', b.id + '/' + b.stageId + '=' + r.done, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/task/due' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = setDueDate(me, String(b.id || ''), String(b.date || ''));
       if (r.ok) logOp(me, 'due', b.id + '=' + b.date, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/notice/seen' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const r = markNoticesSeen(me, b.ids);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
 
     if (p === '/api/setmgr' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || ''), target = b.mgrNo ? String(b.mgrNo) : null;
-      const emp = getEmp(me);
-      if (!emp) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
+      const target = b.mgrNo ? String(b.mgrNo) : null;
       if (target) {
         if (target === me) return sendJSON(res, 200, { ok: false, msg: '不能把自己设为上级' });
         if (!getEmp(target)) return sendJSON(res, 200, { ok: false, msg: '花名册里没有这个人' });
@@ -1412,17 +1573,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/demo' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       const n = seedDemo(me);
       return sendJSON(res, 200, { ok: true, created: n });
     }
 
     if (p === '/api/reset' && req.method === 'POST') {
-      const b = await readBody(req);
-      const me = String(b.me || '');
-      if (!getEmp(me)) return sendJSON(res, 403, { ok: false, msg: '未登录' });
+      const b = body;
       /* 先清知情人名单再删任务：反过来删就找不到指向哪条任务了 */
       db.prepare('DELETE FROM task_observer WHERE task_id IN (SELECT id FROM task WHERE owner_no=?)').run(me);
       db.prepare('DELETE FROM task WHERE owner_no=?').run(me);
@@ -1485,6 +1642,12 @@ server.listen(PORT, '0.0.0.0', () => {
   else console.log('  同事访问：  未检测到局域网地址（可能没连内网）');
   if (ips.length) console.log('              （同事打不开，多半是本机防火墙拦了这个端口）');
   console.log(`  数据库：    ${DB_FILE}`);
+  /* R1：明文 HTTP。这句话必须出现在启动日志里，不能只写在文档里没人看。 */
+  console.log('  ⚠ 仅限可信内网：本服务是明文 HTTP，同网段可嗅探登录 cookie。');
+  console.log('     不要暴露到公网、访客网络或端口映射；要出内网请先加反向代理与 TLS。');
+  if (!getEmp(ADMIN_NO)) {
+    console.log(`  ⚠ 超管工号 ${ADMIN_NO} 不在花名册：重置密码与初始密码名单不可用（用 CADENCE_ADMIN_NO 指定）`);
+  }
   console.log('');
   console.log('  在浏览器打开上面「本机访问」那个地址就能用了。');
   console.log('  这个窗口就是服务本身：可以最小化，但别关掉。');

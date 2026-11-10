@@ -161,6 +161,51 @@ async function main() {
     return false;
   };
   const goto = async (url) => { await S('Page.navigate', { url }); await sleep(400); await waitReady(); await sleep(500); };
+
+  /* ---- 会话助手（第一批认证上线后必需） ----
+     Node 自带 fetch 不保存 cookie，而且浏览器里 JS 读不到 HttpOnly 的 sid。
+     所以：① Node 侧按身份登录一次拿 sid；② 需要换身份时用 CDP 直接写浏览器 cookie。 */
+  const SIDS = new Map();
+  const loginSid = async (no, pwd) => {
+    const r = await fetch(BASE + '/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ no, password: pwd === undefined ? no : pwd })
+    });
+    const d = await r.json().catch(() => ({}));
+    const list = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : [r.headers.get('set-cookie') || ''];
+    const m = /(?:^|;\s*)sid=([^;]+)/.exec(list.join('; '));
+    return { ok: !!d.ok, msg: d.msg || '', locked: !!d.locked, status: r.status, sid: m ? m[1] : '', me: d.me || null };
+  };
+  const sidOf = async (no) => {
+    if (!SIDS.has(no)) {
+      const r = await loginSid(no);
+      if (!r.ok) throw new Error(`登录 ${no} 失败：${r.msg}`);
+      SIDS.set(no, r.sid);
+    }
+    return SIDS.get(no);
+  };
+  /* Node 侧直调接口：带指定身份的 cookie，不依赖浏览器当前登录的是谁 */
+  const apiAs = async (no, path, body, method) => {
+    const sid = await sidOf(no);
+    const r = await fetch(BASE + path, {
+      method: method || (body ? 'POST' : 'GET'),
+      headers: Object.assign({ Cookie: 'sid=' + sid }, body ? { 'Content-Type': 'application/json' } : {}),
+      body: body ? JSON.stringify(body) : undefined
+    });
+    let json = null;
+    try { json = await r.json(); } catch { /* 非 JSON（导出 CSV 等） */ }
+    return { status: r.status, json };
+  };
+  const stateAs = async (no) => (await apiAs(no, '/api/state')).json;
+  /* 把浏览器切到某个身份：写 cookie + 刷新（身份不再靠 localStorage） */
+  const asUser = async (no) => {
+    const sid = await sidOf(no);
+    /* setCookie 属于 Network 域，先 enable 一次（重复调用无害） */
+    try { await S('Network.enable'); } catch { }
+    await S('Network.setCookie', { name: 'sid', value: sid, url: BASE, path: '/', httpOnly: true });
+    await goto(BASE);
+    await sleep(1200);
+  };
   /* E2E_NO_SHOT=1：只跑断言不截图。内存紧张时无头浏览器截图会卡住，排查用。
      截图是给人看的证据，不该决定这次自检的成败：卡住就跳过并说明，断言照跑。 */
   const shot = async (name) => {
@@ -190,16 +235,48 @@ async function main() {
   };
 
   /* ---------- 1 登录 ---------- */
-  /* ---------- 0 固定基线：清空 1012 后重新载入示例数据 ---------- */
+  /* ---------- 0 固定基线 ---------- */
   await goto(BASE);
+  /* 失败锁定用例需要「真实账号 + 一定会被锁」。
+     用一个每轮新开工号，锁就锁它，不会把演示账号锁给下一轮。 */
+  const LOCKNO = '9' + String(Date.now()).slice(-6);
+  /* 先把所有人的密码复位成「初始密码 = 工号」。
+     上一轮跑过改密/超管重置用例，库里 1012 的密码就不是工号了；
+     不复位的话这一轮第一步登录就红，看起来像功能坏了，其实是夹具没归零。 */
+  {
+    const ROOT0 = fileURLToPath(new URL('..', import.meta.url));
+    execFileSync(process.execPath, ['--no-warnings', '-e', `
+      const {DatabaseSync}=require('node:sqlite');
+      const crypto=require('node:crypto');
+      const db=new DatabaseSync('data/workbench.db');
+      for (const e of db.prepare('SELECT no FROM emp').all()) {
+        const salt=crypto.randomBytes(16).toString('hex');
+        const hash=crypto.scryptSync(e.no,salt,64,{N:16384,r:8,p:1}).toString('hex');
+        db.prepare(\`INSERT INTO cred(no,hash,salt,initial,changed_at) VALUES(?,?,?,1,?)
+          ON CONFLICT(no) DO UPDATE SET hash=excluded.hash,salt=excluded.salt,initial=1,changed_at=excluded.changed_at\`)
+          .run(e.no,hash,salt,new Date().toISOString());
+      }
+      db.prepare("DELETE FROM emp WHERE no GLOB '9[0-9][0-9][0-9][0-9][0-9][0-9]'").run();
+      db.prepare("INSERT INTO emp(no,name,role,dept,mgr_no,active,activated) VALUES(?,?,?,?,NULL,1,0)")
+        .run('${LOCKNO}','锁定用例','测试','产品部');
+      db.close();`], { cwd: ROOT0, stdio: 'ignore' });
+  }
+  await js(`localStorage.clear(); sessionStorage.clear(); 'ok'`);
+  await goto(BASE);
+  check('登录页出现', await js(`!!document.querySelector('#auth.show')`));
+  check('登录页不展示任何工号名单',
+    !/1012|1002|张启明|李明/.test(await txt('#authBody')));
+  await js(`(function(){document.querySelector('#a_no').value='1012';
+    document.querySelector('#a_pwd').value='1012';
+    document.querySelector('[data-act=do-login]').click();return 'ok'})()`);
+  await sleep(1600);
+  /* 先拿到 1012 的会话，下面的固定基线（清空 + 载入示例数据）走 Node 侧带 cookie 调用 */
+  await apiAs('1012', '/api/reset', { me: '1012' });
+  await apiAs('1012', '/api/demo', { me: '1012' });
   /* 「谁登录过」是跨运行保留的：一旦跑过一次，1101 就永久变成「登录过」，
      下一轮「派给没登录过的人」就会假绿。所以基线里把激活状态也钉死：
      产品部这一组（1001 部门经理 + 1012 本人 + 四个下属）算用过；
      人力资源部 / 运营中心那两位总监没参与演示，算没用过——正好当阻断用例的对象。 */
-  await js(`(async()=>{
-    await fetch('/api/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012'})});
-    await fetch('/api/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012'})});
-    return 'seeded'})()`);
   {
     const ROOT0 = fileURLToPath(new URL('..', import.meta.url));
     execFileSync(process.execPath, ['--no-warnings', '-e', `
@@ -214,18 +291,12 @@ async function main() {
       db.prepare("UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k='rev'").run();
       db.close();`], { cwd: ROOT0, stdio: 'ignore' });
   }
-  await js(`localStorage.clear(); sessionStorage.clear(); 'ok'`);
-  await goto(BASE);
-  check('登录页出现', await js(`!!document.querySelector('#auth.show')`));
-  await js(`(function(){document.querySelector('#a_no').value='1012';
-    document.querySelector('#a_name').value='王磊';
-    document.querySelector('[data-act=do-login]').click();return 'ok'})()`);
-  await sleep(1600);
+  await asUser('1012');
   if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
     await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1200);
   }
   const meName = (await txt('#meName')).trim();
-  check('工号+姓名登录', meName === '王磊', '当前=' + meName);
+  check('工号+密码登录', meName === '王磊', '当前=' + meName);
 
   /* ---------- 2 七个页面 ---------- */
   for (const v of ['today', 'assign', 'routine', 'special', 'intake', 'calendar', 'settings']) {
@@ -334,7 +405,7 @@ async function main() {
     let dbDone = false;
     for (let i = 0; i < 16 && dbDone !== true; i++) {
       await sleep(400);
-      dbDone = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      dbDone = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
         const t=s.tasks.find(x=>x.id==='${target.id}');
         if(!t) return 'task-missing';
         const st=(t.stages||[])[${target.idx}];
@@ -576,7 +647,7 @@ async function main() {
     return {msg:(document.querySelector('#toast')||{}).textContent||''};
   })()`);
   await sleep(900);
-  const stAfter = stOpen.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const stAfter = stOpen.err ? null : await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.id==='${stOpen.id}');const st=t.stages[${stOpen.idx != null ? stOpen.idx : 0}];
     return {name:st.name, start:st.start, end:st.end}})()`);
   check('改完立刻落库：名称、开始、结束三样都按新值存下来',
@@ -612,7 +683,7 @@ async function main() {
     return {id:t.id, title:t.title, before:before, to:to.dataset.date};
   })()`);
   await sleep(1800);
-  const afterDrag = drag.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const afterDrag = drag.err ? null : await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.id==='${drag.id}');return t?{start:t.start,end:t.end}:null})()`);
   const dayGap = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
   const beforeGap = drag.err ? -99 : dayGap(drag.before.start, drag.before.end);
@@ -637,7 +708,7 @@ async function main() {
     return {date:cell.dataset.date, hint:hint, no:no};
   })()`);
   await sleep(1200);
-  const afterPast = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const afterPast = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.id==='${drag.id}');return t?{start:t.start,end:t.end}:null})()`);
   check('拖到过去被拦下：当场说明原因，数据不动',
     !pastDrag.err && pastDrag.no && pastDrag.hint.includes('不能拖到过去') && !!afterPast && afterPast.start === afterDrag.start,
@@ -662,7 +733,7 @@ async function main() {
     return {id:t.id, i:i, name:st.name, hint:hint, no:no, before:{start:st.start,end:st.end}};
   })()`);
   await sleep(1200);
-  const stageAfter = stageDrag.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const stageAfter = stageDrag.err ? null : await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.id==='${stageDrag.id}');
     if(!t) return null; const st=(t.stages||[])[${stageDrag.i}]; return st?{start:st.start,end:st.end}:null})()`);
   check('阶段不能压到前一段：拦下并说明和哪一段撞了，日期不变',
@@ -703,7 +774,7 @@ async function main() {
   let qstDb = qst.err ? null : 'pending';
   for (let i = 0; i < 16 && qstDb === 'pending'; i++) {
     await sleep(400);
-    qstDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    qstDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
       const t=s.tasks.find(x=>x.id==='${qst.id}');return t?t.status:null})()`);
   }
   check('任务行里直接选「暂缓」即可落库，不用点进详情',
@@ -724,7 +795,7 @@ async function main() {
   let rqDb = rq.err ? null : 'pending';
   for (let i = 0; i < 16 && rqDb === 'pending'; i++) {
     await sleep(400);
-    rqDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    rqDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
       const t=s.tasks.find(x=>x.id==='${rq.id}');return t?t.status:null})()`);
   }
   check('常规任务也能在列表里设状态（暂缓落库）',
@@ -845,7 +916,7 @@ async function main() {
     return {sels:sels};
   })()`);
   await sleep(1800);
-  const catDb = catTest.err ? null : await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const catDb = catTest.err ? null : await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.title==='E2E 手填分类');return t?{cat1:t.cat1,cat2:t.cat2}:null})()`);
   check('新建任务时分类是查手填文本框，写什么存什么',
     !catTest.err && catTest.sels === 0 && !!catDb && catDb.cat1 === '自定义一级' && catDb.cat2 === '自定义二级',
@@ -879,7 +950,7 @@ async function main() {
     let created = false;
     for (let i = 0; i < 20 && !created; i++) {
       await sleep(400);
-      created = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      created = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
         return (s.rules||[]).some(x=>x.title==='自检规则')})()`);
     }
     /* 失败时要有可判的现场：弹窗还在不在、toast 说什么、本地是否已有这条规则 */
@@ -894,7 +965,7 @@ async function main() {
   await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=day]');if(b)b.click();return 'ok'})()`);
   await sleep(700);
   const ruleInUi = (await txt('#view')).includes('自检规则');
-  const ruleInDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const ruleInDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const ru=(s.rules||[]).find(x=>x.title==='自检规则');
     if(!ru) return {rule:false, inst:0};
     return {rule:true, inst:(s.tasks||[]).filter(t=>t.routineId===ru.id).length}})()`);
@@ -905,7 +976,7 @@ async function main() {
   await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
   await sleep(400);
   const persistedTask = await js(`(function(){return document.body.innerText.includes('自检临时任务')})()`);
-  const persistDiag = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const persistDiag = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     return {view:(typeof view!=='undefined'?view:'?'), login:!!document.querySelector('#auth.show'),
       inDb:(s.tasks||[]).some(t=>t.title==='自检临时任务'),
       localMe:(window.S&&S.me?S.me.no:null),
@@ -931,7 +1002,7 @@ async function main() {
   let goneDb = { rules: -1, inst: -1 };
   for (let i = 0; i < 20 && goneDb.rules !== 0; i++) {
     await sleep(400);
-    goneDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    goneDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
       return {rules:s.rules.filter(x=>x.title==='自检规则').length,
         inst:s.tasks.filter(t=>t.title==='自检规则').length}})()`);
   }
@@ -946,7 +1017,7 @@ async function main() {
   await js(`document.querySelector('[data-act=load-demo]').click();'ok'`);
   /* 示例数据要生成几百条实例，别用固定等待；等到数据真回来再断言 */
   for (let i = 0; i < 30; i++) {
-    const n = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+    const n = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
       return (s.tasks||[]).length})()`);
     if (n > 0) break;
     await sleep(500);
@@ -984,7 +1055,7 @@ async function main() {
     /* 停用要重排实例，轮询到真的停用为止 */
     for (let i = 0; i < 20; i++) {
       await sleep(500);
-      afterStop = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      afterStop = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
         const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
         return {active:rule?rule.active:'rule-missing', left:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
       if (afterStop.active === false) break;
@@ -1012,7 +1083,7 @@ async function main() {
     let reOn = { active: 'pending', n: 0 };
     for (let i = 0; i < 20 && reOn.active !== true; i++) {
       await sleep(500);
-      reOn = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+      reOn = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
         const rule=s.rules.find(x=>x.id==='${beforeStop.id}');
         return {active:rule?rule.active:'missing', n:s.tasks.filter(t=>t.routineId==='${beforeStop.id}').length}})()`);
     }
@@ -1064,8 +1135,7 @@ async function main() {
   check('同一版本不再打扰', !(await js(`!!document.querySelector('.cv-overlay')`)));
 
   /* ---------- 9 下属身份 ---------- */
-  await js(`localStorage.setItem('pm_mvp_me','1002');'ok'`);
-  await goto(BASE); await sleep(1500);
+  await asUser('1002');
   const sub = await js(`(function(){return {name:document.querySelector('#meName').textContent.trim(),
     badge:document.querySelector('#intakeBadge').textContent.trim(),
     hidden:document.querySelector('#intakeBadge').style.display==='none'}})()`);
@@ -1081,25 +1151,18 @@ async function main() {
 
   /* ---------- 9.2 上级派活 → 下属规划承接 → 上级仍能追踪（v0.4.0 修复项） ---------- */
   const SRC = 't_e2e_src', CARRIED = 't_e2e_carried';
-  const push = (m, b) => js(`(async()=>{
-    const r = await fetch('/api/sync', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(Object.assign({ me:'${m}' }, ${JSON.stringify(b)})) });
-    return (await r.json()).ok === true;
-  })()`);
+  /* 这三个助手原来在页面里 fetch，靠传 me 冒充身份。
+     认证上线后服务端只认 cookie，遂改成 Node 侧带该身份的 sid 调用——
+     这样「以 1002 身份写库」不再依赖浏览器当前登录的是谁。 */
+  const push = async (m, b) => {
+    const r = await apiAs(m, '/api/sync', Object.assign({ me: m }, b));
+    return !!(r.json && r.json.ok === true);
+  };
   /* 同上，但把整个回包带回来：`ok:true` 只代表请求没炸，被拒的条目在 errors 里 */
-  const pushJ = (m, b) => js(`(async()=>{
-    const r = await fetch('/api/sync', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(Object.assign({ me:'${m}' }, ${JSON.stringify(b)})) });
-    return await r.json();
-  })()`);
+  const pushJ = async (m, b) => (await apiAs(m, '/api/sync', Object.assign({ me: m }, b))).json;
   /* 0.7.0 的动作接口：接收 / 派发 / 加入待办 / 勾选 / 改总截止 / 提醒已读 */
-  const act = (p, b) => js(`(async()=>{
-    const r = await fetch('${p}', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(${JSON.stringify(b)}) });
-    return await r.json();
-  })()`);
-  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
-  await goto(BASE); await sleep(1200);
+  const act = async (p, b) => (await apiAs(b.me, p, b)).json;
+  await asUser('1012');
   await push('1012', { tasks: [{ id: SRC, ownerNo: '1012', assigneeNo: '1002', type: 'assign',
     title: 'E2E派活：季度复盘', start: '2026-11-03', end: '2026-11-06', status: 'todo', intakeStatus: 'pending' }] });
   await push('1002', { tasks: [
@@ -1160,37 +1223,39 @@ async function main() {
     title: 'E2E自动落定', start: '2026-11-03', end: '2026-11-06' };
   await push('1012', { tasks: [Object.assign({ id: AUTO, status: 'todo', intakeStatus: 'pending' }, AUTO_T)] });
   const autoPre = await pushJ('1002', { tasks: [Object.assign({ id: AUTO, status: 'doing', intakeStatus: 'pending' }, AUTO_T)] });
-  const autoPreDb = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
-    const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo}:null})()`);
+  /* 这几处读的是 1002 的库，而页面这时是 1012 的身份。
+     认证上线后 `?me=` 与会话不一致就是 403（设计如此），所以库里的事实改从 Node 侧读。 */
+  const autoPreDb = await js(`(function(){const j=${JSON.stringify(await stateAs('1002'))};
+    const t=(j.tasks||[]).find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo}:null})()`);
   check('还没接收就想把它推进到进行中：写不进去，仍旧挂在发布人那边等接收',
     (autoPre.rows | 0) === 0 && (autoPre.errors || []).length >= 1
       && !!autoPreDb && autoPreDb.status === 'todo' && autoPreDb.intake === 'pending' && autoPreDb.owner === '1012',
     JSON.stringify({ rows: autoPre.rows, errors: autoPre.errors, db: autoPreDb }));
 
   const autoAcc = await act('/api/task/accept', { me: '1002', id: AUTO });
-  const autoAccDb = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
-    const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo,type:t.type}:null})()`);
+  const autoAccDb = await js(`(function(){const j=${JSON.stringify(await stateAs('1002'))};
+    const t=(j.tasks||[]).find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus,owner:t.ownerNo,type:t.type}:null})()`);
   check('接收之后才归他：所有权转过去、进他的专项，也没多出第二条任务',
     !!autoAcc.ok && !!autoAccDb && autoAccDb.owner === '1002' && autoAccDb.type === 'special'
       && autoAccDb.intake === 'accepted', JSON.stringify(autoAccDb));
 
   await push('1002', { tasks: [Object.assign({ id: AUTO, status: 'doing', intakeStatus: 'accepted' }, AUTO_T)] });
-  const auto = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();
-    const t=j.tasks.find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus}:null})()`);
+  const auto = await js(`(function(){const j=${JSON.stringify(await stateAs('1002'))};
+    const t=(j.tasks||[]).find(x=>x.id==='${AUTO}'); return t?{status:t.status,intake:t.intakeStatus}:null})()`);
   check('接完之后状态才改得动（进行中不会再和「待接收」并存）',
     !!auto && auto.status === 'doing' && auto.intake !== 'pending', JSON.stringify(auto));
 
-  const mixed = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
-    return j.tasks.filter(t=>t.intakeStatus==='pending'&&t.status!=='todo').map(t=>t.title)})()`);
-  check('全量数据里没有「进行中 + 待接收」的矛盾组合', mixed.length === 0, JSON.stringify(mixed).slice(0, 120));
+  const mixed = ((await stateAs('1012')) || {}).tasks || [];
+  check('全量数据里没有「进行中 + 待接收」的矛盾组合',
+    mixed.filter(t=>t.intakeStatus==='pending'&&t.status!=='todo').length === 0,
+    JSON.stringify(mixed.filter(t=>t.intakeStatus==='pending'&&t.status!=='todo').map(t=>t.title)).slice(0, 120));
 
   await push('1012', { del: { tasks: [AUTO] } });
   await push('1002', { del: { tasks: [AUTO] } });
 
 
   /* ---------- 9.4 专项/临时不能指派给别人：承接人锁自己 ---------- */
-  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
-  await goto(BASE); await sleep(1200);
+  await asUser('1012');
   await nav('special'); await sleep(400);
   await js(`document.querySelector('[data-act="new"][data-type="special"]').click();'ok'`);
   await sleep(400);
@@ -1281,8 +1346,7 @@ async function main() {
   await push('1003', { del: { tasks: [SWAP] } });
 
   /* ---------- 9.45 发布自由选人 + 专项知情人 + 发布页四模块 ---------- */
-  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
-  await goto(BASE); await sleep(1200);
+  await asUser('1012');
   await nav('assign'); await sleep(500);
 
   /* 四个模块、顺序固定；第一块 0.7.0 起叫「我发布的任务」——这一页是发布口，不是「我的活」 */
@@ -1381,18 +1445,19 @@ async function main() {
      「owner 是别人、承接人是我」的请求就两头都不沾：守卫放行，落库的 owner 却是别人。
      结果是我能往别人名下塞一条连我自己都看不见的任务，专项「只归自己办」直接破。
      验法不能只看「有没有报错」，还要看对方名下是不是真的没多出这条。 */
-  const ownGuard = await js(`(async()=>{
-    const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(b)});
+  const ownGuard = await (async () => {
     /* 先清残留：上一轮要是真漏进来了，这条会一直红着，看起来像修复没生效 */
-    await P({me:'1101',del:{tasks:['e2e_owner_guard']}});
-    await P({me:'1012',del:{tasks:['e2e_owner_guard']}});
-    const r=await P({me:'1012',tasks:[{id:'e2e_owner_guard',type:'special',title:'E2E替别人建',
-        ownerNo:'1101',assigneeNo:'1012',start:'2026-11-04',end:'2026-11-06',status:'todo',stages:[]}]});
-    const j=await r.json();
-    const st=await (await fetch('/api/state?me=1101')).json();
-    return {errors:(j.errors||[]).length, rows:j.rows|0,
-      atOther:(st.tasks||[]).some(t=>t.id==='e2e_owner_guard')};})()`);
+    /* 用 1004 而不是 1101：1101 在下面「知情人选没登录过的人」里必须保持未登录态，
+       这里一旦以他的身份登录，那条用例就会假红（激活是登录的副作用）。 */
+    await apiAs('1004', '/api/sync', { me: '1004', del: { tasks: ['e2e_owner_guard'] } });
+    await apiAs('1012', '/api/sync', { me: '1012', del: { tasks: ['e2e_owner_guard'] } });
+    const r = await apiAs('1012', '/api/sync', { me: '1012', tasks: [{ id: 'e2e_owner_guard', type: 'special', title: 'E2E替别人建',
+      ownerNo: '1004', assigneeNo: '1012', start: '2026-11-04', end: '2026-11-06', status: 'todo', stages: [] }] });
+    const j = r.json || {};
+    const st = (await stateAs('1004')) || {};
+    return { errors: (j.errors || []).length, rows: j.rows | 0,
+      atOther: (st.tasks || []).some(t => t.id === 'e2e_owner_guard') };
+  })();
   check('替别人建任务被拒：对方名下不会多出一条「我自己都看不见」的活',
     ownGuard.errors >= 1 && ownGuard.atOther === false, JSON.stringify(ownGuard));
 
@@ -1400,12 +1465,7 @@ async function main() {
      原来的写法是在 1012 身份下看「页面上有没有那条拦截」——可 1012 有上级（1001），
      旧版的拦截本来就不会出现，这条断言在修复前也是绿的，等于什么都没验。
      要验就得换成真的没有上级的人：1001（部门经理，mgr_no 为空）与 1101/1102 都是。 */
-  await js(`localStorage.clear(); sessionStorage.clear(); 'ok'`);
-  await goto(BASE);
-  await js(`(function(){document.querySelector('#a_no').value='1001';
-    document.querySelector('#a_name').value='张启明';
-    document.querySelector('[data-act=do-login]').click();return 'ok'})()`);
-  await sleep(1600);
+  await asUser('1001');
   if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
     await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
   }
@@ -1441,8 +1501,7 @@ async function main() {
     return 'ok'})()`);
 
   /* 切回 1012 继续后面的用例 */
-  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
-  await goto(BASE); await sleep(1500);
+  await asUser('1012');
   if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
     await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
   }
@@ -1511,13 +1570,11 @@ async function main() {
       body:JSON.stringify({me:'1012',tasks:[{id:${JSON.stringify(obsSaved.id)},type:'special',
         title:${JSON.stringify(OBS_TASK)},ownerNo:'1012',assigneeNo:'1012',
         start:'2026-11-03',end:'2026-11-30',status:'doing',stages:[]}]})});return 'ok'})()`);
-    await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
   }
 
   /* 知情人视角：能在「我关注的任务」里看到这条，且只有查看权 */
   if (obsSaved) {
-    await js(`localStorage.setItem('pm_mvp_me','1101');'ok'`);
-    await goto(BASE); await sleep(1500);
+    await asUser('1101');
     if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
       await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
     }
@@ -1563,9 +1620,11 @@ async function main() {
           title:'知情人改的标题',ownerNo:'1012',assigneeNo:'1012',
           start:'2026-11-03',end:'2026-11-30',status:'done',stages:[]}]})});
       const j=await r.json();
-      const st=await (await fetch('/api/state?me=1012')).json();
-      const t=st.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
-      return {rows:j.rows|0,errors:(j.errors||[]).length,title:t&&t.title,status:t&&t.status};})()`);
+      return {rows:j.rows|0,errors:(j.errors||[]).length};})()`);
+    /* 页面这时是 1101 的身份，读 1012 的事实必须换身份读，`?me=1012` 会被 403 挡住。 */
+    const obsWriteDb = ((await stateAs('1012')).tasks || []).find((x) => x.id === obsSaved.id) || {};
+    obsWrite.title = obsWriteDb.title;
+    obsWrite.status = obsWriteDb.status;
     /* 只看「状态没变」不够：任何原因写不进去都会让状态不变。
        必须同时看到 rows=0 且有 errors——那才证明是归属校验挡的，而不是别的地方碰巧失败。 */
     check('知情人绕开界面直接提交：服务端明确拒收，标题和状态一个字没变',
@@ -1575,14 +1634,14 @@ async function main() {
     /* 服务端语义：请求体里没有这条任务/没有这个字段 ≠ 清空名单。
        注意这条**不测前端**——它手写的 body 本来就不带 observers，修复前后都绿；
        前端那半条在上面「只改标题时提交体里不带 observers」里验。 */
-    const keepObs = await js(`(async()=>{
-      await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({me:'1012',tasks:[{id:${JSON.stringify(obsSaved.id)},type:'special',
-          title:${JSON.stringify(OBS_TASK)},ownerNo:'1012',assigneeNo:'1012',
-          start:'2026-11-03',end:'2026-11-30',status:'doing',stages:[]}]})});
-      const j=await (await fetch('/api/state?me=1012')).json();
-      const t=j.tasks.find(x=>x.id===${JSON.stringify(obsSaved.id)});
-      return {observers:(t&&t.observers)||[],status:t&&t.status};})()`);
+    const keepObs = await (async () => {
+      await apiAs('1012', '/api/sync', { me: '1012', tasks: [{ id: obsSaved.id, type: 'special',
+        title: OBS_TASK, ownerNo: '1012', assigneeNo: '1012',
+        start: '2026-11-03', end: '2026-11-30', status: 'doing', stages: [] }] });
+      const j = (await stateAs('1012')) || {};
+      const t = (j.tasks || []).find(x => x.id === obsSaved.id);
+      return { observers: (t && t.observers) || [], status: t && t.status };
+    })();
     check('服务端：请求里没带 observers 就原样保留，不当成清空',
       keepObs.observers.includes('1101') && keepObs.status === 'doing', JSON.stringify(keepObs));
 
@@ -1591,38 +1650,31 @@ async function main() {
        副本那条链路退役——但「派给非下属之后不能断线」这条不变量必须继续成立。
        可见性现在靠 publisher_no：这条任务的 owner 是 1101（不在我的直接下属里），
        只有发布人这一条路径能把它捡回来，所以这条用例专门走跨级（1012 → 1101）。 */
-    const cross = await js(`(async()=>{
-      const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(b)}).then(r=>r.json());
-      const A=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(b)}).then(r=>r.json());
-      await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({no:'1101',name:'吴敏'})});
-      const mk=await P({me:'1012',tasks:[{id:'e2e_cross_src',type:'assign',title:'E2E跨级发布源',
-        ownerNo:'1012',assigneeNo:'1101',start:'2026-11-03',end:'2026-11-10',status:'todo',
-        intakeStatus:'pending',stages:[]}]});
-      const acc=await A('/api/task/accept',{me:'1101',id:'e2e_cross_src'});
+    const cross = await (async () => {
+      const mk = (await apiAs('1012', '/api/sync', { me: '1012', tasks: [{ id: 'e2e_cross_src', type: 'assign', title: 'E2E跨级发布源',
+        ownerNo: '1012', assigneeNo: '1101', start: '2026-11-03', end: '2026-11-10', status: 'todo',
+        intakeStatus: 'pending', stages: [] }] })).json || {};
+      const acc = (await apiAs('1101', '/api/task/accept', { me: '1101', id: 'e2e_cross_src' })).json || {};
       /* 承接人接着往自己那边拆阶段，发布人看到的进度要跟着走 */
-      const plan=await P({me:'1101',tasks:[{id:'e2e_cross_src',type:'special',title:'E2E跨级发布源',
-        ownerNo:'1101',assigneeNo:'1101',start:'2026-11-03',end:'2026-11-10',status:'doing',
-        stages:[{id:'cs1',pid:null,name:'跨级第一段',start:'2026-11-03',end:'2026-11-10',done:false}]}]});
-      const st=await (await fetch('/api/state?me=1012')).json();
-      const row=st.tasks.find(x=>x.id==='e2e_cross_src');
-      return {mkErr:(mk.errors||[]).length, accOk:!!acc.ok, planErr:(plan.errors||[]).length,
-        isSub:(st.subs||[]).some(s=>s.no==='1101'),
-        visible:!!row, owner:row&&row.ownerNo, pub:row&&row.publisherNo, type:row&&row.type,
-        stages:row&&row.stages?row.stages.length:0};})()`);
+      const plan = (await apiAs('1101', '/api/sync', { me: '1101', tasks: [{ id: 'e2e_cross_src', type: 'special', title: 'E2E跨级发布源',
+        ownerNo: '1101', assigneeNo: '1101', start: '2026-11-03', end: '2026-11-10', status: 'doing',
+        stages: [{ id: 'cs1', pid: null, name: '跨级第一段', start: '2026-11-03', end: '2026-11-10', done: false }] }] })).json || {};
+      const st = (await stateAs('1012')) || {};
+      const row = (st.tasks || []).find(x => x.id === 'e2e_cross_src');
+      return { mkErr: (mk.errors || []).length, accOk: !!acc.ok, planErr: (plan.errors || []).length,
+        isSub: (st.subs || []).some(s => s.no === '1101'),
+        visible: !!row, owner: row && row.ownerNo, pub: row && row.publisherNo, type: row && row.type,
+        stages: row && row.stages ? row.stages.length : 0 };
+    })();
     check('跨级发布：非下属接收后所有权转给他，发布人照样看得到进度（断线的那条不变量）',
       cross.mkErr === 0 && cross.accOk === true && cross.planErr === 0 && cross.isSub === false
         && cross.visible === true && cross.owner === '1101' && cross.pub === '1012'
         && cross.type === 'special' && cross.stages === 1,
       JSON.stringify(cross));
-    await js(`(async()=>{
-      const P=(b)=>fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(b)});
-      await P({me:'1101',del:{tasks:['e2e_cross_src']}});
-      await P({me:'1012',del:{tasks:['e2e_cross_src']}});
-      return 'ok'})()`);
+    /* 清理也走 Node 侧：页面是 1101 的身份，带 me:1012 的页内请求会被会话门 403 挡掉，
+       于是「删掉 1012 那条」根本没发生，下一轮就跑在脏数据上。 */
+    await push('1101', { del: { tasks: ['e2e_cross_src'] } });
+    await push('1012', { del: { tasks: ['e2e_cross_src'] } });
 
     await push('1012', { del: { tasks: [obsSaved.id] } });
   }
@@ -1635,8 +1687,7 @@ async function main() {
     const SUBW = '1003';
     const d = n => addDaysStr('2026-11-10', n);
     const whoAmI = async no => {
-      await js(`localStorage.setItem('pm_mvp_me','${no}');'ok'`);
-      await goto(BASE); await sleep(1400);
+      await asUser(no);
       if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
         await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(800);
       }
@@ -1644,11 +1695,11 @@ async function main() {
     await push('1012', { del: { tasks: [FLOW] } });
     /* 提醒不随任务删除而消失（墓碑就是设计成这样），所以每轮开头先把这个人的旧提醒读完。
        不清的话第二次跑必然红：他没做错什么，只是上轮的「已移除」还挂着。 */
-    await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
-      const ids=(j.notices||[]).map(n=>n.id);
-      if(ids.length) await fetch('/api/notice/seen',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({me:'${SUBW}',ids})});
-      return ids.length;})()`);
+    await (async () => {
+      const j = (await stateAs(SUBW)) || {};
+      const ids = (j.notices || []).map(n => n.id);
+      if (ids.length) await apiAs(SUBW, '/api/notice/seen', { me: SUBW, ids });
+    })();
     await pushJ('1012', { tasks: [{ id: FLOW, type: 'assign', title: 'E2E发布：分给两个人干',
       ownerNo: '1012', assigneeNo: '1002', start: d(0), end: d(6), status: 'todo', intakeStatus: 'pending',
       stages: [
@@ -1656,9 +1707,13 @@ async function main() {
         { id: 'f2', pid: 'f1', name: '前半段', who: SUBW, start: d(0), end: d(2), done: false }
       ] }] });
 
-    /* 只指定、没派发 = 对他等于没这回事 */
-    const preWho = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
-      return {has:(j.tasks||[]).some(t=>t.id==='${FLOW}'), notices:(j.notices||[]).filter(n=>n.taskId==='${FLOW}').length};})()`);
+    /* 只指定、没派发 = 对他等于没这回事。页面这时还是 1101 的身份，读 1003 的库要走 Node 侧。 */
+    const stPreWho = await stateAs(SUBW);
+    const preWho = (() => {
+      const j = stPreWho || {};
+      return { has: (j.tasks || []).some((t) => t.id === FLOW),
+        notices: (j.notices || []).filter((n) => n.taskId === FLOW).length };
+    })();
     check('只指定了责任人、还没派发：他那边连这条任务都看不到',
       preWho.has === false && preWho.notices === 0, JSON.stringify(preWho));
 
@@ -1697,9 +1752,12 @@ async function main() {
     await js(`document.querySelector('#view [data-act="task-dispatch"]').click();'ok'`);
     await sleep(1200);
 
-    const postWho = await js(`(async()=>{const j=await (await fetch('/api/state?me=${SUBW}')).json();
-      const t=(j.tasks||[]).find(x=>x.id==='${FLOW}');
-      return {has:!!t, notices:(j.notices||[]).filter(n=>n.taskId==='${FLOW}').length};})()`);
+    /* 页面这时仍是 1002 的身份，读 1003 的库走 Node 侧 */
+    const stPostWho = await stateAs(SUBW);
+    const postWho = (() => {
+      const t = (stPostWho.tasks || []).find((x) => x.id === FLOW);
+      return { has: !!t, notices: (stPostWho.notices || []).filter((n) => n.taskId === FLOW).length };
+    })();
     check('点「派发」：负责子任务的人这才看得到，并收到一条提醒',
       postWho.has === true && postWho.notices === 1, JSON.stringify(postWho));
 
@@ -1746,7 +1804,6 @@ async function main() {
       return (j.notices||[]).filter(n=>n.taskId==='${FLOW}').length;})()`);
     check('点「知道了」后提醒消失，不反复打扰', noticeGone === 0, '剩 ' + noticeGone);
 
-    await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
     await push('1002', { del: { tasks: [FLOW] } });
     await push('1012', { del: { tasks: [FLOW] } });
 
@@ -1829,8 +1886,7 @@ async function main() {
     const SUB = '1003', OTHER = '1004';
     const d = n => addDaysStr('2026-11-10', n);
     const login = async no => {
-      await js(`localStorage.setItem('pm_mvp_me','${no}');'ok'`);
-      await goto(BASE); await sleep(1400);
+      await asUser(no);
       if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
         await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(800);
       }
@@ -1886,7 +1942,8 @@ async function main() {
       const sel=document.querySelector('#view [data-field="status"]');
       sel.value='done'; sel.dispatchEvent(new Event('change',{bubbles:true})); return 'ok';})()`);
     await sleep(1400);
-    const supAfter = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    /* 页面此时是责任人（1003）的身份，读 1012 的状态必须从 Node 侧带 1012 的会话取 */
+    const supAfter = await js(`(async()=>{const j=${JSON.stringify(await stateAs('1012'))};
       const t=(j.tasks||[]).find(x=>x.id==='${T}');
       const s=(t.stages||[]).find(x=>x.id==='c1');
       return {done:!!s.done, by:s.doneBy, status:t.status,
@@ -1918,10 +1975,10 @@ async function main() {
     const stale = JSON.parse(JSON.stringify(plan));
     await push('1012', { tasks: [{ id: T, title: 'E2E子任务上行（改标题）', end: d(7),
       ownerNo: '1012', assigneeNo: '1012', start: d(0), status: 'done', stages: stale }] });
-    const afterStale = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+    const afterStale = await js(`(async()=>{const j=${JSON.stringify(await stateAs('1012'))};
       const t=(j.tasks||[]).find(x=>x.id==='${T}');
       const s=(t.stages||[]).find(x=>x.id==='c1');
-      const m=await (await fetch('/api/state?me=${SUB}')).json();
+      const m=${JSON.stringify(await stateAs(SUB))};
       const mt=(m.tasks||[]).find(x=>x.id==='${tempId}');
       return {title:t.title, end:t.end, done:!!s.done, status:t.status, mirrorStatus:mt&&mt.status};})()`);
     check('上级用旧快照改标题：标题落库，但下属的完成态没被冲掉',
@@ -1944,7 +2001,7 @@ async function main() {
         { id: 'p1', pid: null, name: '阶段一', start: d(0), end: d(7), done: false },
         { id: 'c2', pid: 'p1', name: '子任务B', start: d(3), end: d(6), done: false }
       ] }] });
-    const afterRemove = await js(`(async()=>{const m=await (await fetch('/api/state?me=${SUB}')).json();
+    const afterRemove = await js(`(async()=>{const m=${JSON.stringify(await stateAs(SUB))};
       return {mirror:(m.tasks||[]).some(x=>x.id==='${tempId}')};})()`);
     check('父任务移除这一段：责任人那条副本被服务端收走，不留孤儿待办',
       afterRemove.mirror === false, JSON.stringify(afterRemove));
@@ -1960,21 +2017,19 @@ async function main() {
   /* 登录即激活——「派活能不能送到」全靠这一行。
      基线用直连 sqlite 把 activated 钉死，等于把这条实现替换成了测试自己的断言；
      所以必须单独验一次：登录真的会写标记，且登录后派活不再被拦。 */
-  const loginAct = await js(`(async()=>{
-    const st=async()=>((await (await fetch('/api/state?me=1012')).json()).roster||[]).find(e=>e.no==='1102')||{};
-    const before=await st();
-    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({no:'1102',name:before.name})});
-    const lj=await r.json();
-    const after=await st();
+  const loginAct = await (async () => {
+    const roster = (await stateAs('1012')) || {};
+    const before = (roster.roster || []).find(e => e.no === '1102') || {};
+    const r = await loginSid('1102', '1102');
+    const after = ((await stateAs('1012')) || {}).roster || [];
+    const a = after.find(e => e.no === '1102') || {};
     /* 登录后立刻派一条过去：这才是「他真能收到活」的证明 */
-    const w=await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({me:'1012',tasks:[{id:'e2e_login_assign',type:'assign',title:'E2E登录后派活',
-        ownerNo:'1012',assigneeNo:'1102',start:'2026-11-04',end:'2026-11-05',status:'todo',stages:[]}]})});
-    const wj=await w.json();
-    await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({me:'1012',del:{tasks:['e2e_login_assign']}})});
-    return {ok:lj.ok,before:!!before.activated,after:!!after.activated,rows:wj.rows|0,errs:(wj.errors||[]).length};})()`);
+    const w = await apiAs('1012', '/api/sync', { me: '1012', tasks: [{ id: 'e2e_login_assign', type: 'assign', title: 'E2E登录后派活',
+      ownerNo: '1012', assigneeNo: '1102', start: '2026-11-04', end: '2026-11-05', status: 'todo', stages: [] }] });
+    await apiAs('1012', '/api/sync', { me: '1012', del: { tasks: ['e2e_login_assign'] } });
+    const wj = w.json || {};
+    return { ok: r.ok, before: !!before.activated, after: !!a.activated, rows: wj.rows | 0, errs: (wj.errors || []).length };
+  })();
   check('登录成功后立即置 activated，同一个人马上就能被派活',
     loginAct.ok === true && loginAct.before === false && loginAct.after === true
       && loginAct.rows > 0 && loginAct.errs === 0, JSON.stringify(loginAct));
@@ -1988,8 +2043,7 @@ async function main() {
     db.prepare("UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k='rev'").run();
     db.close();`], { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: 'ignore' });
 
-  await js(`localStorage.setItem('pm_mvp_me','1012');'ok'`);
-  await goto(BASE); await sleep(1200);
+  await asUser('1012');
   await nav('special'); await sleep(500);
 
   /* ---------- 9.5 三级节点：阶段下可再拆一级子任务 ---------- */
@@ -2252,7 +2306,7 @@ async function main() {
     document.querySelector('[data-act=modal-ok]').click(); return 'ok';
   })()`);
   await sleep(1600);
-  const savedDb = await js(`(async()=>{const r=await fetch('/api/state?me=1012');const s=await r.json();
+  const savedDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.title==='不该丢的任务名');
     return t?{title:t.title,start:t.start}:null})()`);
   check('被拦下之后再点保存能正常落库', saved === 'ok' && !!savedDb, JSON.stringify(savedDb));
@@ -2274,8 +2328,7 @@ async function main() {
   // 重置成「没有上级」
   runImport(writeCsv('t-reset.csv', '工号,姓名,岗位,部门,上级工号\n1019,钱多,测试员,产品部,-\n'));
 
-  await js(`localStorage.setItem('pm_mvp_me','1019');'ok'`);
-  await goto(BASE);
+  await asUser('1019');
   const askMgr = await waitFor(
     `document.querySelector('#auth.show') && /选择你的直属上级/.test(document.querySelector('#authBody').innerText)`, 8000);
   check('没有上级的人登录后自动要求选上级', askMgr,
@@ -2288,7 +2341,7 @@ async function main() {
     if(!it) return 'no-item'; it.click(); return 'ok'})()`);
   await js(`document.querySelector('[data-act=confirm-mgr]').click();'ok'`);
   await sleep(1500);
-  const mgrNow = () => js(`(async()=>{const r=await fetch('/api/state?me=1019');const s=await r.json();
+  const mgrNow = async () => js(`(async()=>{const s=await (await fetch('/api/state?me=1019')).json();
     return s.me && s.me.mgr ? s.me.mgr.no : null})()`);
   const afterPick = await mgrNow();
   check('本人选的上级落进花名册（mgr_no）', picked === 'ok' && afterPick === '1012', `${picked} / mgr=${afterPick}`);
@@ -2307,9 +2360,7 @@ async function main() {
 
   // 上级工号写错：整批不写
   const outBad = runImport(writeCsv('t-bad.csv', '工号,姓名,岗位,部门,上级工号\n1020,孙丽,专员,产品部,9999\n'));
-  const login1020 = await js(`(async()=>{const r=await fetch('/api/login',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({no:'1020',name:'孙丽'})});
-    return (await r.json()).ok})()`);
+  const login1020 = (await loginSid('1020', '1020')).ok;
   check('上级工号不存在时整批不写（1020 没进库）',
     outBad.includes('不在花名册里') && login1020 === false,
     outBad.trim().split('\n')[2] || '');
@@ -2324,7 +2375,7 @@ async function main() {
   /* ---------- 9.6 任务卡片上要写清「这条活是谁发布的」 ---------- */
   /* 发布人 ≠ 承接人：接收之后 owner 变成了承接人，卡片上如果只剩「承接」，
      承接人回头看这条活，分不清是别人派的还是自己起意干的；自己的活也不该每条都刷「我发布」。 */
-  const T0 = await js(`(async()=>{const j=await (await fetch('/api/state?me=1002')).json();return j.today})()`);
+  const T0 = ((await stateAs('1002')) || {}).today;
   const PUBCHK = 't_e2e_pubtag';
   await push('1012', { tasks: [{ id: PUBCHK, assigneeNo: '1002', type: 'assign',
     title: 'E2E发布人显示', start: T0, end: T0, status: 'todo' }] });
@@ -2332,8 +2383,7 @@ async function main() {
   check('（前置）1012 发布、1002 接收之后，这条活的发布人仍是 1012',
     pubAcc.ok === true, JSON.stringify(pubAcc));
 
-  await js(`localStorage.setItem('pm_mvp_me','1002');'ok'`);
-  await goto(BASE); await sleep(1400);
+  await asUser('1002');
   if (await js(`!!document.querySelector('[data-act=skip-mgr]')`)) {
     await js(`document.querySelector('[data-act=skip-mgr]').click();'ok'`); await sleep(1000);
   }
@@ -2361,14 +2411,128 @@ async function main() {
   await push('1002', { del: { tasks: [PUBCHK] } });
   await push('1012', { del: { tasks: [PUBCHK] } });
 
+  /* ---------- 10.5 认证与导出（第一批） ---------- */
+  /* 这一节全部走 Node 侧带 cookie 调用：
+     ① 浏览器里的 fetch 没法换身份（HttpOnly 的 sid 读不到也改不了）；
+     ② 故意的 401/403 会污染「无失败请求」那条断言。 */
+  const csvSplit = (line) => {
+    const out = []; let cur = ''; let q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+        else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const anon = await fetch(BASE + '/api/state');
+  check('不带会话调 /api/state → 401', anon.status === 401, String(anon.status));
+  check('401 文案不区分「工号不存在」还是「没登录」',
+    /登录已过期/.test((await anon.json()).msg || ''));
+
+  const conflicted = await apiAs('1012', '/api/state?me=1002');
+  check('会话是 1012 却带 me=1002 → 403（不静默当成 1002）', conflicted.status === 403, String(conflicted.status));
+
+  const wrongPwd = await loginSid('1012', 'definitely-not-the-password');
+  const ghost = await loginSid('999999', 'whatever');
+  check('密码错与工号不存在返回同一句文案',
+    wrongPwd.ok === false && ghost.ok === false && wrongPwd.msg === ghost.msg && wrongPwd.msg === '工号或密码不正确',
+    `密码错=${wrongPwd.msg} / 没这人=${ghost.msg}`);
+
+  /* --- 改密：旧密码失效、新密码可用、其它会话被吊销 --- */
+  const otherSid = (await loginSid('1004')).sid;
+  const chg = await apiAs('1004', '/api/password', { me: '1004', old: '1004', new: 'E2ePassw0rd' });
+  const oldLogin = await loginSid('1004', '1004');
+  const newLogin = await loginSid('1004', 'E2ePassw0rd');
+  const kicked = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + otherSid } });
+  check('改密后：旧密码失效、新密码可用', (chg.json || {}).ok === true && oldLogin.ok === false && newLogin.ok === true,
+    `改密=${(chg.json || {}).ok} 旧=${oldLogin.ok} 新=${newLogin.ok}`);
+  check('改密会吊销本人的其它会话（当前这条保留）', kicked.status === 401, String(kicked.status));
+  const selfStill = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + (await sidOf('1004')) } });
+  check('改密用的当前会话仍然有效', selfStill.status === 200, String(selfStill.status));
+
+  /* --- 退出登录 --- */
+  const l5 = await loginSid('1005');
+  const lo = await fetch(BASE + '/api/logout', {
+    method: 'POST', headers: { Cookie: 'sid=' + l5.sid, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  const afterLo = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + l5.sid } });
+  check('退出登录后会话立即失效', lo.status === 200 && afterLo.status === 401, `${lo.status}/${afterLo.status}`);
+
+  /* --- 超管 --- */
+  const adminFlags = {};
+  for (const no of ['1012', '1101', '1001']) {
+    const s = (await stateAs(no)) || {};
+    adminFlags[no] = !!(s.me && s.me.admin);
+  }
+  const adminNo = Object.keys(adminFlags).find(n => adminFlags[n]) || '';
+  check('超管身份可在会话里识别（未设置 CADENCE_ADMIN_NO 时这里会红）', !!adminNo, JSON.stringify(adminFlags));
+  const plainNo = Object.keys(adminFlags).find(n => !adminFlags[n]) || '';
+
+  if (adminNo && plainNo) {
+    const forbid = await apiAs(plainNo, '/api/admin/reset-password', { me: plainNo, no: '1004' });
+    check('非超管重置密码 → 403', forbid.status === 403, String(forbid.status));
+    const forbidList = await apiAs(plainNo, '/api/admin/initial-passwords');
+    check('非超管看初始密码名单 → 403', forbidList.status === 403, String(forbidList.status));
+
+    const reset = await apiAs(adminNo, '/api/admin/reset-password', { me: adminNo, no: '1004' });
+    const backLogin = await loginSid('1004', '1004');
+    const staleSid = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + (await sidOf('1004')) } });
+    check('超管重置后：目标可用工号重新登录，旧会话全部失效',
+      (reset.json || {}).ok === true && backLogin.ok === true && staleSid.status === 401,
+      `${(reset.json || {}).ok}/${backLogin.ok}/${staleSid.status}`);
+
+    const list = await apiAs(adminNo, '/api/admin/initial-passwords');
+    const one = ((list.json || {}).list || []).find(x => x.no === '1004') || {};
+    check('初始密码名单列出重置回来的人，并带首次登录时间/IP',
+      (list.json || {}).ok === true && one.no === '1004' && !!one.firstLoginAt && 'firstLoginIp' in one,
+      JSON.stringify(one).slice(0, 160));
+  }
+
+  /* --- 失败锁定：用一次性账号，避免把演示账号锁给下一轮 --- */
+  const lockMsgs = [];
+  for (let i = 0; i < 6; i++) lockMsgs.push((await loginSid(LOCKNO, 'wrong-' + i)).msg);
+  const lockRight = await loginSid(LOCKNO, LOCKNO);
+  check('连续 5 次密码错后第 6 次提示锁定',
+    lockMsgs.slice(0, 5).every(m => m === '工号或密码不正确') && /尝试次数过多/.test(lockMsgs[5] || ''),
+    JSON.stringify(lockMsgs.slice(0, 6)));
+  check('锁定期内正确密码也被拒（不给爆破留后门）',
+    lockRight.ok === false && lockRight.locked === true, JSON.stringify(lockRight));
+
   /* ---------- 11 错误汇总 ---------- */
-  const errs = cdp.events.filter((e) =>
-    e.method === 'Runtime.exceptionThrown' ||
-    (e.method === 'Log.entryAdded' && e.params?.entry?.level === 'error') ||
-    (e.method === 'Runtime.consoleAPICalled' && e.params?.type === 'error'));
+  /* 登录页要先知道「有没有会话」，会探一次 /api/state；没会话必然回 401。
+     那是设计出来的应答，不是错误——不排除它，这条断言永远红，最后只会被人加 ignore 注释。 */
+  const urlOf = (requestId) => {
+    const r = cdp.events.find((e) => e.method === 'Network.requestWillBeSent' && e.params?.requestId === requestId);
+    return r ? r.params.request.url : '';
+  };
+  const probe401 = (e) => {
+    const en = e.params?.entry || {};
+    return /\/api\/state$/.test(en.url || '') && /401/.test(en.text || '');
+  };
+  const errs = cdp.events.filter((e) => {
+    if (e.method === 'Runtime.exceptionThrown') return true;
+    if (e.method === 'Runtime.consoleAPICalled') return e.params?.type === 'error';
+    if (e.method === 'Log.entryAdded') return e.params?.entry?.level === 'error' && !probe401(e);
+    return false;
+  });
+  const errText = (e) => {
+    const en = e.params?.entry || {};
+    if (e.method === 'Log.entryAdded') return `${en.url || ''} ${en.text || ''}`;
+    if (e.method === 'Runtime.exceptionThrown') {
+      return String(e.params?.exceptionDetails?.exception?.description || e.params?.exceptionDetails?.text || '').slice(0, 200);
+    }
+    return String(e.params?.args?.[0]?.value || e.params?.type || '').slice(0, 200);
+  };
   const netFail = cdp.events.filter((e) => e.method === 'Network.loadingFailed' && !e.params?.canceled);
-  check('无 JS 运行时错误', errs.length === 0, errs.slice(0, 3).map((e) => JSON.stringify(e.params).slice(0, 220)).join(' | '));
-  check('无失败请求', netFail.length === 0, netFail.slice(0, 3).map((e) => JSON.stringify(e.params).slice(0, 160)).join(' | '));
+  check('无 JS 运行时错误', errs.length === 0, errs.slice(0, 5).map(errText).join(' | '));
+  check('无失败请求', netFail.length === 0,
+    netFail.slice(0, 5).map((e) => `${urlOf(e.params?.requestId)} ${e.params?.errorText || ''}`).join(' | '));
 
   const bad = results.filter((r) => !r.ok);
   console.log(`\n===== 合计 ${results.length} 项，失败 ${bad.length} 项 =====`);

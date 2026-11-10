@@ -78,6 +78,18 @@ let authStep = 'login', authPick = null, authKw = '';
 const ME_KEY = 'pm_mvp_me';    /* 只存工号，数据一律在服务端 */
 
 /* ============ API ============ */
+/* 会话失效统一回登录页：任何一个接口 401，都说明 cookie 没了或过期了。
+   这里集中处理，避免每个调用点各写一遍还漏掉。 */
+function onAuthLost() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  localStorage.removeItem(ME_KEY);
+  S = null;
+  REV = 0;
+  const boot = $('#boot');
+  if (boot) boot.classList.remove('show');
+  authStep = 'login';
+  authRender('登录已过期，请重新登录');
+}
 async function api(path, opts) {
   const res = await fetch(path, Object.assign({
     headers: { 'Content-Type': 'application/json' }
@@ -85,6 +97,12 @@ async function api(path, opts) {
   const txt = await res.text();
   let data;
   try { data = txt ? JSON.parse(txt) : {}; } catch (e) { throw new Error('服务返回异常：' + txt.slice(0, 80)); }
+  if (res.status === 401) {
+    onAuthLost();
+    const err = new Error(data.msg || '登录已过期，请重新登录');
+    err.status = 401;
+    throw err;
+  }
   if (!res.ok) throw new Error(data.msg || ('HTTP ' + res.status));
   return data;
 }
@@ -111,7 +129,7 @@ function adopt(st) {
   (st.routines || []).forEach(r => { meta[r.id] = r; });
 
   S = {
-    me: { no: st.me.no, name: st.me.name, role: st.me.role, dept: st.me.dept, mgr: st.me.mgr || null },
+    me: { no: st.me.no, name: st.me.name, role: st.me.role, dept: st.me.dept, mgr: st.me.mgr || null, admin: !!st.me.admin },
     roster: st.roster || [],
     subs: st.subs || [],
     cats: st.cats || [],
@@ -235,7 +253,7 @@ async function persist() {
 
 async function refresh(silent) {
   if (!S || !S.me) return;
-  const st = await api('/api/state?me=' + encodeURIComponent(S.me.no));
+  const st = await api('/api/state');
   const keepView = view;
   adopt(st);
   if (keepView !== view) view = keepView;
@@ -1481,7 +1499,7 @@ function viewSettings() {
   const catTop = Object.keys(catUse).sort((a, b) => catUse[b] - catUse[a]).slice(0, 10);
   return `
   <div class="card" style="margin-bottom:14px">
-    <div class="card-h"><h2>账号与汇报关系</h2><span class="hint">一期：工号 + 姓名登录，免密码；一个直属上级</span>
+    <div class="card-h"><h2>账号与汇报关系</h2><span class="hint">工号 + 密码登录；一个直属上级</span>
       <div class="spacer"></div><button class="btn sm" data-act="switch-user">修改上级</button></div>
     <div class="authkv">
       <div><span>登录账号</span><b>${S.me ? esc(S.me.name) + ' · ' + esc(S.me.no) : '未登录'}</b></div>
@@ -1494,6 +1512,20 @@ function viewSettings() {
     <div class="note" style="margin-top:10px">上级不是必填项：不设上级照样能发布任务、承接任务。只是不设上级的人不会出现在别人的「下属」名单里，上级也就看不到你的常规工作与专项进展。</div>
     <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已发布的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-h"><h2>修改密码</h2><span class="hint">初始密码=工号，改完请自己记住</span></div>
+    <div class="split" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div class="auth-field" style="margin:0"><label>原密码</label><input id="pwd_old" type="password" autocomplete="current-password"/></div>
+      <div class="auth-field" style="margin:0"><label>新密码（至少 6 位）</label><input id="pwd_new" type="password" autocomplete="new-password"/></div>
+      <button class="btn sm" data-act="change-pwd">修改密码</button>
+    </div>
+  </div>
+  ${S.me && S.me.admin ? `
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-h"><h2>超管：初始密码名单</h2><span class="hint">仅 ${esc(S.me.no)} 可用；重置后本人可用工号重新登录</span>
+      <div class="spacer"></div><button class="btn sm" data-act="admin-pw">读取名单</button></div>
+    <div id="adminPwdList"><div class="note">点「读取名单」查看谁还在用初始密码（含首次登录时间与 IP）。</div></div>
+  </div>` : ''}
   <div class="grid-2">
     <div class="card">
       <div class="card-h"><h2>任务分类</h2><span class="hint">新建任务时手填，不做统一维护</span></div>
@@ -1523,7 +1555,7 @@ function viewSettings() {
       </div>
       <div class="card">
         <div class="card-h"><h2>一期边界（已确认）</h2><span class="hint">评审以这张表为准</span></div>
-        <div class="kv"><span>登录</span><b>工号 + 姓名，免密码</b></div>
+        <div class="kv"><span>登录</span><b>工号 + 密码（初始密码=工号，可自助修改）</b></div>
         <div class="kv"><span>通知</span><b>仅站内，无邮件 / 企微 / 推送</b></div>
         <div class="kv"><span>汇报关系</span><b>自选即生效，不审核</b></div>
         <div class="kv"><span>验收</span><b>不做，不能当绩效依据</b></div>
@@ -2533,12 +2565,12 @@ function authRender(msg) {
     body.innerHTML = `
       <div class="step">STEP 1 / 2 · 身份校验</div>
       <h3>登录</h3>
-      <p class="desc">填写工号与姓名，两者需与花名册一致。一期不设密码，仅用于试点期。</p>
-      <div class="auth-field"><label>工号</label><input id="a_no" placeholder="例如 1012" value="1012"/></div>
-      <div class="auth-field"><label>姓名</label><input id="a_name" placeholder="与花名册一致" value="王磊"/></div>
+      <p class="desc">填写工号与密码。首次登录的初始密码就是你的工号，登录后请到「设置」里改掉。</p>
+      <div class="auth-field"><label>工号</label><input id="a_no" placeholder="你的工号"/></div>
+      <div class="auth-field"><label>密码</label><input id="a_pwd" type="password" placeholder="初始密码为工号"/></div>
       <div class="auth-err" id="a_err">${msg || ''}</div>
       <div class="actions"><button class="btn primary" data-act="do-login">进入工作台</button></div>
-      <div class="auth-hint">试点花名册：1012 王磊（产品组组长）· 1002 李明 · 1003 陈静 · 1004 王浩 · 1005 赵敏 · 1001 张启明。<br/>
+      <div class="auth-hint">初始密码 = 本人工号（首次登录后请及时修改）。<br/>
         一期仅站内使用：不做邮件、不做企业微信、不做手机推送。</div>`;
     return;
   }
@@ -2560,10 +2592,10 @@ function authRender(msg) {
 }
 async function doLogin() {
   const no = ($('#a_no').value || '').trim();
-  const name = ($('#a_name').value || '').trim();
-  if (!no || !name) return authRender('工号和姓名都要填');
+  const pwd = ($('#a_pwd').value || '');
+  if (!no || !pwd) return authRender('工号和密码都要填');
   try {
-    const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ no, name }) });
+    const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ no, password: pwd }) });
     if (!r.ok) return authRender(r.msg || '登录失败');
     localStorage.setItem(ME_KEY, no);
     await loadState();
@@ -2583,9 +2615,8 @@ async function finishAuth(tip) {
 
 /* ============ 装载 ============ */
 async function loadState() {
-  const no = localStorage.getItem(ME_KEY);
-  if (!no) throw new Error('未登录');
-  const st = await api('/api/state?me=' + encodeURIComponent(no));
+  /* 身份在 cookie 里，前端不再传 me——传了也只是给服务端校验用 */
+  const st = await api('/api/state');
   adopt(st);
   setSync('ok', '已同步');
 }
@@ -2626,11 +2657,48 @@ document.addEventListener('click', e => {
     case 'close-auth': $('#auth').classList.remove('show'); break;
     case 'logout':
       if (confirm('退出登录？（数据在服务端，不会丢）')) {
-        localStorage.removeItem(ME_KEY);
-        if (pollTimer) clearInterval(pollTimer);
-        location.reload();
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        /* 先让服务端删会话再刷新：只清本地的话刷新回来还是登录态，等于没退 */
+        api('/api/logout', { method: 'POST', body: '{}' })
+          .catch(() => { })
+          .finally(() => { localStorage.removeItem(ME_KEY); location.reload(); });
       }
       break;
+    case 'change-pwd': {
+      const oldPwd = ($('#pwd_old') || {}).value || '';
+      const newPwd = ($('#pwd_new') || {}).value || '';
+      if (!oldPwd || !newPwd) { toast('原密码和新密码都要填'); break; }
+      api('/api/password', { method: 'POST', body: JSON.stringify({ me: S.me.no, old: oldPwd, new: newPwd }) })
+        .then(r => {
+          if (!r.ok) { toast(r.msg || '改密失败'); return; }
+          $('#pwd_old').value = ''; $('#pwd_new').value = '';
+          toast('密码已更新，其它设备上的登录已失效');
+        })
+        .catch(err => toast('改密失败：' + err.message));
+      break;
+    }
+    case 'admin-pw': {
+      api('/api/admin/initial-passwords')
+        .then(r => {
+          const box = $('#adminPwdList');
+          if (!box) return;
+          if (!r.ok) { box.innerHTML = `<div class="note">${esc(r.msg || '读不到名单')}</div>`; return; }
+          if (!r.list.length) { box.innerHTML = '<div class="note">没有人在用初始密码了。</div>'; return; }
+          box.innerHTML = r.list.map(x => `<div class="kv"><span>${esc(x.name)} · ${esc(x.no)}</span>
+            <b>首次登录 ${esc((x.firstLoginAt || '').slice(0, 19).replace('T', ' '))} · ${esc(x.firstLoginIp || '')}
+            <span class="btn link" data-act="admin-reset" data-no="${esc(x.no)}">重置为工号</span></b></div>`).join('');
+        })
+        .catch(err => toast('读取失败：' + err.message));
+      break;
+    }
+    case 'admin-reset': {
+      const tno = el.dataset.no;
+      if (!confirm(`把 ${tno} 的密码重置回工号？他的所有登录会被踢下线。`)) break;
+      api('/api/admin/reset-password', { method: 'POST', body: JSON.stringify({ me: S.me.no, no: tno }) })
+        .then(r => { toast(r.msg || (r.ok ? '已重置' : '重置失败')); if (r.ok) { el.closest('.kv').remove(); } })
+        .catch(err => toast('重置失败：' + err.message));
+      break;
+    }
     case 'memrow': openMembers[id] = !openMembers[id]; render(); break;
     case 'fold-special': openSpecialBlock = !openSpecialBlock; render(); break;
     case 'watch-task': {
@@ -3289,8 +3357,6 @@ document.addEventListener('input', e => {
 
 /* ============ 启动 ============ */
 (async function init() {
-  const no = localStorage.getItem(ME_KEY);
-  if (!no) { authStep = 'login'; authRender(); return; }
   $('#boot').classList.add('show');
   try {
     await loadState();
@@ -3301,8 +3367,9 @@ document.addEventListener('input', e => {
     startPolling();
   } catch (e) {
     $('#boot').classList.remove('show');
-    localStorage.removeItem(ME_KEY);
+    /* 401 已经由 onAuthLost 切到登录页；这里只负责别把真正的网络错误说成「会话失效」 */
+    if (e.status === 401) return;
     authStep = 'login';
-    authRender('会话已失效（' + e.message + '），请重新登录');
+    authRender('连不上服务（' + e.message + '），请稍后重试');
   }
 })();

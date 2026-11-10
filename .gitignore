@@ -13,6 +13,8 @@ _dev/*.json
 # 完整校验的报告是证据，要进库（上面那条 `_dev/*.json` 会把它一起忽略，这里放行）
 !_dev/verify-report.json
 _dev/t-*.csv
+# --full 每次重建的测试库副本（真实库 data/workbench.db 不参与 e2e）
+_dev/.test-db/
 
 node_modules/
 

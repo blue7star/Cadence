@@ -15,10 +15,12 @@ const { SEMVER, getChangelog, getChangelogHistory, getFullVersion } = require('.
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
-const DB_FILE = path.join(DATA_DIR, 'workbench.db');
+const DB_FILE = process.env.CADENCE_DB
+  ? path.resolve(process.env.CADENCE_DB)
+  : path.join(DATA_DIR, 'workbench.db');
 const PORT = Number(process.env.PORT || 8788);
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 
 /* ============ 日期工具 ============ */
 const pad = n => String(n).padStart(2, '0');

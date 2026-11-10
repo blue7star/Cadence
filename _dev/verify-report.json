@@ -1,9 +1,9 @@
 {
- "at": "2026-11-10T14:22:09.175Z",
+ "at": "2026-11-10T14:44:14.175Z",
  "mode": "--full",
- "head": "73d0147",
- "digest": "3802312315627e94",
- "docsDigest": "775293ee9f9af529",
+ "head": "ccf6e97",
+ "digest": "539603416998b524",
+ "docsDigest": "76a0a8e2b55874ec",
  "evidenceDigest": "1aa7ef98a9f3266d",
  "algo": 2,
  "files": 99,
@@ -40,19 +40,19 @@
   ".gitattributes": "d81ba5ad5cec",
   ".githooks/pre-commit": "d5877155ac47",
   ".github/workflows/ai-native-gate.yml": "7be15cf5cb18",
-  ".gitignore": "8d6d28ddf3de",
+  ".gitignore": "4dd5c40a9523",
   ".pre-commit-config.yaml": "89deecd06e4e",
   "AGENTS.md": "6df3bef10254",
   "CHANGELOG.md": "07a57b3a1e24",
-  "DEVELOPMENT.md": "4e2659ce414a",
+  "DEVELOPMENT.md": "e746d075a277",
   "README.md": "dc5eee0e855c",
   "_dev/dbg.mjs": "f1e71aeafd1b",
-  "_dev/e2e.mjs": "518c94d72e69",
+  "_dev/e2e.mjs": "b6f837f0c3d0",
   "_dev/gate-selftest.mjs": "3f2d6cc6d7b8",
   "_dev/probe-intake.mjs": "ffa983e63c91",
   "_dev/probe-late.mjs": "4c7d78b0ac09",
   "_dev/shot-once.mjs": "6b6bece753b3",
-  "_dev/verify.mjs": "3a873b82239a",
+  "_dev/verify.mjs": "956f36599d4f",
   "artifacts/contracts/TASK-20261110-auth-export.md": "91e885e27e14",
   "artifacts/contracts/TASK-20261110-task-import.md": "158ffef72859",
   "artifacts/runs/TASK-20261109-gate-hardening/candidate-a1.patch": "fd13e3c61ca3",
@@ -92,19 +92,19 @@
   "docs/product-design.html": "9f302f20fa2c",
   "docs/prototype.html": "a9e79c9b1948",
   "emp-template.csv": "7a0dc7894ef3",
-  "import-emp.js": "1065d5de6db2",
+  "import-emp.js": "6ac2401a5941",
   "public/app.js": "b8e752250422",
   "public/changelog.js": "74f665a86fbf",
   "public/index.html": "f28731337eff",
   "readme-no-node.txt": "676bc166e1a8",
-  "server.js": "c1cc11431f81",
+  "server.js": "ba098b75d881",
   "specs/features/auth-and-transfer.md": "bba6540775e4",
   "specs/modules/README.md": "287287e49f71",
   "specs/modules/_template.md": "0896e628dbe1",
   "specs/modules/app-ui.md": "a63fca09d714",
   "specs/modules/server-api.md": "a4517d224a36",
   "specs/modules/server-data.md": "4cf0051a0a23",
-  "specs/modules/tooling.md": "fd01603f6e17",
+  "specs/modules/tooling.md": "365c68ad9277",
   "specs/modules/version.md": "225ce7f29555",
   "version.js": "51d0048018bc",
   "停止工作台.bat": "613ef29c9a7f",
@@ -149,14 +149,19 @@
    "info": "索引即待提交的树"
   },
   {
-   "name": "服务在跑，且版本与本机代码一致",
+   "name": "测试实例在跑（独立测试库，真实库不动）",
    "ok": true,
-   "info": "v0.8.5"
+   "info": "v0.8.5 · D:\\ai_project\\ai_work\\Cadence\\_dev\\.test-db\\workbench.db"
   },
   {
    "name": "e2e 194 项",
    "ok": true,
    "info": ""
+  },
+  {
+   "name": "重启后密码不变（改密 → 重启 → 登录）",
+   "ok": true,
+   "info": "新密码 ok / 旧密码 已失效"
   }
  ]
 }

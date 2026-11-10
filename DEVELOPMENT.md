@@ -222,9 +222,15 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 
 ```bash
 node _dev/verify.mjs --fast   # 语法 + 版本 + CHANGELOG 一致性（1 秒）
-node _dev/verify.mjs --full   # 上面全套 + 服务版本比对 + e2e 143 项（提交前跑）
-node _dev/e2e.mjs             # 只想要 e2e 时直接跑（调试用，默认 http://localhost:8788）
+node _dev/verify.mjs --full   # 上面全套 + 起测试实例 + e2e + 重启后密码幂等（提交前跑）
+node _dev/e2e.mjs <base>      # 只想要 e2e 时直接跑（调试用；必须给 CADENCE_DB 指向测试库）
 ```
+
+`--full` **自己起一个实例**，不需要先手工把 8788 点起来：先 `VACUUM INTO` 从 `data/workbench.db`
+取一份一致快照到 `_dev/.test-db/workbench.db`，再用 `PORT=8799 CADENCE_DB=<副本>` 启动 `server.js`，
+e2e 与「改密 → 重启 → 新密码可登录、旧密码失效」都跑在副本上，跑完杀进程、删副本。
+**真实库一个字节都不动。** e2e 的固定基线会重置全员密码、删测试工号（`9xxxxx`）、造夹具任务，
+所以 `e2e.mjs` 拒绝在真实库上跑（未给 `CADENCE_DB` 或指向 `data/workbench.db` 直接退出 2）。
 
 `verify.mjs` 是提交门禁的本体。它算的是「已经 `git add` 的这棵树」的摘要：对索引里的 git blob 做
 LF 归一后逐个哈希，所以同一个 commit 在任何人机器上复算出来的值都一样（2026-11-10 之前读的是工作区原文，

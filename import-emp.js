@@ -28,7 +28,12 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
 const ROOT = __dirname;
-const DB_FILE = path.join(ROOT, 'data', 'workbench.db');
+/* 和 server.js 同一个口径：默认写 data/workbench.db，`CADENCE_DB` 可以指到别处。
+   e2e 的花名册用例（造 1019、改上级、删测试账号）必须落在测试库副本上，
+   否则「跑一次自检」就会往真实花名册里塞人、改别人的上级。 */
+const DB_FILE = process.env.CADENCE_DB
+  ? path.resolve(process.env.CADENCE_DB)
+  : path.join(ROOT, 'data', 'workbench.db');
 
 /* ---------- CSV 解析（够用即可：引号包裹、字段内逗号、"" 转义） ---------- */
 function parseLine(line) {

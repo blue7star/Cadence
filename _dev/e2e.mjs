@@ -7,6 +7,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CHROME = 'C:/Users/lanmingjian/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
@@ -15,6 +16,17 @@ const CHROME = 'C:/Users/lanmingjian/AppData/Local/ms-playwright/chromium-1243/c
    于是到处「CDP timeout」，看起来像应用坏了。 */
 const PORT = 9300 + Math.floor(Math.random() * 200);
 const BASE = process.argv[2] || 'http://localhost:8788';
+/* e2e 的固定基线会直接改库：把全员密码重置成工号、删测试工号、造夹具任务。
+   这些一旦落在真实库上，「跑一次自检」就等于改一次业务数据，而且没有任何提示。
+   所以库路径必须由调用方显式给出，且不允许指向真实库：
+   平时只通过 `node _dev/verify.mjs --full` 跑——它先 VACUUM 一份副本到 _dev/.test-db/。 */
+const REAL_DB = path.resolve(fileURLToPath(new URL('../data/workbench.db', import.meta.url)));
+const DB = process.env.CADENCE_DB ? path.resolve(process.env.CADENCE_DB) : '';
+if (!DB || DB === REAL_DB) {
+  console.error('拒绝在真实库上跑 e2e：它会重置全员密码、删测试工号、造夹具任务。\n'
+    + '请用 `node _dev/verify.mjs --full`（自带 _dev/.test-db 副本并传入 CADENCE_DB）。');
+  process.exit(2);
+}
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* 日期加减：统一走 UTC，避免本地时区把日期推前一天 */
@@ -248,7 +260,7 @@ async function main() {
     execFileSync(process.execPath, ['--no-warnings', '-e', `
       const {DatabaseSync}=require('node:sqlite');
       const crypto=require('node:crypto');
-      const db=new DatabaseSync('data/workbench.db');
+      const db=new DatabaseSync(${JSON.stringify(DB)});
       for (const e of db.prepare('SELECT no FROM emp').all()) {
         const salt=crypto.randomBytes(16).toString('hex');
         const hash=crypto.scryptSync(e.no,salt,64,{N:16384,r:8,p:1}).toString('hex');
@@ -281,7 +293,7 @@ async function main() {
     const ROOT0 = fileURLToPath(new URL('..', import.meta.url));
     execFileSync(process.execPath, ['--no-warnings', '-e', `
       const {DatabaseSync}=require('node:sqlite');
-      const db=new DatabaseSync('data/workbench.db');
+      const db=new DatabaseSync(${JSON.stringify(DB)});
       db.prepare("UPDATE emp SET activated = CASE WHEN no IN ('1001','1002','1003','1004','1005','1012') THEN 1 ELSE 0 END").run();
       db.prepare("UPDATE emp SET last_login=NULL WHERE activated=0").run();
       /* 以前拿别人身份载入过示例数据，会在下属名下留一批 <工号>_t<N>；
@@ -2038,7 +2050,7 @@ async function main() {
      下次打开发布下拉，看到的是「测试说他登录过」，不是业务事实。 */
   execFileSync(process.execPath, ['--no-warnings', '-e', `
     const {DatabaseSync}=require('node:sqlite');
-    const db=new DatabaseSync('data/workbench.db');
+    const db=new DatabaseSync(${JSON.stringify(DB)});
     db.prepare("UPDATE emp SET activated=0,last_login=NULL WHERE no='1102'").run();
     db.prepare("UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k='rev'").run();
     db.close();`], { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: 'ignore' });
@@ -2367,7 +2379,7 @@ async function main() {
 
   // 测试账号用完直接删掉，别留在花名册里
   execFileSync(process.execPath, ['--no-warnings', '-e',
-    `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('data/workbench.db');
+    `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(DB)});
      db.prepare('DELETE FROM emp WHERE no=?').run('1019');
      db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
     { cwd: ROOT });

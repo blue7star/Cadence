@@ -14,9 +14,10 @@
  *
  * 退出码：0 通过；1 不通过（pre-commit 会据此拦下提交）。
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -430,23 +431,136 @@ function diffPaths(a = {}, b = {}) {
 }
 
 /* ── 4. 服务与 e2e ───────────────────────────────────────── */
-async function served() {
-  try {
-    const r = await fetch(BASE + '/api/version');
-    const j = await r.json();
-    const want = createRequire(import.meta.url)(path.join(ROOT, 'version.js')).SEMVER;
-    check('服务在跑，且版本与本机代码一致', j.semver === want,
-      j.semver === want ? `v${want}` : `服务在跑 v${j.semver}，代码是 v${want}——重启服务再验`);
-    return j.semver === want;
-  } catch (e) {
-    check('服务在跑，且版本与本机代码一致', false, `连不上 ${BASE}，先双击「启动工作台.bat」`);
-    return false;
-  }
+/* e2e 从 2026-11-10 起跑在**测试库副本**上，由 --full 自己起实例、跑完收摊。
+   之前它连 8788 那个真实库：会「全员密码重置成工号」、删掉临时员工、造上百条夹具任务，
+   跑一次本地演示数据就花一次，而且必须人工先双击启动脚本。现在：
+   - 每次用 VACUUM INTO 从 data/workbench.db 取一份一致快照到 _dev/.test-db/；
+   - server.js 认 CADENCE_DB，实例指到副本上；
+   - 跑完杀掉实例、删副本。真实库一个字节都不动。 */
+const TEST_DIR = path.join(ROOT, '_dev', '.test-db');
+const TEST_DB = path.join(TEST_DIR, 'workbench.db');
+const TEST_PORT = Number(process.env.CADENCE_TEST_PORT || 8799);
+const TEST_BASE = `http://localhost:${TEST_PORT}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function freshTestDb() {
+  fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  fs.mkdirSync(TEST_DIR, { recursive: true });
+  const real = path.join(ROOT, 'data', 'workbench.db');
+  if (!fs.existsSync(real)) return true; /* 新克隆还没有真实库：让实例自己建演示库 */
+  const { DatabaseSync } = await import('node:sqlite');
+  const src = new DatabaseSync(real);
+  /* VACUUM INTO 拿到的是一致快照；直接复制文件会漏掉还在 WAL 里、没 checkpoint 的写入 */
+  src.exec(`VACUUM INTO '${TEST_DB.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  src.close();
+  return true;
 }
 
-function e2e() {
-  const r = spawnSync(process.execPath, [path.join(ROOT, '_dev', 'e2e.mjs'), BASE],
-    { encoding: 'utf8', maxBuffer: 1 << 28 });
+function startInstance(port) {
+  return spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+    cwd: ROOT,
+    env: { ...process.env, PORT: String(port), CADENCE_DB: TEST_DB },
+    stdio: 'ignore'
+  });
+}
+
+async function waitUp(base, ms = 20000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try {
+      const r = await fetch(base + '/api/version');
+      if (r.ok) return await r.json();
+    } catch { /* 还没起来 */ }
+    await sleep(250);
+  }
+  return null;
+}
+
+function portBusy(port) {
+  return new Promise((res) => {
+    const s = net.connect({ port, host: '127.0.0.1' });
+    const done = (v) => { try { s.destroy(); } catch { /* 已断 */ } res(v); };
+    s.once('connect', () => done(true));
+    s.once('error', () => done(false));
+    setTimeout(() => done(false), 800);
+  });
+}
+
+async function testInstance() {
+  /* 端口上要是已经有人（上一轮没退干净的实例），新实例会绑不上而退出，
+     waitUp 却会连上那个旧进程——它读的可能是真实库，等于绕过这层隔离。 */
+  if (await portBusy(TEST_PORT)) {
+    check('测试端口空闲', false, `${TEST_PORT} 已被占用：先关掉残留实例，或用 CADENCE_TEST_PORT 换一个端口`);
+    return null;
+  }
+  try { await freshTestDb(); } catch (e) {
+    check('测试库副本可用', false, e.message);
+    return null;
+  }
+  const child = startInstance(TEST_PORT);
+  const j = await waitUp(TEST_BASE);
+  const want = createRequire(import.meta.url)(path.join(ROOT, 'version.js')).SEMVER;
+  if (!j) {
+    try { child.kill(); } catch { /* 已经退了 */ }
+    check('测试实例能起来（独立测试库，真实库不动）', false, `连不上 ${TEST_BASE}`);
+    return null;
+  }
+  check('测试实例在跑（独立测试库，真实库不动）', j.semver === want,
+    j.semver === want ? `v${want} · ${TEST_DB}` : `实例是 v${j.semver}，代码是 v${want}`);
+  if (j.semver !== want) { try { child.kill(); } catch { /* 已退 */ } return null; }
+  let cur = child;
+  return {
+    base: TEST_BASE,
+    restart: async () => {
+      /* 真重启：换一个进程读同一份测试库。改密是写库，重启之后不该变——这条只有真重启才测得出来。 */
+      try { cur.kill(); } catch { /* 已退 */ }
+      await sleep(300);
+      const c = startInstance(TEST_PORT);
+      const up = await waitUp(TEST_BASE);
+      if (!up) { try { c.kill(); } catch { /* 已退 */ } return null; }
+      cur = c;
+      return c;
+    },
+    /* 收摊要杀「当前」那个进程：restart 之后原来那个已经不在了 */
+    stop: () => { try { cur.kill(); } catch { /* 已退 */ } }
+  };
+}
+
+/* 重启幂等：改密 → 杀进程 → 新进程登录。密码只该在库里，不该在内存里。 */
+async function restartPwdCheck(test) {
+  const PWD = 'Restart-9x-2026';
+  const r = await fetch(test.base + '/api/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ no: '005822', password: '005822' })
+  });
+  const j = await r.json();
+  if (!j.ok) return check('重启后密码不变（改密 → 重启 → 登录）', false, '超管 005822 登录不上：' + j.msg);
+  const sid = (r.headers.get('set-cookie') || '').split(';')[0];
+  const ch = await fetch(test.base + '/api/password', {
+    method: 'POST', headers: { cookie: sid, 'content-type': 'application/json' },
+    body: JSON.stringify({ old: '005822', new: PWD })
+  });
+  if (ch.status !== 200) return check('重启后密码不变（改密 → 重启 → 登录）', false, `改密 ${ch.status}`);
+
+  const again = await test.restart();
+  if (!again) return check('重启后密码不变（改密 → 重启 → 登录）', false, '重启后实例起不来');
+  const ok = await fetch(test.base + '/api/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ no: '005822', password: PWD })
+  }).then((x) => x.json());
+  const old = await fetch(test.base + '/api/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ no: '005822', password: '005822' })
+  }).then((x) => x.json());
+  check('重启后密码不变（改密 → 重启 → 登录）', ok.ok === true && old.ok === false,
+    `新密码 ${ok.ok ? 'ok' : '不行'} / 旧密码 ${old.ok ? '还能用（不对）' : '已失效'}`);
+  return ok.ok && !old.ok;
+}
+
+function e2e(base) {
+  /* e2e 会直接改库做夹具；把测试库路径显式传给它，它自己也会拒绝在真实库上跑。 */
+  const r = spawnSync(process.execPath, [path.join(ROOT, '_dev', 'e2e.mjs'), base],
+    { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, CADENCE_DB: TEST_DB } });
   const out = (r.stdout || '') + (r.stderr || '');
   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
   const total = out.split('\n').filter((l) => /^(PASS|FAIL)\s/.test(l)).length;
@@ -466,9 +580,20 @@ async function main() {
 
   if (MODE === '--full') {
     ok = worktreeClean() && ok;
-    const up = await served();
-    /* 服务没起或版本旧，e2e 验的是旧代码，跑了也没意义 */
-    ok = up ? e2e() && ok : false;
+    /* 自己起一个读测试库副本的实例：不依赖谁先手工把 8788 点起来，
+       也不会把真实库里的人的密码改成工号、把人造任务留在真实数据里。 */
+    const test = await testInstance();
+    if (!test) ok = false;
+    else {
+      try {
+        ok = e2e(test.base) && ok;
+        ok = await restartPwdCheck(test) && ok;
+      } finally {
+        test.stop();
+        await sleep(300);
+        fs.rmSync(TEST_DIR, { recursive: true, force: true });
+      }
+    }
   }
 
   const tree = treeDigest();

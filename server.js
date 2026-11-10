@@ -1534,6 +1534,14 @@ const server = http.createServer(async (req, res) => {
     const sid = cookieOf(req, 'sid');
     const sess = readSession(sid);
     if (!sess) return sendJSON(res, 401, { ok: false, msg: '登录已过期，请重新登录' });
+    /* 停用即失效：会话只是一张票，人已经不在花名册里（active=0）就不能再拿它读写。
+       只在登录时查一次活跃会留下最长 30 天的窗口——停用之后，旧浏览器照样能改数据。 */
+    const still = db.prepare('SELECT active FROM emp WHERE no=?').get(sess.no);
+    if (!still || !still.active) {
+      dropSessions(sess.no);
+      res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      return sendJSON(res, 401, { ok: false, msg: '账号已停用，请联系管理员' });
+    }
     const me = sess.no;
     const body = req.method === 'POST' ? await readBody(req) : {};
     /* 请求里仍带 me 且与会话不符 → 显式 403，便于抓旧客户端；不做静默兼容（Spec §3.4） */

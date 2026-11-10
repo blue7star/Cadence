@@ -98,6 +98,9 @@ function main() {
     }
     const active = toggle === 'on' ? 1 : 0;
     db.prepare('UPDATE emp SET active=? WHERE no=?').run(active, no);
+    /* 停用即下线：会话不跟着清，最长能再用 30 天。服务端每次请求也会查 active 兜底，
+       这里主动删是为了不让「已停用」的人还挂着一条看起来有效的会话。 */
+    if (!active) db.prepare('DELETE FROM sess WHERE no=?').run(String(no));
     db.prepare('UPDATE meta SET v = CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');
     console.log('');
     console.log(active

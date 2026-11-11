@@ -689,6 +689,103 @@ async function main() {
   await js(`(function(){selDay=TODAY;calCursor=monthStart(TODAY);render();return 1})()`);
   await sleep(300);
 
+  /* ---------- 6.9 阶段区间：跨年、中间段、尾段、相接、改期自身（v0.9.2 事故回归） ----------
+     这一组盯的是「阶段是一串跨年区间，不是只在最后一段后面追加」。
+     老实现按数组相邻两项判重叠，新增段又一律 push 到最后，于是永远和最后一段配成一对，
+     '2026-11-07' <= '2027-06-30' 必然成立——用户填的是合法空档，却被报「占到 6月30日」。 */
+  const IV = 't_e2e_interval';
+  const ivPush = async (b) => (await apiAs('1012', '/api/sync', Object.assign({ me: '1012' }, b))).json;
+  const ivRow = () => dbGet('SELECT start_date, end_date, stages FROM task WHERE id=?', IV);
+  const ivCount = () => { const r = ivRow(); return r ? JSON.parse(r.stages || '[]').length : -1; };
+  const ivStages = [
+    { id: 'iv1', name: '一、需求梳理', start: '2026-07-03', end: '2026-09-30' },
+    { id: 'iv2', name: '二、指标口径', start: '2026-10-01', end: '2026-11-06' },
+    { id: 'iv3', name: '三、治理落标', start: '2026-11-09', end: '2027-01-29' },
+    { id: 'iv4', name: '四、数据回灌', start: '2027-02-01', end: '2027-04-30' },
+    { id: 'iv5', name: '五、受治理问数', start: '2027-05-03', end: '2027-06-30' }
+  ];
+  const ivBody = (over) => Object.assign({
+    id: IV, ownerNo: '1012', assigneeNo: '1012', type: 'special', title: 'E2E阶段区间',
+    start: '2026-07-03', end: '2027-06-30', status: 'doing', stages: ivStages.map(s => Object.assign({}, s))
+  }, over || {});
+  await ivPush({ del: { tasks: [IV] } });
+  const ivMk = await ivPush({ tasks: [ivBody()] });
+  check('阶段区间夹具：跨年五段、段间留空档（11-06 与 11-09 之间空两天）能存',
+    !(ivMk.errors || []).length && ivCount() === 5, JSON.stringify(ivMk));
+
+  await goto(BASE); await sleep(1000);
+  await js(`(function(){openTaskPage('${IV}');return 1})()`);
+  await sleep(600);
+  const ivAdd = async (name, s, e) => {
+    await js(`(function(){document.querySelector('#sName').value=${JSON.stringify(name)};
+      document.querySelector('#sStart').value='${s}';document.querySelector('#sEnd').value='${e}';
+      document.querySelector('[data-act="stage-add"]').click();return 1})()`);
+    await sleep(1200);
+    return await js(`(function(){return {msg:(document.querySelector('#toast')||{}).textContent||''}})()`);
+  };
+
+  const ivA = await ivAdd('数据实时接入', '2026-11-07', '2026-11-08');
+  const ivRowA = ivRow() || { stages: '[]' };
+  const ivIdxA = JSON.parse(ivRowA.stages || '[]').findIndex(s => s.name === '数据实时接入');
+  check('合法空档放行：11-07→11-08 落在 11-06 与 11-09 之间，不再误报跨年重叠，并按时间排到第 3 段',
+    ivCount() === 6 && ivIdxA === 2 && ivA.msg.includes('已添加'),
+    JSON.stringify({ msg: ivA.msg, idx: ivIdxA, n: ivCount() }));
+
+  /* 只压中间那一段（11-01→11-06 全落在「二、指标口径」里），避免同时碰到过渡段，
+     这样断言能证明「不是拿最后一段当邻居」这件事，而不是碰巧撞上别的段。 */
+  const ivB = await ivAdd('压中间段', '2026-11-01', '2026-11-06');
+  check('压到中间段：拦下，点名两段并给出带年份的重叠区间',
+    ivB.msg.includes('压上了') && ivB.msg.includes('第 2 段「二、指标口径」')
+      && ivB.msg.includes('2026-11-01 到 2026-11-06') && ivCount() === 6,
+    JSON.stringify({ msg: ivB.msg, n: ivCount() }));
+
+  const ivC = await ivAdd('压最后段', '2027-06-20', '2027-07-05');
+  check('压到最后段：同样拦下——判定跟数组顺序无关，不再拿最后一段当邻居',
+    ivC.msg.includes('五、受治理问数') && ivC.msg.includes('2027-06-20') && ivCount() === 6,
+    JSON.stringify({ msg: ivC.msg, n: ivCount() }));
+
+  const ivD = await ivAdd('尾段之后', '2027-07-01', '2027-07-02');
+  const ivStD = JSON.parse((ivRow() || { stages: '[]' }).stages || '[]');
+  check('首尾相接不算冲突：07-01 接在 06-30 后面放行，任务周期跟着包络延到 07-02',
+    ivStD.length === 7 && ivStD[6].name === '尾段之后' && (ivRow() || {}).end_date === '2027-07-02',
+    JSON.stringify({ n: ivStD.length, end: (ivRow() || {}).end_date, msg: ivD.msg }));
+
+  await js(`(function(){document.querySelector('#view [data-act="stage-edit"]').click();return 1})()`);
+  await sleep(300);
+  await js(`(function(){document.querySelector('#view .sedit [data-act="stage-save"]').click();return 1})()`);
+  await sleep(1200);
+  const ivE = await js(`(function(){
+    const t=JSON.parse(JSON.stringify(S.tasks.find(x=>x.id==='${IV}')));
+    return {msg:(document.querySelector('#toast')||{}).textContent||'', first:t.stages[0]}})()`);
+  const ivRowE = JSON.parse((ivRow() || { stages: '[]' }).stages || '[]');
+  check('改期到自己原来的日期：放行（自身不参与配对），第一段日期不变',
+    ivE.msg.includes('已更新') && ivRowE[0].start === '2026-07-03' && ivRowE[0].end === '2026-09-30',
+    JSON.stringify({ msg: ivE.msg, first: ivRowE[0] }));
+
+  /* 服务端才是判定者：绕过界面直接塞脏数据，必须被拒且不落库 */
+  const ivF = await ivPush({ tasks: [ivBody({ stages: ivStages.map((s, i) => Object.assign({}, s, i === 2 ? { start: '2026-11-05' } : {})) })] });
+  check('直调 /api/sync 塞重叠段：被服务端拒收，库里的阶段不动',
+    (ivF.errors || []).some(m => m.includes('时间重叠')) && ivCount() === 7,
+    JSON.stringify({ errors: ivF.errors, n: ivCount() }));
+
+  const ivG = await ivPush({ tasks: [ivBody({ stages: ivStages.concat([{ id: 'iv6', pid: 'iv2', name: '越界子任务', start: '2026-09-01', end: '2026-09-02' }]) })] });
+  check('直调 /api/sync 塞子任务到父阶段窗口外：被服务端拒收',
+    (ivG.errors || []).some(m => m.includes('超出所属阶段')) && ivCount() === 7,
+    JSON.stringify({ errors: ivG.errors, n: ivCount() }));
+
+  const ivH = await ivPush({ tasks: [ivBody({ end: '2027-05-30' })] });
+  check('直调 /api/sync 让任务周期短于阶段包络：被服务端拒收',
+    (ivH.errors || []).some(m => m.includes('任务周期')) && ivCount() === 7,
+    JSON.stringify({ errors: ivH.errors, n: ivCount() }));
+
+  await ivPush({ del: { tasks: [IV] } });
+  check('阶段区间夹具已清理', !ivRow(), String(!!ivRow()));
+  await js(`(()=>{const b=document.querySelector('.td-head [data-act=close]');if(b)b.click();return 'ok'})()`);
+  await sleep(400);
+  await nav('calendar');
+  await js(`(function(){selDay=TODAY;calCursor=monthStart(TODAY);render();return 1})()`);
+  await sleep(300);
+
   /* ---------- 7 拖动改期：能改的整体平移，不能改的说清原因 ---------- */
   const drag = await js(`(function(){
     const chips=[...document.querySelectorAll('[data-drag]')].map(e=>({el:e,d:JSON.parse(e.dataset.drag)})).filter(c=>c.d.s<0);
@@ -2506,11 +2603,14 @@ async function main() {
   /* --- 导出：范围与「一行一阶段」 --- */
   const prep = await apiAs('1012', '/api/sync', { me: '1012', tasks: [
     { id: 't_e2e_export', type: 'special', title: 'E2E导出,含"引号"', ownerNo: '1012', assigneeNo: '1012',
-      start: '2026-11-01', end: '2026-11-20', dueDate: '2026-11-20', status: 'paused', imp: 3, urg: 2,
+      start: '2026-11-01', end: '2026-11-10', dueDate: '2026-11-20', status: 'paused', imp: 3, urg: 2,
       cat1: '1012_c2', cat2: '1012_c22',
       stages: [
         { id: 'e1', pid: null, name: '段一', start: '2026-11-01', end: '2026-11-10', done: true, doneAt: '2026-11-09' },
-        { id: 'e2', pid: 'e1', name: '段二', start: '2026-11-11', end: '2026-11-20', done: false }
+        /* 这一段原来挂在 e1 下面、日期却越出 e1 的窗口（11-11 起，父段只到 11-10），
+           任务周期也只写到最后一段之外——那是「区间不变量」还没上服务端时的野数据。
+           现在由服务端判：子段收进父窗口、任务周期取包络，于是任务结束日改成 11-10。 */
+        { id: 'e2', pid: 'e1', name: '段二', start: '2026-11-05', end: '2026-11-10', done: false }
       ] },
     { id: 't_e2e_export_done', type: 'special', title: 'E2E导出已完成', ownerNo: '1012', assigneeNo: '1012',
       start: '2026-11-01', end: '2026-11-08', dueDate: '2026-11-08', status: 'done',

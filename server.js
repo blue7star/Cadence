@@ -519,6 +519,92 @@ function normalizeStages(raw, type) {
   });
 }
 
+/* 阶段区间的服务端判定。前端那套提示是「提前说」，这里才是判定者：
+   绕过界面直接调 /api/sync 一样拒收（那是这次事故补上的位置）。
+   口径：闭区间，首尾相接（前一段到 11-06、后一段 11-07 起）合法；
+   同层不允许相交；子阶段必须落在父阶段窗口里；任务周期必须等于一级阶段的包络。
+   只判「这次写入改变了阶段区间」的情况：存量里的历史重叠不该挡住改标题这类无关编辑。
+   返回一句可读原因；没问题就把任务周期收敛到包络上（顺带修掉「加段不改周期」的老毛病）。 */
+function stageIv(s) {
+  const a = s.start || s.date || '';
+  const b = s.end || s.date || a;
+  return (a && b) ? { a, b } : null;
+}
+function stageIvKey(list) {
+  return list.map(s => {
+    const iv = stageIv(s);
+    return `${s.id || s.name || ''}|${s.pid || ''}|${iv ? iv.a : ''}|${iv ? iv.b : ''}`;
+  }).sort().join(';');
+}
+function stageEnvelope(list) {
+  const tops = list.filter(s => !s.pid).map(stageIv).filter(Boolean);
+  if (!tops.length) return null;
+  const as = tops.map(x => x.a).sort();
+  const bs = tops.map(x => x.b).sort();
+  return { start: as[0], end: bs[bs.length - 1] };
+}
+function checkStageIntervals(stages, prev, type, t) {
+  /* routine 的 stages 是「当天节点」，同一天挂多个节点是正常的，不能按区间判重叠 */
+  if (type !== 'assign' && type !== 'special') return null;
+  if (stageIvKey(stages) === stageIvKey(prev)) return null;
+  const nm = s => `「${s.name || '未命名'}」`;
+  const ivs = stages.map(stageIv);
+
+  /* ① 同层区间不相交（含首尾同日；差一天算合法） */
+  const layers = new Map();
+  stages.forEach((s, i) => {
+    const k = s.pid || '';
+    if (!layers.has(k)) layers.set(k, []);
+    layers.get(k).push(i);
+  });
+  for (const idxs of layers.values()) {
+    for (let x = 0; x < idxs.length; x++) {
+      for (let y = x + 1; y < idxs.length; y++) {
+        const i = idxs[x], j = idxs[y];
+        if (!ivs[i] || !ivs[j]) continue;
+        if (ivs[i].a <= ivs[j].b && ivs[j].a <= ivs[i].b) {
+          const p = ivs[i].a <= ivs[j].a ? i : j;
+          const q = p === i ? j : i;
+          const s1 = ivs[p].a > ivs[q].a ? ivs[p].a : ivs[q].a;
+          const s2 = ivs[p].b < ivs[q].b ? ivs[p].b : ivs[q].b;
+          return `${nm(stages[p])}（${ivs[p].a} → ${ivs[p].b}）和${nm(stages[q])}（${ivs[q].a} → ${ivs[q].b}）`
+            + `时间重叠（${s1 === s2 ? s1 : `${s1} 到 ${s2}`}）：同一层两段不能占同一天，把其中一段挪开再存`;
+        }
+      }
+    }
+  }
+
+  /* ② 子阶段落在父阶段窗口内 */
+  const posById = new Map();
+  stages.forEach((s, i) => { if (s.id) posById.set(s.id, i); });
+  for (let i = 0; i < stages.length; i++) {
+    const s = stages[i];
+    if (!s.pid || !ivs[i] || !posById.has(s.pid)) continue;
+    const j = posById.get(s.pid);
+    const pi = ivs[j];
+    if (!pi) continue;
+    if (ivs[i].a < pi.a || ivs[i].b > pi.b) {
+      return `${nm(s)}（${ivs[i].a} → ${ivs[i].b}）超出所属阶段${nm(stages[j])}的窗口（${pi.a} → ${pi.b}）：`
+        + '子任务必须落在父阶段之内，先把那一段延长，或者把这条缩短';
+    }
+  }
+
+  /* ③ 任务周期 = 一级阶段的包络 */
+  const env = stageEnvelope(stages);
+  if (env) {
+    if (t.start && t.start !== env.start) {
+      return `任务周期从 ${t.start} 开始，但一级阶段最早是 ${env.start}：任务周期必须等于阶段包络，改了阶段要一起更新`;
+    }
+    if (t.end && t.end !== env.end) {
+      return `任务周期到 ${t.end} 结束，但一级阶段最晚到 ${env.end}：任务周期必须等于阶段包络，改了阶段要一起更新`;
+    }
+    t.start = env.start;
+    t.end = env.end;
+  }
+  return null;
+}
+
+
 /* 子任务责任人：只在三级节点上生效。
    ① 二级阶段强制清空——「阶段不设责任人」是这套模型的前提，不是界面约束；
    ② who 等于承接人时存 null（跟随承接人），换承接人后自动跟着走；
@@ -718,6 +804,17 @@ function upsertTask(meNo, t, opts) {
     }
   }
 
+  /* 阶段树先算出来（纯计算，不落库），区间不变量在「总截止」之前判：
+     任务结束日要被收敛成阶段包络，后面的截止校验才看得到真实的收尾日期。 */
+  const prevStages = exist ? parseStages(exist.stages) : [];
+  /* 没提交 stages 就整段沿用——重新跑一遍 applyStageOwners 会把 whoAt/JOIN 状态洗掉，
+     "只改个标题"不该让已派发的子任务退回未派发。 */
+  const stages = (exist && t.stages === undefined)
+    ? prevStages
+    : applyStageOwners(normalizeStages(t.stages, type), prevStages, assigneeNo, meNo);
+  const ivBad = checkStageIntervals(stages, prevStages, type, t);
+  if (ivBad) return { ok: false, msg: ivBad };
+
   /* 总截止：发布人定的，承接人改不动。老数据回填成当时的结束日，所以不会凭空冒拦截。 */
   const dueStored = exist ? (exist.due_date || exist.end_date) : null;
   const dueChanged = !!(exist && t.dueDate && t.dueDate !== dueStored);
@@ -743,13 +840,6 @@ function upsertTask(meNo, t, opts) {
   let intake = exist ? exist.intake_status : null;
   if (type === 'assign') intake = (exist && assigneeNo === prevAssignee && exist.intake_status) ? exist.intake_status : 'pending';
   else if (!exist || typeRaw === 'assign') intake = null;
-
-  const prevStages = exist ? parseStages(exist.stages) : [];
-  /* 没提交 stages 就整段沿用——重新跑一遍 applyStageOwners 会把 whoAt/JOIN 状态洗掉，
-     "只改个标题"不该让已派发的子任务退回未派发。 */
-  const stages = (exist && t.stages === undefined)
-    ? prevStages
-    : applyStageOwners(normalizeStages(t.stages, type), prevStages, assigneeNo, meNo);
 
   /* 子任务责任人同样要拦「没登录过的人」——他只会在承接台收到、不会在站外被通知。 */
   if (!opts || !opts.demo) {

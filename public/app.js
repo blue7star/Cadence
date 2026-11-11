@@ -15,6 +15,8 @@ const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 86400000);
 const dow = s => parse(s).getDay();
 const DOW_CN = ['日', '一', '二', '三', '四', '五', '六'];
 const fmt = s => { if (!s) return '—'; const d = parse(s); return `${d.getMonth() + 1}月${d.getDate()}日`; };
+/* 带年份的完整日期：只在跨年的提示里用（阶段计划常常跨年，短格式会把 2026 和 2027 看成同一年）。 */
+const fmtY = s => { if (!s) return '—'; const d = parse(s); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const fmtFull = s => { const d = parse(s); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 周${DOW_CN[d.getDay()]}`; };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
@@ -557,18 +559,25 @@ const dateSpan = s => {
   return a ? (a === b ? fmt(a) : `${fmt(a)}–${fmt(b)}`) : '';
 };
 
-/* 同层重叠时的说法：谁占着哪天、后一段最早能排到哪天。
-   父阶段的窗口是人设定的，不会因为子任务而偷偷变长，所以这里只说窗口在哪，不要说"会变成"。 */
+/* 同层重叠时的说法：两段都点名、日期带年、给出重叠区间，最后一句告诉人怎么改。
+   以前这里只报「前一段占到某天」，年份被短格式抹掉，跨年时看着像同一年撞上了。 */
 function overlapMsg(stages, a, b, pid) {
+  const as = dayOf(a, 'start') || dayOf(a, 'end');
   const ae = dayOf(a, 'end') || dayOf(a, 'start');
   const bs = dayOf(b, 'start') || dayOf(b, 'end');
-  const who = a.who ? `（${nameOf(a.who)}）` : '';
+  const be = dayOf(b, 'end') || dayOf(b, 'start');
+  const no = s => (s.pid ? '子任务' : `第 ${topNo(stages, s)} 段`);
+  const who = s => (s.who ? `（${nameOf(s.who)} 做）` : '');
+  const os = as > bs ? as : bs, oe = ae < be ? ae : be;
+  const span = !os ? '' : (os === oe ? fmtY(os) : `${fmtY(os)} 到 ${fmtY(oe)}`);
   let tail = '';
   if (pid) {
     const p = stages.find(x => x.id === pid);
-    if (p) tail = `；第 ${topNo(stages, p)} 段「${p.name || ''}」的窗口是 ${dateSpan(p)}`;
+    if (p) tail = `；第 ${topNo(stages, p)} 段「${p.name || ''}」的窗口是 ${fmtY(dayOf(p, 'start'))} → ${fmtY(dayOf(p, 'end'))}`;
   }
-  return `「${a.name || '前一段'}」${who}占着到 ${fmt(ae)}，和「${b.name || '后一段'}」（${fmt(bs)} 起）压上了；后者最早只能从 ${fmt(addDays(ae, 1))} 起${tail}`;
+  return `${no(a)}「${a.name || '未命名'}」${who(a)}（${fmtY(as)} → ${fmtY(ae)}）`
+    + `和${no(b)}「${b.name || '未命名'}」${who(b)}（${fmtY(bs)} → ${fmtY(be)}）压上了`
+    + `${span ? `：${span} 同时算在两段里` : ''}。把其中一段挪开再存${tail}`;
 }
 
 /* ============ 阶段校验：唯一入口 ============
@@ -638,8 +647,16 @@ function validateStages(t, next, ctx) {
     if (dup) return bad('dup', `这个${pid ? '阶段' : '任务'}下面已经有「${ctx.newName}」了；是想改那一条，还是换个不同的名字？`);
   }
 
-  /* 5. 同层不重叠、顺序不能倒。只算涉及到「这次动过的节点」的配对：
-        两条都没动过还重叠着，那是历史遗留，拦它等于让人为一个自己没做的事背锅。 */
+  /* 5. 同层区间不许相交。跟数组顺序无关——新增的一段可能落在中间，也可能比第一段还早；
+        按「数组相邻两项」判会拿最后一段当邻居，跨年时必然误报。
+        闭区间 [start, end]，缺 end 用 start；首尾相接（前一段到 11-06、后一段 11-07 起）合法。
+        同一段自身不参与配对（按 id 各算一次）。
+        依然只算涉及到「这次动过的节点」的配对：存量里的历史重叠不挡住无关编辑。 */
+  const ivOf = s => {
+    const a = dayOf(s, 'start') || dayOf(s, 'end');
+    const b = dayOf(s, 'end') || dayOf(s, 'start');
+    return (a && b) ? { a, b } : null;
+  };
   const groups = new Map();
   for (const s of next) {
     const k = s.pid || '';
@@ -647,12 +664,17 @@ function validateStages(t, next, ctx) {
     groups.get(k).push(s);
   }
   for (const [pid, list] of groups) {
-    for (let i = 1; i < list.length; i++) {
-      const a = list[i - 1], b = list[i];
-      if (!isChanged(a) && !isChanged(b)) continue;
-      const ae = dayOf(a, 'end') || dayOf(a, 'start');
-      const bs = dayOf(b, 'start') || dayOf(b, 'end');
-      if (ae && bs && bs <= ae) return bad('overlap', overlapMsg(next, a, b, pid));
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const A = list[i], B = list[j];
+        if (!isChanged(A) && !isChanged(B)) continue;
+        const x = ivOf(A), y = ivOf(B);
+        if (!x || !y) continue;
+        if (x.a <= y.b && y.a <= x.b) {
+          const [p, q] = x.a <= y.a ? [A, B] : [B, A];
+          return bad('overlap', overlapMsg(next, p, q, pid));
+        }
+      }
     }
   }
 
@@ -686,7 +708,34 @@ function validateStages(t, next, ctx) {
   if (due && dueLocked && taskEnd && taskEnd > due && taskEnd !== prevTaskEnd)
     return bad('due', `这样排到 ${fmt(taskEnd)}，超过发布时定的截止 ${fmt(due)}；要往后排，先让发布人改总截止`);
 
+  /* 校验通过之后按时间重排同层：一级阶段按开始日升序，每个阶段后面紧跟自己的子任务。
+     新增的一段不再「永远排在最后」——编号跟着时间走，列表上不会出现第 6 段的日期比第 3 段早。
+     数组顺序就是渲染顺序（编号、data-idx 都按它算），所以这里就地重排，调用方拿到的就是最终顺序。 */
+  const key = s => dayOf(s, 'start') || dayOf(s, 'end') || '9999-12-31';
+  const byStart = (a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+  const topsSorted = next.filter(s => !s.pid).sort(byStart);
+  const kidsAll = next.filter(s => s.pid);
+  const ordered = [];
+  for (const p of topsSorted) {
+    ordered.push(p);
+    kidsAll.filter(k => k.pid === p.id).sort(byStart).forEach(k => ordered.push(k));
+  }
+  /* pid 指向已删阶段的孤儿留在末尾：第 2 条会先拦下它们，这里只是不把数组弄丢东西 */
+  kidsAll.filter(k => !topsSorted.some(p => p.id === k.pid)).forEach(k => ordered.push(k));
+  next.length = 0;
+  ordered.forEach(s => next.push(s));
+
   return { ok: true, code: '', msg: '' };
+}
+
+/* 任务周期 = 一级阶段的包络（最早开始 → 最晚结束）。
+   加段之后必须跟着更新：不然卡片、导出、服务端的截止校验还在用旧区间。 */
+function restatTaskSpan(t) {
+  const tops = (t.stages || []).filter(s => !s.pid);
+  const ds = tops.map(s => dayOf(s, 'start')).filter(Boolean).sort();
+  const de = tops.map(s => dayOf(s, 'end') || dayOf(s, 'start')).filter(Boolean).sort();
+  if (ds.length) t.start = ds[0];
+  if (de.length) t.end = de[de.length - 1];
 }
 
 /* 在父阶段的窗口里找第一个塞得下的空档。加子任务时默认用它，
@@ -2320,6 +2369,10 @@ function openNewTask(type, preset) {
     const draft = { stages: [], type: t, dueDate: e };
     const vStage = validateStages(draft, stages, { action: 'new', checkDupAll: true });
     if (!vStage.ok) { toast(vStage.msg); return false; }
+    /* 任务周期 = 一级阶段的包络：弹窗里阶段日期改了但起止没跟着改的话，
+       存下去就是「任务 7月3日–11月6日，阶段却排到明年」——服务端会拒，这里先对齐。 */
+    const span = { start: s, end: e };
+    restatTaskSpan(span);
     const typeVal = t;
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
     /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。 */
@@ -2584,10 +2637,8 @@ function dragCheck(t, date, si) {
         }
       }
     }
-    /* 周末和节假日不铺阶段条，拖过去就等于把这一段藏起来了，干脆拦下 */
-    if (!isWorkday(date)) {
-      return { ok: false, why: '专项阶段不排到周末或节假日：那两天日历不显示阶段，拖过去会看不见' };
-    }
+    /* 周末不单独拦：阶段是区间，跨周末是常态（一段 11-06 → 11-10 中间必然包含周末）。
+       真正要拦的是「同层重叠」和「超出父阶段窗口」，上面已经判过了。 */
     /* 拖过了发布时定的总截止：服务端最后会拒，但那时候人已经看到日期变了，白折腾一次。
        只锁「别人发布给我」的活——自己建的专项，截止跟着计划走，不该拦自己。 */
     const due = t.dueDate || '';
@@ -2981,14 +3032,16 @@ document.addEventListener('click', e => {
       const name = $('#sName').value.trim();
       if (!name) { toast('先填阶段名称'); break; }
       const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
-      /* 新段永远排在数组最后，所以它得比当前最后一段更晚起。以前这里直接 push，
-         能造出「第 4 段比第 3 段还早」的倒序数据，日历上看着就是两段叠在一起。 */
+      /* 新段先拼在末尾交给校验，通过后由校验按开始日重排到它该在的位置；
+         所以这里不要求它比最后一段更晚——只要和已有各段不重叠就行。 */
       const next = (t.stages || []).map(x => Object.assign({}, x));
       const node = { id: uid('s'), pid: null, name, start: s, end: e2, done: false };
       next.push(node);
       const v = validateStages(t, next, { action: 'add-stage', newName: name, newPid: '', newNode: node });
       if (!v.ok) { toast(v.msg); break; }
       t.stages = next;
+      /* 任务周期是一级阶段的包络，加完段要跟着更新：不然卡片和总截止还按旧区间算 */
+      restatTaskSpan(t);
       save(); openTaskPage(t.id); render(); toast('阶段已添加');
       break;
     }
@@ -3098,9 +3151,10 @@ document.addEventListener('click', e => {
       const ds = tops.map(x => x.start || x.date).filter(Boolean).sort();
       const de = tops.map(x => x.end || x.date).filter(Boolean).sort();
       if (ds.length) { t.start = ds[0]; t.end = de[de.length - 1]; }
-      /* 表单里也能换人：走同一个 setStageWho，别在这儿再写一遍清洗逻辑 */
+      /* 表单里也能换人：走同一个 setStageWho，别在这儿再写一遍清洗逻辑。
+         注意校验会按开始日重排同层，原来的下标 i 可能已经指向别的段，这里按对象找回新位置。 */
       const whoBox = box.querySelector('[data-sedit-who]');
-      if (whoBox) setStageWho(t, i, whoBox.value || null, whoBox, true);
+      if (whoBox) setStageWho(t, t.stages.indexOf(cur), whoBox.value || null, whoBox, true);
       save(); openTaskPage(t.id); render(); toast(`已更新「${name}」`);
       break;
     }

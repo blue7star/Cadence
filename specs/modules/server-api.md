@@ -25,6 +25,12 @@ paths: server.js
 - **完成态只有一条上行通道**：派生副本 status 变化 → 回写父任务 `stages[i].done/doneBy`、按叶子重算父任务 status、写 `stage_notice(kind=stage_done)`。不做反向下写（上级侧改动不碰副本）。回写前校验副本 `owner_no` 等于该段 `who` 且 `whoAt` 非空，换人后的旧副本、伪造副本都无效。
 - **已派给别人的叶子，完成态以库为准**：非责任人整段提交（哪怕是旧快照）不得覆盖 `done/doneBy/doneAt`；换人（`who` 变了）不算覆盖，新责任人从「未完成」开始，旧副本由服务端收走（段被移除同理）。
 - 有子任务的任务，status 由叶子推：全部完成才是 `done`，一段没勾不许挂 `done`；`paused` 与手选的 `doing` 保留（执行人自己的节奏），只有不该成立的 `done` 会被掰回。
+- **阶段区间是「计划」，判定在服务端**（`upsertTask` → `checkStageIntervals`，只对 `assign`/`special`；routine 的 stages 是当天节点，不按区间判）：
+  - `INV-1 同层阶段区间不得相交`。闭区间；首尾相接（前一段到 11-06、后一段 11-07 起）合法；同一段自身不参与配对。拒绝点：`checkStageIntervals` ①；反例：e2e 6.9「压到中间段」「压到最后段」、直调 `/api/sync` 塞重叠段。
+  - `INV-2 子阶段必须落在父阶段窗口内`（可等于边界）。拒绝点：`checkStageIntervals` ②（文案「超出所属阶段」）；反例：e2e 6.9「直调 /api/sync 塞子任务到父阶段窗口外」。
+  - `INV-3 任务周期等于一级阶段的包络`（最早开始 → 最晚结束）。拒绝点：`checkStageIntervals` ③（文案「任务周期必须等于阶段包络」）；反例：e2e 6.9「直调 sync 让任务周期短于阶段包络」。
+  - `INV-4 due ≥ 最晚阶段结束日`。拒绝点：`upsertTask` 的 `t.end > due_date`（`INV-3` 保证 `t.end` 就是包络）；反例：e2e 8.x 超截止。
+  - 只判「这次写入改变了阶段区间」的请求：存量里的历史脏数据不挡改标题这类无关编辑；同一类判断前端也有一份，前端只负责当场提示，服务端才是判定者。
 
 ## 依赖与边界
 - 依赖 `MOD-server-data`。
@@ -37,3 +43,4 @@ paths: server.js
 | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |
 | TASK-20261110-auth-export | 见 git | — | 认证（login/logout/password/管理账号重置）与会话门；导出 `/api/export/tasks.csv`；会话门加 `emp.active` 校验（停用即失效，并清该工号会话）；初始密码名单口径改为「仍在用初始密码的全部在职员工」，含从没登录、尚无 cred 行的人；管理账号改名为独立 `admin`（分表、不进 emp、首登强制改密），新增 `/api/admin/sessions` |
+| TASK-20261111-stage-interval | 见 git | — | `upsertTask` 新增 `checkStageIntervals`：同层区间不相交（首尾相接合法）、子阶段在父窗口内、任务周期等于一级阶段包络；只判本次写入改变区间的请求，通过后把周期收敛到包络；INV-1~INV-4 落地 |

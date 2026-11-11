@@ -46,11 +46,13 @@ node --no-warnings server.js          # 默认 8788
 PORT=8799 node --no-warnings server.js   # 换端口
 ```
 
-启动后可访问 `http://localhost:8788`，用种子花名册里的 **1012 / 王磊** 登录。路由用 `/api/login`、`/api/state`、`/api/sync`、`/api/rev`、`/api/setmgr`、`/api/demo`、`/api/reset`，加上六个动作接口 `/api/task/accept`、`/api/task/dispatch`、`/api/stage/join`、`/api/stage/toggle`、`/api/task/due`、`/api/notice/seen`（见第 4 节）。
+启动后可访问 `http://localhost:8788`，用种子花名册里的工号 **1012** 登录，初始密码就是工号 `1012`。路由用 `/api/login`、`/api/state`、`/api/sync`、`/api/rev`、`/api/setmgr`、`/api/demo`、`/api/reset`，加上六个动作接口 `/api/task/accept`、`/api/task/dispatch`、`/api/stage/join`、`/api/stage/toggle`、`/api/task/due`、`/api/notice/seen`（见第 4 节）。
+
+**管理账号 admin**：不占工号，不在 `emp` 里，也不参与任何业务数据。首次启动时随机生成 12 位初始密码并**只在启动日志里打印一次**（库里只存 scrypt 哈希），第一次登录必须先改密码才能进管理面板；之后只能在「管理密码」里改，**没有找回入口**——忘了就删掉 `admin_auth` 里那一行，重启会重新生成并再打印一次。
 
 ### 3.1 导入花名册（账号）
 
-花名册就是 `emp` 表：`no`（工号）、`name`（姓名）、`role`（岗位）、`dept`（部门）、`mgr_no`（上级工号）、`active`。登录只比对工号 + 姓名，没有密码；`mgr_no` 决定可见范围（下属的常规工作进上级看板，上级发布的任务进下属承接台）。
+花名册就是 `emp` 表：`no`（工号）、`name`（姓名）、`role`（岗位）、`dept`（部门）、`mgr_no`（上级工号）、`active`。登录用**工号 + 密码**：初始密码就是工号，哈希存在 `cred` 表（与花名册分表，导入不会碰它）；`mgr_no` 决定可见范围（下属的常规工作进上级看板，上级发布的任务进下属承接台）。
 
 用 `emp-template.csv` 填好，跑一条命令：
 
@@ -107,9 +109,12 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 |---|---|---|
 | GET | `/api/version` | 当前版本 `{semver, version, changelog}`；`version` 为 `SEMVER+提交数.短hash`，`changelog` 无登记时为 `null`。公开只读，登录页也取 |
 | GET | `/api/changelog` | 全部已登记版本倒序 `{current, versions[]}`，供「历次更新」 |
-| POST | `/api/login` | `{no, name}`，比对 `emp` 表；返回身份、上级、可见下属 |
+| POST | `/api/login` | `{no, password}`。工号走 `emp` + `cred`；`no='admin'` 走 `admin_auth` 独立分支（返回 `{admin:true, mustChange}`）。失败统一「工号或密码不正确」，同一账号+IP 连续 5 次失败锁 5 分钟 |
+| POST | `/api/logout` | 删当前 `sess` 行 + 清 cookie |
+| POST | `/api/password` | `{old, new}`；校验旧密码后改 `cred`/`admin_auth`，并吊销该身份其它会话（保留当前）。管理账号新密码至少 8 位 |
+| GET | `/api/export/tasks.csv` | 只导当前会话这个人的任务（见 4.1 定义域），UTF-8 BOM + CRLF |
 | POST | `/api/setmgr` | 首次登录自选直属上级，服务端做防环校验（不能是自己或自己的下级） |
-| GET | `/api/state?me=<工号>` | 一次返回该用户可见的全量数据（含服务端生成的常规实例） |
+| GET | `/api/state` | 一次返回会话这个人可见的全量数据（含服务端生成的常规实例）；管理账号返回空业务数据 |
 | GET | `/api/rev` | 全局版本号，供前端 7 秒轮询；变了才拉全量 |
 | POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`；返回 `{ok, rows, errors[], rev}`。`errors` 非空表示**这条任务没写进去**（例如发布给从没登录过的人），前端要把第一条原话 toast 出来。只接受 `owner_no=我` 的行；请求里缺的字段沿用库里的值（半截请求不该炸在 SQL 绑定上） |
 | POST | `/api/task/accept` | `{me, id}`，承接人接收：`owner_no := me`、`type := special`、`intake_status := accepted`。只认 `assignee_no=me` 且当前是 `pending` |
@@ -120,12 +125,20 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | POST | `/api/notice/seen` | `{me, ids[]}`，把「有变动的任务」标已读，只清自己名下那几条 |
 | POST | `/api/demo` | 注入示例数据（王磊的产品组） |
 | POST | `/api/reset` | 清空当前用户业务数据 |
+| POST | `/api/admin/reset-password` | 仅管理账号：`{no}` 把该员工密码重置回工号、`initial=1`、吊销其全部会话；不能重置 admin 自己 |
+| GET | `/api/admin/initial-passwords` | 仅管理账号：所有仍在用初始密码的在职员工（含从未登录、没有 `cred` 行的人）`{no,name,firstLoginAt,firstLoginIp,neverLoggedIn}[]` |
+| GET | `/api/admin/sessions` | 仅管理账号：最近 200 条会话与设备 `{no,name,created_at,last_seen,ip,ua}` |
+
+会话与身份：服务端只认 cookie 里的 `sid` → `sess.no`，**不再信任请求里的 `me`**；`me` 与会话不符 → 403，无会话/过期 → 401。管理账号的会话在 `sess` 里就是 `no='admin'`，`emp` 里没有这一行。
 
 ## 5. 数据模型
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
 | `emp` | 花名册 | `no`(PK) `name` `role` `dept` `mgr_no` `active` `activated`(登录过=1) `last_login` |
+| `cred` | 员工密码 | `no`(PK, 对 `emp.no`) `hash` `salt` `initial`(1=还是工号) `changed_at`；与花名册分表，导入不动它 |
+| `sess` | 登录会话 | `sid`(PK) `no` `created_at` `last_seen` `ip` `ua`；滑动空闲 8 小时、绝对 30 天 |
+| `admin_auth` | 管理账号 | `account`(PK，只有 `admin`) `hash` `salt` `must_change` `changed_at`；**不占工号、不进 `emp`**，业务查询一律只读 `emp`，所以它不会被当成同事/下属/上级 |
 | `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month)` `policy` `steps`(JSON) `active` |
 | `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（temp 反指父任务的那一段） `detached` `intake_status` |
 | `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |

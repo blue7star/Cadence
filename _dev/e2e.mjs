@@ -197,7 +197,7 @@ async function main() {
     const d = await r.json().catch(() => ({}));
     const list = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : [r.headers.get('set-cookie') || ''];
     const m = /(?:^|;\s*)sid=([^;]+)/.exec(list.join('; '));
-    return { ok: !!d.ok, msg: d.msg || '', locked: !!d.locked, status: r.status, sid: m ? m[1] : '', me: d.me || null };
+    return { ok: !!d.ok, msg: d.msg || '', locked: !!d.locked, status: r.status, sid: m ? m[1] : '', me: d.me || null, admin: !!d.admin, mustChange: !!d.mustChange };
   };
   const sidOf = async (no) => {
     if (!SIDS.has(no)) {
@@ -2615,16 +2615,6 @@ async function main() {
   const afterLo = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + l5.sid } });
   check('退出登录后会话立即失效', lo.status === 200 && afterLo.status === 401, `${lo.status}/${afterLo.status}`);
 
-  /* --- 超管 --- */
-  const adminFlags = {};
-  for (const no of ['005822', '1012', '1101', '1001']) {
-    const s = (await stateAs(no)) || {};
-    adminFlags[no] = !!(s.me && s.me.admin);
-  }
-  const adminNo = Object.keys(adminFlags).find(n => adminFlags[n]) || '';
-  check('超管身份可在会话里识别（按 meta.auth.admin_no，默认 005822）', !!adminNo, JSON.stringify(adminFlags));
-  const plainNo = Object.keys(adminFlags).find(n => !adminFlags[n]) || '';
-
   /* 一个从没登录过的新人：库里连 cred 行都还没有，但密码同样是工号。
      名单口径必须包含他，否则「还在用初始密码的人」这张表会漏掉风险最大的一批。 */
   const NEVERNO = '1021';
@@ -2632,20 +2622,71 @@ async function main() {
   const neverCred = dbGet('SELECT COUNT(*) c FROM cred WHERE no=?', NEVERNO);
   const neverHasCred = !!neverCred && neverCred.c > 0;
 
-  if (adminNo && plainNo) {
-    const forbid = await apiAs(plainNo, '/api/admin/reset-password', { me: plainNo, no: '1004' });
-    check('非超管重置密码 → 403', forbid.status === 403, String(forbid.status));
-    const forbidList = await apiAs(plainNo, '/api/admin/initial-passwords');
-    check('非超管看初始密码名单 → 403', forbidList.status === 403, String(forbidList.status));
+  /* --- 管理账号 admin（独立于花名册） ---
+     初始密码是服务首次启动随机生成、只打印一次的一次性密码，
+     所以由 verify.mjs 起测试实例时从 stdout 抓出来传进来；直接跑 e2e 时没有它，只能明确跳过。 */
+  const ADMIN_PWD = process.env.CADENCE_TEST_ADMIN_PWD || '';
+  const ADMIN_NEW = 'Admin-E2e-2026';
+  const plainNo = '1012';
+  if (!ADMIN_PWD) {
+    check('管理账号用例：没有拿到一次性初始密码，本轮跳过', false,
+      '请用 node _dev/verify.mjs --full（它会从启动日志抓密码并传入）');
+  } else {
+    const first = await loginSid('admin', ADMIN_PWD);
+    const blocked = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + first.sid } });
+    const blockedBody = await blocked.json().catch(() => ({}));
+    check('admin 首次登录：返回 mustChange，改密前 /api/state 被拒',
+      first.ok === true && first.admin === true && first.mustChange === true
+        && blocked.status === 403 && blockedBody.mustChange === true,
+      JSON.stringify({ ok: first.ok, admin: first.admin, mustChange: first.mustChange, st: blocked.status }));
 
-    const reset = await apiAs(adminNo, '/api/admin/reset-password', { me: adminNo, no: '1004' });
+    const adminInRoster = dbGet("SELECT COUNT(*) c FROM emp WHERE no='admin'");
+    const stEmp = await stateAs(plainNo);
+    check('admin 不在花名册里，也不出现在任何人的同事列表里',
+      !!adminInRoster && adminInRoster.c === 0 && !((stEmp || {}).roster || []).some(x => x.no === 'admin'),
+      `emp=${adminInRoster && adminInRoster.c}`);
+
+    const chg = await fetch(BASE + '/api/password', {
+      method: 'POST', headers: { Cookie: 'sid=' + first.sid, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old: ADMIN_PWD, new: ADMIN_NEW })
+    }).then(r => r.json()).catch(() => ({}));
+    const asAdmin = await loginSid('admin', ADMIN_NEW);
+    check('admin 改掉一次性密码后：新密码可登录、不再要求改密',
+      chg.ok === true && asAdmin.ok === true && asAdmin.mustChange === false,
+      JSON.stringify({ chg: chg.ok, login: asAdmin.ok, mustChange: asAdmin.mustChange }));
+
+    const adminApi = async (path, body) => {
+      const r = await fetch(BASE + path, {
+        method: body ? 'POST' : 'GET',
+        headers: Object.assign({ Cookie: 'sid=' + asAdmin.sid }, body ? { 'Content-Type': 'application/json' } : {}),
+        body: body ? JSON.stringify(body) : undefined
+      });
+      let json = null;
+      try { json = await r.json(); } catch { /* 非 JSON */ }
+      return { status: r.status, json };
+    };
+
+    const st = await adminApi('/api/state');
+    check('admin 的 /api/state 没有任何业务数据（任务/花名册/下属都为空）',
+      st.status === 200 && (st.json || {}).admin === true
+        && ((st.json || {}).tasks || []).length === 0 && ((st.json || {}).roster || []).length === 0,
+      JSON.stringify({ status: st.status, tasks: ((st.json || {}).tasks || []).length }));
+
+    const forbid = await apiAs(plainNo, '/api/admin/reset-password', { me: plainNo, no: '1004' });
+    check('普通员工调用重置密码 → 403', forbid.status === 403, String(forbid.status));
+    const forbidList = await apiAs(plainNo, '/api/admin/initial-passwords');
+    check('普通员工看初始密码名单 → 403', forbidList.status === 403, String(forbidList.status));
+    const forbidSess = await apiAs(plainNo, '/api/admin/sessions');
+    check('普通员工看会话设备 → 403', forbidSess.status === 403, String(forbidSess.status));
+
+    const reset = await adminApi('/api/admin/reset-password', { no: '1004' });
     const backLogin = await loginSid('1004', '1004');
     const staleSid = await fetch(BASE + '/api/state', { headers: { Cookie: 'sid=' + (await sidOf('1004')) } });
-    check('超管重置后：目标可用工号重新登录，旧会话全部失效',
+    check('admin 重置后：目标可用工号重新登录，旧会话全部失效',
       (reset.json || {}).ok === true && backLogin.ok === true && staleSid.status === 401,
       `${(reset.json || {}).ok}/${backLogin.ok}/${staleSid.status}`);
 
-    const list = await apiAs(adminNo, '/api/admin/initial-passwords');
+    const list = await adminApi('/api/admin/initial-passwords');
     const one = ((list.json || {}).list || []).find(x => x.no === '1004') || {};
     check('初始密码名单列出重置回来的人，并带首次登录时间/IP',
       (list.json || {}).ok === true && one.no === '1004' && !!one.firstLoginAt && 'firstLoginIp' in one,
@@ -2655,6 +2696,13 @@ async function main() {
     check('初始密码名单包含「从没登录过、仍是默认密码」的人（firstLoginAt 为空）',
       neverHasCred === false && never.no === NEVERNO && never.firstLoginAt === null && never.neverLoggedIn === true,
       `cred=${neverHasCred} / ${JSON.stringify(never).slice(0, 120)}`);
+
+    const sess = await adminApi('/api/admin/sessions');
+    const sessRows = (sess.json || {}).list || [];
+    check('会话与设备：能看到 admin 自己的会话，且没有把 admin 当成员工',
+      (sess.json || {}).ok === true && sessRows.some(x => x.no === 'admin')
+        && !sessRows.some(x => x.no === '005822'),
+      `${sessRows.length} 条`);
   }
 
   /* 临时工号用完删掉，别留在测试库花名册里 */

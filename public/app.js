@@ -74,6 +74,8 @@ let openMembers = {};
 let openSpecialBlock = false;   /* 「下属专项工作推进情况」整块默认收起 */
 let modalOk = null;
 let authStep = 'login', authPick = null, authKw = '';
+/* 管理账号首次登录要先用旧密码换新密码，旧密码只放在内存里，不写 localStorage */
+let authOldPwd = '';
 
 const ME_KEY = 'pm_mvp_me';    /* 只存工号，数据一律在服务端 */
 
@@ -1524,12 +1526,6 @@ function viewSettings() {
     </div>
     <div class="note" style="margin-top:10px">导出只包含你直接负责或已承接的常规与专项任务，一行一个阶段；文件用 Excel 能直接打开，也可以原样导回来（导入在下一批）。</div>
   </div>
-  ${S.me && S.me.admin ? `
-  <div class="card" style="margin-bottom:14px">
-    <div class="card-h"><h2>超管：初始密码名单</h2><span class="hint">仅 ${esc(S.me.no)} 可用；重置后本人可用工号重新登录</span>
-      <div class="spacer"></div><button class="btn sm" data-act="admin-pw">读取名单</button></div>
-    <div id="adminPwdList"><div class="note">点「读取名单」查看谁还在用初始密码（含首次登录时间与 IP）。</div></div>
-  </div>` : ''}
   <div class="grid-2">
     <div class="card">
       <div class="card-h"><h2>任务分类</h2><span class="hint">新建任务时手填，不做统一维护</span></div>
@@ -1571,8 +1567,75 @@ function viewSettings() {
 }
 
 /* ============ 渲染 ============ */
+/* 管理账号（admin）不参与业务：没有任务、没有花名册、没有下属，只有一个管理面板。
+   侧边栏也不给它业务入口——点进去只会看到一屏空列表，像坏了一样。 */
+function viewAdmin() {
+  return `
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-h"><h2>仍用初始密码的员工</h2><span class="hint">含从没登录过的人（密码就是工号）</span>
+      <div class="spacer"></div><button class="btn sm" data-act="admin-pw">刷新</button></div>
+    <div id="adminPwdList"><div class="note">读取中…</div></div>
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-h"><h2>会话与设备</h2><span class="hint">最近 200 条登录会话</span>
+      <div class="spacer"></div><button class="btn sm" data-act="admin-sess">刷新</button></div>
+    <div id="adminSessList"><div class="note">读取中…</div></div>
+  </div>
+  <div class="card">
+    <div class="card-h"><h2>管理密码</h2><span class="hint">至少 8 位；改完其它设备上的登录会失效</span></div>
+    <div class="split" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div class="auth-field" style="margin:0"><label>原密码</label><input id="pwd_old" type="password" autocomplete="current-password"/></div>
+      <div class="auth-field" style="margin:0"><label>新密码（至少 8 位）</label><input id="pwd_new" type="password" autocomplete="new-password"/></div>
+      <button class="btn sm" data-act="change-pwd">修改密码</button>
+    </div>
+    <div class="note" style="margin-top:10px">这个账号不占工号、不在花名册里，也不能被设成任何人的上级；
+      它只能重置员工密码、看初始密码名单和会话设备，看不到任何任务内容。</div>
+  </div>`;
+}
+function renderAdmin() {
+  document.body.classList.add('admin-mode');
+  $('#meAva').textContent = '管';
+  $('#meName').textContent = '系统管理员';
+  $('#meMeta').textContent = '管理账号 · admin';
+  $('#meMgr').textContent = '';
+  const pill = $('#workdayPill');
+  pill.style.display = 'none';
+  const badge = $('#intakeBadge');
+  if (badge) badge.style.display = 'none';
+  $$('.nav-item').forEach(el => el.classList.remove('active'));
+  $('#pageTitle').textContent = '管理';
+  $('#pageSub').textContent = '重置员工密码、查看初始密码名单与会话设备';
+  $('#view').innerHTML = viewAdmin();
+  $('#view').classList.add('wide');
+  loadAdminPanels();
+}
+function loadAdminPanels() {
+  const pw = $('#adminPwdList'), se = $('#adminSessList');
+  if (pw) {
+    api('/api/admin/initial-passwords').then(r => {
+      if (!r.ok) { pw.innerHTML = `<div class="note">${esc(r.msg || '读不到名单')}</div>`; return; }
+      if (!r.list.length) { pw.innerHTML = '<div class="note">没有人在用初始密码了。</div>'; return; }
+      pw.innerHTML = r.list.map(x => `<div class="kv"><span>${esc(x.name)} · ${esc(x.no)}</span>
+        <b>${x.neverLoggedIn ? '<span style="color:#b45309">从未登录</span>'
+          : '首次登录 ' + esc((x.firstLoginAt || '').slice(0, 19).replace('T', ' ')) + ' · ' + esc(x.firstLoginIp || '')}
+        <span class="btn link" data-act="admin-reset" data-no="${esc(x.no)}">重置为工号</span></b></div>`).join('');
+    }).catch(err => { pw.innerHTML = `<div class="note">读取失败：${esc(err.message)}</div>`; });
+  }
+  if (se) {
+    api('/api/admin/sessions').then(r => {
+      if (!r.ok) { se.innerHTML = `<div class="note">${esc(r.msg || '读不到会话')}</div>`; return; }
+      if (!r.list.length) { se.innerHTML = '<div class="note">当前没有登录会话。</div>'; return; }
+      se.innerHTML = r.list.map(s => `<div class="kv"><span>${esc(s.name)} · ${esc(s.no)}</span>
+        <b>${esc((s.last_seen || '').slice(0, 19).replace('T', ' '))} · ${esc(s.ip || '')}
+        <span class="mini">${esc(String(s.ua || '').slice(0, 60))}</span></b></div>`).join('');
+    }).catch(err => { se.innerHTML = `<div class="note">读取失败：${esc(err.message)}</div>`; });
+  }
+}
 function render() {
   if (!S || !S.me) return;
+  if (S.me.admin) return renderAdmin();
+  document.body.classList.remove('admin-mode');
+  $('#workdayPill').style.display = '';
   renderMe();
   $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
   const map = { today: viewToday, assign: viewAssign, routine: viewRoutine, special: viewSpecial, intake: viewIntake, calendar: viewCalendar, settings: viewSettings, task: viewTaskDetail };
@@ -2575,7 +2638,20 @@ function authRender(msg) {
       <div class="auth-err" id="a_err">${msg || ''}</div>
       <div class="actions"><button class="btn primary" data-act="do-login">进入工作台</button></div>
       <div class="auth-hint">初始密码 = 本人工号（首次登录后请及时修改）。<br/>
+        管理账号 admin 的初始密码是一次性随机密码，见服务启动日志；首次登录必须修改。<br/>
         一期仅站内使用：不做邮件、不做企业微信、不做手机推送。</div>`;
+    return;
+  }
+  if (authStep === 'admin-pwd') {
+    body.innerHTML = `
+      <div class="step">首次登录</div>
+      <h3>先改掉一次性初始密码</h3>
+      <p class="desc">初始管理密码是一次性随机密码，长期留在日志里不安全。换成只有你知道的密码后才会进入管理面板。</p>
+      <div class="auth-field"><label>新密码（至少 8 位）</label><input id="a_new" type="password" autocomplete="new-password"/></div>
+      <div class="auth-field"><label>再输一次</label><input id="a_new2" type="password" autocomplete="new-password"/></div>
+      <div class="auth-err" id="a_err">${msg || ''}</div>
+      <div class="actions"><button class="btn primary" data-act="admin-pwd-save">保存并进入</button></div>
+      <div class="auth-hint">当前账号：admin（不占工号、不出现在花名册里）</div>`;
     return;
   }
   body.innerHTML = `
@@ -2601,6 +2677,12 @@ async function doLogin() {
   try {
     const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ no, password: pwd }) });
     if (!r.ok) return authRender(r.msg || '登录失败');
+    /* 首次登录的 admin：cookie 已经发了，但服务端在改密前只放行改密/退出 */
+    if (r.mustChange) {
+      authOldPwd = pwd;
+      authStep = 'admin-pwd';
+      return authRender();
+    }
     localStorage.setItem(ME_KEY, no);
     await loadState();
     authStep = 'mgr'; authPick = null; authKw = '';
@@ -2685,6 +2767,22 @@ document.addEventListener('click', e => {
         .catch(err => toast('改密失败：' + err.message));
       break;
     }
+    case 'admin-pwd-save': {
+      const a = ($('#a_new') || {}).value || '';
+      const b = ($('#a_new2') || {}).value || '';
+      if (a.length < 8) { authRender('管理密码至少 8 位'); break; }
+      if (a !== b) { authRender('两次输入不一致'); break; }
+      api('/api/password', { method: 'POST', body: JSON.stringify({ old: authOldPwd, new: a }) })
+        .then(async r => {
+          if (!r.ok) { authRender(r.msg || '修改失败'); return; }
+          authOldPwd = '';
+          await loadState();
+          finishAuth('管理密码已更新');
+        })
+        .catch(e => authRender('连不上服务：' + e.message));
+      break;
+    }
+    case 'admin-sess': loadAdminPanels(); break;
     case 'admin-pw': {
       api('/api/admin/initial-passwords')
         .then(r => {

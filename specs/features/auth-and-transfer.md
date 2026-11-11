@@ -61,15 +61,21 @@
   3. 登录页写「初始密码为工号」等于公开这条规则（但不展示工号名单，仍需要知道对方工号）。
 - 缓解（第一批内做，不额外扩范围）：
   - cookie 加 `HttpOnly` + `SameSite=Lax` + `Path=/`，**不加 `Secure`**（http 下加了就发不出去）；
-  - 失败 5 次锁 5 分钟 + 超管可见「仍在用初始密码」名单；
+  - 失败 5 次锁 5 分钟 + 管理账号可见「仍在用初始密码」名单；
   - 文档与启动日志明写「仅限可信内网，禁止暴露到公网/访客网络」。
 - 不做：TLS、反代、Secure、密码复杂度策略、找回密码。
 
-### C8 `005822` 在当前仓库的库里不存在
+### C8 管理账号不进花名册（2026-11-11 改）
 
-- 事实：`data/workbench.db` 只有 8 个演示员工（1012/1001/1002/1003/1004/1005/1101/1102），没有 `005822`。
-- 冲突：`auth.admin_no` 默认 `005822`，在演示库/CI 里超管功能整条不可用，且是**静默**不可用。
-- 结论（2026-11-10 已做）：配置只读 `meta.auth.admin_no`，启动时缺键就写 `005822`；演示库额外补一条 `005822`（仅当花名册就是内置演示集时补，正式库导入真实花名册后不会注入）；不再用 `CADENCE_ADMIN_NO`，测试与本地一律改库，避免「同一份代码、两种行为」。
+- 事实：花名册 `emp` 是业务表，任何塞进去的账号都会被当成同事（下属列表、上级选择、任务可见范围、导出）。
+  「超管工号 005822」在演示库里根本不存在，只能靠启动时补一条虚构员工——这就是把管理身份写进业务数据的来源。
+- 结论（2026-11-11）：**管理账号与花名册彻底分表**（`admin_auth`），账号名固定 `admin`：
+  - 不占工号、不进 `emp`，不参与任何业务数据：不出现在下属列表、任务可见范围、导出里，也不能被设为上级；
+  - 初始密码**首次启动随机生成**（12 位），只在启动日志里打印一次；库里只存 scrypt 哈希，重启不再显示；
+  - 首次登录 `must_change=1`，除改密/退出外的所有接口一律 403，改完才进管理面板；
+  - 只有管理权限：重置任意员工密码、看初始密码名单、看会话与设备；
+  - 不读 `CADENCE_ADMIN_NO`、也没有写死的默认密码，默认配置下就能用。
+- 代价（已接受）：忘了管理密码没有找回入口，只能改库里的 `admin_auth` 行或删掉让下次启动重新生成。
 
 ### C9 全部接口绑会话后，现有 e2e 会大面积红
 
@@ -127,19 +133,22 @@
 ### 3.1 口径
 
 - 初始密码 = 本人工号；登录页提示「初始密码为工号，登录后请及时修改」。
-- 登录后自助改密，**不做**强制首登改密。
-- 重置密码只有超管一人：`meta.auth.admin_no`（启动时缺键写 `005822`；演示库自带该工号的演示管理员）。**不做**上级重置链、不做环境变量覆盖。
+- 登录后自助改密，**不做**强制首登改密（**管理账号例外**：首次登录必须改掉一次性随机密码）。
+- 重置密码只有独立的管理账号 `admin` 一人（`admin_auth` 表，不占工号、不进花名册）。**不做**上级重置链、不做环境变量覆盖、不设写死的默认密码。
 - 登录页**不展示**工号名单。
-- 超管可看「仍在使用初始密码」名单（含姓名、首次登录时间、首次登录 IP）。
+- 管理账号可看「仍在使用初始密码」名单（含姓名、首次登录时间、首次登录 IP）以及当前会话与设备。
 
 ### 3.2 存储
 
-新增两张表，不动 `task` / `emp` 的既有列：
+新增两张表 + 一张管理账号表，不动 `task` / `emp` 的既有列：
 
 - `cred(no TEXT PRIMARY KEY, hash TEXT, salt TEXT, initial INTEGER DEFAULT 1, changed_at TEXT)`
   - 与花名册分表：`import-emp.js` 是花名册的写入口，认证数据不该混进它 upsert 的行里。
 - `sess(sid TEXT PRIMARY KEY, no TEXT, created_at TEXT, last_seen TEXT, ip TEXT, ua TEXT)`
   - 多会话并存；滑动空闲 8 小时、绝对 30 天；退出即删行。
+- `admin_auth(account TEXT PRIMARY KEY, hash TEXT, salt TEXT, must_change INTEGER DEFAULT 1, changed_at TEXT)`
+  - 只有 `admin` 一行；不参与任何业务查询（下属、可见范围、导出、上级校验都只读 `emp`）。
+  - 首次启动随机生成 12 位初始密码并打印一次；`must_change=1` 时除改密/退出外全部 403。
 
 密码：`scrypt`（Node 内置，`N=16384,r=8,p=1,keylen=64`，16 字节随机盐），比较用 `timingSafeEqual`。零依赖。
 
@@ -151,9 +160,10 @@
 |---|---|---|
 | `POST /api/login` | 公开 | body `{no,password}`；成功下发 `sid` cookie 并返回 `me`；失败统一「工号或密码不正确」；同一 `no`+IP 连续 5 次失败锁 5 分钟 |
 | `POST /api/logout` | 会话 | 删当前 `sess` 行 + 清 cookie |
-| `POST /api/password` | 会话 | body `{old,new}`；校验旧密码；改后 `initial=0`，**吊销该人其它会话**（保留当前） |
-| `POST /api/admin/reset-password` | 超管 | body `{no}`；把该人密码重置回工号、`initial=1`、吊销其全部会话 |
-| `GET /api/admin/initial-passwords` | 超管 | 返回 `{no,name,firstLoginAt,firstLoginIp,neverLoggedIn}[]`，列**所有仍在用初始密码（=工号）的在职员工**：`cred.initial=1`，或**从没登录过、库里还没有 cred 行**的人（他们同样在用初始密码）。从未登录时 `firstLoginAt=null` |
+| `POST /api/password` | 会话 | body `{old,new}`；校验旧密码；改后 `initial=0`，**吊销该人其它会话**（保留当前）；管理账号同接口、新密码至少 8 位 |
+| `POST /api/admin/reset-password` | 管理账号 | body `{no}`；把该人密码重置回工号、`initial=1`、吊销其全部会话；不能重置 admin 自己 |
+| `GET /api/admin/initial-passwords` | 管理账号 | 返回 `{no,name,firstLoginAt,firstLoginIp,neverLoggedIn}[]`，列**所有仍在用初始密码（=工号）的在职员工**：`cred.initial=1`，或**从没登录过、库里还没有 cred 行**的人（他们同样在用初始密码）。从未登录时 `firstLoginAt=null` |
+| `GET /api/admin/sessions` | 管理账号 | 返回最近 200 条会话 `{no,name,created_at,last_seen,ip,ua}`（含 admin 自己） |
 | 其余所有 `/api/*` | 会话 | 见 3.4 |
 
 `/api/version`、`/api/changelog` 保持公开（登录页要显示版本）。

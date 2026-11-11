@@ -27,4 +27,4 @@ paths: server.js, data/
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明 |
-| TASK-20261110-auth-export | 见 git | — | 新增 `cred`（scrypt 口令）与 `sess`（会话）两表；导出只读；`meta.auth.admin_no` 写库配置（默认 005822，去掉环境变量），演示库补 005822 演示管理员；`op_log` 加条数上限，裁剪只删「不是某人第一条 login」的旧行 |
+| TASK-20261110-auth-export | 见 git | — | 新增 `cred`（scrypt 口令）、`sess`（会话）、`admin_auth`（独立管理账号）三表；导出只读；管理账号不占工号、不进 `emp`，初始密码首次启动随机生成并只打印一次；`op_log` 加条数上限，裁剪只删「不是某人第一条 login」的旧行 |

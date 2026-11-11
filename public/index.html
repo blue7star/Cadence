@@ -38,6 +38,8 @@ button{font-family:inherit}
 .nav-item .ic{width:16px;text-align:center;font-size:13px;opacity:.85}
 .nav-item .badge{margin-left:auto;background:#ef4444;color:#fff;border-radius:9px;font-size:10.5px;
   padding:0 5px;height:16px;line-height:16px;font-weight:600}
+/* 管理账号没有业务视图：侧边栏只留身份与退出，避免点进空列表以为坏了 */
+body.admin-mode #nav{display:none}
 .side-foot{margin-top:auto;border-top:1px solid var(--line2);padding:12px 6px 2px}
 .user{display:flex;gap:9px;align-items:center}
 .ava{width:30px;height:30px;border-radius:50%;background:#e8efff;color:#2563eb;display:grid;place-items:center;font-weight:700;font-size:12.5px}

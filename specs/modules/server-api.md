@@ -8,7 +8,7 @@ paths: server.js
 ## 公开行为
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
 - 六个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。
-- 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`（仅 `auth.admin_no`）。
+- 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
 - 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规与专项；一行一阶段，UTF-8 BOM + `\r\n`。
 
 ## 不变量
@@ -16,6 +16,7 @@ paths: server.js
 - **停用即失效**：会话门每次都查 `emp.active`，停用（`active=0`）当场 401 并吊销该工号全部会话；不再有「停用后旧 cookie 还能用满 30 天」的窗口。
 - **初始密码名单 = 仍在用初始密码的在职员工**：`cred.initial=1`，外加从没登录过、连 `cred` 行都还没有的人（密码同样是工号）；从未登录时 `firstLoginAt` 为空。
 - **登录失败计数有内存上限**（默认 5000 个「工号+IP」键）：匿名请求可以用随机工号把表撑大，超限先丢未锁定/已过期的键，再按插入顺序丢最老的；日志侧由 `op_log` 上限兜底。
+- **管理账号是独立身份**：`admin` 走 `/api/login` 的独立分支，会话门不查 `emp.active`，改查 `admin_auth` 是否还在；它不进花名册、不参与业务数据，改密前除 `/api/password`、`/api/logout` 外一律 403。
 - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
 - 接收看 `assignee_no`、派发与改截止看 `owner_no`/`publisher_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。
 - **可见性五来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
@@ -35,4 +36,4 @@ paths: server.js
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |
-| TASK-20261110-auth-export | 见 git | — | 认证（login/logout/password/超管重置）与会话门；导出 `/api/export/tasks.csv`；会话门加 `emp.active` 校验（停用即失效，并清该工号会话）；初始密码名单口径改为「仍在用初始密码的全部在职员工」，含从没登录、尚无 cred 行的人 |
+| TASK-20261110-auth-export | 见 git | — | 认证（login/logout/password/管理账号重置）与会话门；导出 `/api/export/tasks.csv`；会话门加 `emp.active` 校验（停用即失效，并清该工号会话）；初始密码名单口径改为「仍在用初始密码的全部在职员工」，含从没登录、尚无 cred 行的人；管理账号改名为独立 `admin`（分表、不进 emp、首登强制改密），新增 `/api/admin/sessions` |

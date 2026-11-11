@@ -70,12 +70,19 @@ CREATE TABLE IF NOT EXISTS op_log(
 );
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 /* 认证数据与花名册分表：import-emp.js 是花名册的写入口，密码不该混进它 upsert 的行里。
-   initial=1 表示「还在用初始密码（=工号）」，超管名单就按这个筛。 */
+   initial=1 表示「还在用初始密码（=工号）」，管理账号的初始密码名单就按这个筛。 */
 CREATE TABLE IF NOT EXISTS cred(
   no TEXT PRIMARY KEY, hash TEXT, salt TEXT, initial INTEGER DEFAULT 1, changed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS sess(
   sid TEXT PRIMARY KEY, no TEXT, created_at TEXT, last_seen TEXT, ip TEXT, ua TEXT
+);
+/* 管理账号与花名册彻底分表：admin 不占工号、不进 emp。
+   它不参与任何业务数据（下属列表、任务可见范围、导出、上级选择都只认 emp），
+   所以「超管会不会被当成员工」这类问题从根上不存在。
+   只存哈希；初始密码首次启动随机生成、打印一次，must_change=1 时除改密/退出外全部拒绝。 */
+CREATE TABLE IF NOT EXISTS admin_auth(
+  account TEXT PRIMARY KEY, hash TEXT, salt TEXT, must_change INTEGER DEFAULT 1, changed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner_no);
 CREATE INDEX IF NOT EXISTS idx_task_assignee ON task(assignee_no);
@@ -184,8 +191,6 @@ const MAKEUP = ['2026-02-14', '2026-02-28', '2026-04-26', '2026-05-09', '2026-09
   if (!empCount) {
     const ins = db.prepare('INSERT INTO emp(no,name,role,dept,mgr_no,active,created_at) VALUES(?,?,?,?,?,1,?)');
     for (const [no, name, role, dept, mgr] of SEED_EMP) ins.run(no, name, role, dept, mgr, nowStr());
-    /* 只在「这次真的建了演示花名册」时打标：超管补号只对演示库生效，真实花名册不猜。 */
-    db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('demo_roster','1')").run();
   }
   const holCount = db.prepare('SELECT COUNT(*) c FROM holiday').get().c;
   if (!holCount) {
@@ -198,23 +203,6 @@ const MAKEUP = ['2026-02-14', '2026-02-28', '2026-04-26', '2026-05-09', '2026-09
   }
   const rev = db.prepare('SELECT v FROM meta WHERE k=?').get('rev');
   if (!rev) db.prepare('INSERT INTO meta(k,v) VALUES(?,?)').run('rev', '1');
-})();
-
-/* 演示库要能直接试超管：契约把超管工号定为 005822，而演示花名册里只有 1012 那一批。
-   只在「花名册就是内置演示集」时补一个 005822，正式库导入真实花名册后不会被塞进虚构账号。
-   名字用「王磊（超管）」是为了跟演示账号 1012 区分——同一个人在演示库里被拆成两条，
-   一条演普通组长、一条演超管，避免看的人以为花名册里有重名。 */
-(function seedDemoAdmin() {
-  /* 花名册是不是内置演示集，只认 meta 里这个标记。旧库没有标记时按「正好就是那 8 个人」补一次，
-     之后不再猜——真实花名册导进来以后，谁也不想因为「人少」被塞进一个虚构的超管。 */
-  const flag = () => db.prepare("SELECT v FROM meta WHERE k='demo_roster'").get();
-  const nos = db.prepare('SELECT no FROM emp').all().map((r) => r.no);
-  if (!flag() && nos.length === SEED_EMP.length && nos.every((n) => SEED_EMP.some((e) => e[0] === n))) {
-    db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('demo_roster','1')").run();
-  }
-  if (!flag() || nos.includes('005822')) return;
-  db.prepare('INSERT INTO emp(no,name,role,dept,mgr_no,active,created_at) VALUES(?,?,?,?,?,1,?)')
-    .run('005822', '王磊（超管）', '系统管理员', '信息中心', null, nowStr());
 })();
 
 /* ============ 工作日 / 节假日 ============ */
@@ -1283,7 +1271,7 @@ function seedDemo(meNo) {
 }
 
 /* ============ 认证（第一批） ============
-   初始密码 = 本人工号；登录后自助改密；重置密码只有超管一人。
+   初始密码 = 本人工号；登录后自助改密；重置密码只有独立的管理账号 admin。
    密码用 Node 内置 scrypt 存（零依赖），会话落 sess 表，全部 /api/* 绑会话。 */
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -1292,12 +1280,31 @@ const SID_ABS_MS = 30 * 24 * 3600 * 1000;  /* 绝对 30 天 */
 const LOCK_FAILS = 5;                      /* 连续失败 5 次 */
 const LOCK_MS = 5 * 60 * 1000;             /* 锁 5 分钟 */
 
-/* 超管工号只读库：`meta.auth.admin_no`。启动时若没有这个键就写 005822（契约定的那个人）。
-   不再用环境变量——测试与本地演示都改成改库，免得「同一份代码、两种行为」只差一个 env。 */
-const ADMIN_NO = (() => {
-  db.prepare("INSERT OR IGNORE INTO meta(k,v) VALUES('auth.admin_no','005822')").run();
-  const row = db.prepare("SELECT v FROM meta WHERE k='auth.admin_no'").get();
-  return String((row && row.v) || '005822').trim();
+/* 管理账号：固定账号名 admin，独立于花名册（不占工号、不进 emp）。
+   不读环境变量、也没有写死的默认密码——初始密码首次启动随机生成，只打印这一次。
+   之后库里只有 scrypt 哈希；重启不会再打印，忘了就只能按下面的说明重置库里的 admin_auth 行。 */
+const ADMIN_ACCOUNT = 'admin';
+
+function setAdminPassword(pwd, mustChange) {
+  const salt = newSalt();
+  db.prepare(`INSERT INTO admin_auth(account,hash,salt,must_change,changed_at) VALUES(?,?,?,?,?)
+    ON CONFLICT(account) DO UPDATE SET hash=excluded.hash, salt=excluded.salt,
+      must_change=excluded.must_change, changed_at=excluded.changed_at`)
+    .run(ADMIN_ACCOUNT, hashPwd(pwd, salt), salt, mustChange ? 1 : 0, nowStr());
+}
+function verifyAdmin(pwd) {
+  const row = db.prepare('SELECT hash,salt FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT);
+  if (!row || !row.hash || !row.salt) return false;
+  const got = Buffer.from(hashPwd(pwd, row.salt), 'hex');
+  const want = Buffer.from(String(row.hash), 'hex');
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+const ADMIN_FIRST_PWD = (() => {
+  if (db.prepare('SELECT account FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT)) return '';
+  /* 12 位 base64url：不含易混字符，够一个人抄到浏览器里，也不是「工号」那种可猜的口令 */
+  const pwd = crypto.randomBytes(9).toString('base64url');
+  setAdminPassword(pwd, true);
+  return pwd;
 })();
 
 function newSalt() { return crypto.randomBytes(16).toString('hex'); }
@@ -1561,6 +1568,30 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 200, { ok: false, locked: true, msg: `尝试次数过多，请 ${Math.ceil((until - Date.now()) / 60000)} 分钟后再试` });
       }
       const emp = getEmp(no);
+      /* 管理账号走单独分支：它不在花名册里，也不该被 emp 的任何校验牵连。
+         错误文案与员工一致，不让这个接口变成「admin 是否存在」的探测器。 */
+      if (no === ADMIN_ACCOUNT) {
+        if (!verifyAdmin(pwd)) {
+          const rec = LOGIN_FAILS.get(key) || { n: 0, until: 0 };
+          rec.n += 1;
+          if (rec.n >= LOCK_FAILS) { rec.n = 0; rec.until = Date.now() + LOCK_MS; }
+          LOGIN_FAILS.set(key, rec);
+          pruneLoginFails();
+          logOp(no, 'login-fail', 'admin', ip);
+          return sendJSON(res, 200, { ok: false, msg: '工号或密码不正确' });
+        }
+        LOGIN_FAILS.delete(key);
+        logOp(no, 'login', 'admin', ip);
+        const sid = createSession(no, ip, req.headers['user-agent']);
+        res.setHeader('Set-Cookie', sidCookie(sid, Math.floor(SID_ABS_MS / 1000)));
+        const a = db.prepare('SELECT must_change FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT);
+        return sendJSON(res, 200, {
+          ok: true,
+          me: { no: ADMIN_ACCOUNT, name: '系统管理员', role: '管理账号', dept: '', mgrNo: null, admin: true },
+          admin: true,
+          mustChange: !!(a && a.must_change)
+        });
+      }
       /* 花名册随时可能加人（import-emp.js），启动时那批初始化覆盖不到新人。
          第一次登录补建初始密码，新人才能用工号进门。 */
       if (emp) ensureCred(no);
@@ -1583,7 +1614,7 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, {
         ok: true,
         me: { no: emp.no, name: emp.name, role: emp.role, dept: emp.dept, mgrNo: emp.mgr_no || null },
-        admin: no === ADMIN_NO
+        admin: false
       });
     }
 
@@ -1593,11 +1624,24 @@ const server = http.createServer(async (req, res) => {
     if (!sess) return sendJSON(res, 401, { ok: false, msg: '登录已过期，请重新登录' });
     /* 停用即失效：会话只是一张票，人已经不在花名册里（active=0）就不能再拿它读写。
        只在登录时查一次活跃会留下最长 30 天的窗口——停用之后，旧浏览器照样能改数据。 */
-    const still = db.prepare('SELECT active FROM emp WHERE no=?').get(sess.no);
-    if (!still || !still.active) {
-      dropSessions(sess.no);
-      res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
-      return sendJSON(res, 401, { ok: false, msg: '账号已停用，请联系管理员' });
+    const isAdmin = sess.no === ADMIN_ACCOUNT;
+    let adminMustChange = false;
+    if (isAdmin) {
+      /* admin 不在 emp 表里，走独立的存在性与改密校验；其余一律与员工同一套会话规则 */
+      const a = db.prepare('SELECT must_change FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT);
+      if (!a) {
+        dropSessions(ADMIN_ACCOUNT);
+        res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+        return sendJSON(res, 401, { ok: false, msg: '管理账号已被移除' });
+      }
+      adminMustChange = !!a.must_change;
+    } else {
+      const still = db.prepare('SELECT active FROM emp WHERE no=?').get(sess.no);
+      if (!still || !still.active) {
+        dropSessions(sess.no);
+        res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+        return sendJSON(res, 401, { ok: false, msg: '账号已停用，请联系管理员' });
+      }
     }
     const me = sess.no;
     const body = req.method === 'POST' ? await readBody(req) : {};
@@ -1613,6 +1657,14 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/password' && req.method === 'POST') {
       const oldPwd = String(body.old || ''), newPwd = String(body.new || '');
+      if (isAdmin) {
+        if (!verifyAdmin(oldPwd)) return sendJSON(res, 200, { ok: false, msg: '原密码不正确' });
+        if (newPwd.length < 8) return sendJSON(res, 200, { ok: false, msg: '管理密码至少 8 位' });
+        setAdminPassword(newPwd, false);
+        dropSessions(ADMIN_ACCOUNT, sid);
+        logOp(me, 'password', 'admin', ip);
+        return sendJSON(res, 200, { ok: true });
+      }
       if (!verifyPwd(me, oldPwd)) return sendJSON(res, 200, { ok: false, msg: '原密码不正确' });
       if (newPwd.length < 6) return sendJSON(res, 200, { ok: false, msg: '新密码至少 6 位' });
       setPassword(me, newPwd, false);
@@ -1622,8 +1674,14 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true });
     }
 
+    /* 首次登录必须先换掉随机初始密码：没换之前，除了改密和退出什么都不给做。
+       放在 password/logout 之后，避免「必须先改密」把改密本身也挡住。 */
+    if (adminMustChange) {
+      return sendJSON(res, 403, { ok: false, mustChange: true, msg: '首次登录必须修改管理密码' });
+    }
+
     if (p === '/api/admin/initial-passwords' && req.method === 'GET') {
-      if (me !== ADMIN_NO) return sendJSON(res, 403, { ok: false, msg: '只有超管能看' });
+      if (!isAdmin) return sendJSON(res, 403, { ok: false, msg: '只有管理账号能看' });
       /* 口径：还在用初始密码（=工号）的在职员工。
          从没登录过的人库里连 cred 行都还没有，只筛 cred.initial=1 会把他们整批漏掉——
          而他们恰恰是风险最大的一批（密码就是公开的工号，且从未改过）。 */
@@ -1640,13 +1698,25 @@ const server = http.createServer(async (req, res) => {
             neverLoggedIn: !first
           };
         });
-      return sendJSON(res, 200, { ok: true, adminNo: ADMIN_NO, list });
+      return sendJSON(res, 200, { ok: true, account: ADMIN_ACCOUNT, list });
+    }
+
+    if (p === '/api/admin/sessions' && req.method === 'GET') {
+      if (!isAdmin) return sendJSON(res, 403, { ok: false, msg: '只有管理账号能看' });
+      /* 会话 = 登录中的设备。停用的员工不会留在这里（停用会删会话），
+         所以这张表同时也是「谁还在线」的清单。 */
+      const list = db.prepare(`SELECT s.no, COALESCE(e.name, '系统管理员') AS name,
+          s.created_at, s.last_seen, s.ip, s.ua
+        FROM sess s LEFT JOIN emp e ON e.no=s.no
+        ORDER BY s.last_seen DESC LIMIT 200`).all();
+      return sendJSON(res, 200, { ok: true, list });
     }
 
     if (p === '/api/admin/reset-password' && req.method === 'POST') {
-      if (me !== ADMIN_NO) return sendJSON(res, 403, { ok: false, msg: '只有超管能重置密码' });
+      if (!isAdmin) return sendJSON(res, 403, { ok: false, msg: '只有管理账号能重置密码' });
       const target = String(body.no || '').trim();
       if (!target) return sendJSON(res, 200, { ok: false, msg: '要重置谁？' });
+      if (target === ADMIN_ACCOUNT) return sendJSON(res, 200, { ok: false, msg: '管理账号请在「管理密码」里改' });
       if (!getEmp(target)) return sendJSON(res, 200, { ok: false, msg: '花名册里没有这个人' });
       setPassword(target, target, true);
       dropSessions(target);
@@ -1670,9 +1740,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/state' && req.method === 'GET') {
+      /* 管理账号不参与业务数据：不给它任何任务/花名册视图，只给身份与管理面板需要的字段。
+         这样「admin 出现在下属列表 / 可见范围 / 导出里」在数据层面就不可能发生。 */
+      if (isAdmin) {
+        return sendJSON(res, 200, {
+          ok: true, admin: true,
+          me: { no: ADMIN_ACCOUNT, name: '系统管理员', role: '管理账号', dept: '', mgr: null, admin: true },
+          today: todayStr(), holidays: [], roster: [], subs: [], cats: [], rules: [],
+          tasks: [], watch: [], notices: [], routines: [],
+          rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v)
+        });
+      }
       const st = stateFor(me);
       if (!st) return sendJSON(res, 404, { ok: false, msg: '花名册里没有这个工号' });
-      st.me.admin = me === ADMIN_NO;
+      st.me.admin = false;
       return sendJSON(res, 200, { ok: true, ...st });
     }
 
@@ -1814,8 +1895,11 @@ server.listen(PORT, '0.0.0.0', () => {
   /* R1：明文 HTTP。这句话必须出现在启动日志里，不能只写在文档里没人看。 */
   console.log('  ⚠ 仅限可信内网：本服务是明文 HTTP，同网段可嗅探登录 cookie。');
   console.log('     不要暴露到公网、访客网络或端口映射；要出内网请先加反向代理与 TLS。');
-  if (!getEmp(ADMIN_NO)) {
-    console.log(`  ⚠ 超管工号 ${ADMIN_NO}（meta.auth.admin_no）不在花名册：重置密码与初始密码名单不可用`);
+  if (ADMIN_FIRST_PWD) {
+    console.log('');
+    console.log('  ⚠ 已创建管理账号 admin，初始密码（只在首次启动显示这一次）：');
+    console.log(`     ${ADMIN_FIRST_PWD}`);
+    console.log('     库里只存哈希，重启不会再显示；首次登录必须立即修改。');
   }
   console.log('');
   console.log('  在浏览器打开上面「本机访问」那个地址就能用了。');

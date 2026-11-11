@@ -453,15 +453,27 @@ async function freshTestDb() {
   /* VACUUM INTO 拿到的是一致快照；直接复制文件会漏掉还在 WAL 里、没 checkpoint 的写入 */
   src.exec(`VACUUM INTO '${TEST_DB.replace(/\\/g, '/').replace(/'/g, "''")}'`);
   src.close();
+  /* 清掉副本里的管理账号：让测试实例每次都走「首次启动随机生成并打印一次」的真实路径，
+     e2e 才能验 mustChange。真实库里的那一行不动。 */
+  const copy = new DatabaseSync(TEST_DB);
+  try { copy.prepare('DELETE FROM admin_auth').run(); } catch { /* 老库还没这张表 */ }
+  copy.close();
   return true;
 }
 
 function startInstance(port) {
-  return spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+  const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     cwd: ROOT,
     env: { ...process.env, PORT: String(port), CADENCE_DB: TEST_DB },
-    stdio: 'ignore'
+    stdio: ['ignore', 'pipe', 'pipe']
   });
+  /* 管理账号的一次性初始密码只出现在启动日志里；e2e 要用它走首次登录流程。
+     所以这里必须接住 stdout，而不是 ignore。 */
+  let out = '';
+  child.stdout.on('data', (b) => { out += b.toString(); });
+  child.stderr.on('data', (b) => { out += b.toString(); });
+  child.log = () => out;
+  return child;
 }
 
 async function waitUp(base, ms = 20000) {
@@ -508,9 +520,15 @@ async function testInstance() {
   check('测试实例在跑（独立测试库，真实库不动）', j.semver === want,
     j.semver === want ? `v${want} · ${TEST_DB}` : `实例是 v${j.semver}，代码是 v${want}`);
   if (j.semver !== want) { try { child.kill(); } catch { /* 已退 */ } return null; }
+  /* 首次启动才打印：从「已创建管理账号 admin……」后面那一行取出一次性密码 */
+  const m = /初始密码[^\n]*\n\s*(\S+)/.exec(child.log());
+  const adminPwd = m ? m[1] : '';
+  check('测试实例打印了 admin 一次性初始密码', !!adminPwd,
+    adminPwd ? '（已交给 e2e 做首次登录）' : '启动日志里没抓到，检查 ensureAdmin 是否被触发');
   let cur = child;
   return {
     base: TEST_BASE,
+    adminPwd,
     restart: async () => {
       /* 真重启：换一个进程读同一份测试库。改密是写库，重启之后不该变——这条只有真重启才测得出来。 */
       try { cur.kill(); } catch { /* 已退 */ }
@@ -526,41 +544,34 @@ async function testInstance() {
   };
 }
 
-/* 重启幂等：改密 → 杀进程 → 新进程登录。密码只该在库里，不该在内存里。 */
+/* 重启幂等：改密 → 杀进程 → 新进程登录。密码只该在库里，不该在内存里。
+   admin 的密码由 e2e 改成 Admin-E2e-2026；员工的用 1004（e2e 结束时它被重置回工号）。 */
 async function restartPwdCheck(test) {
-  const PWD = 'Restart-9x-2026';
-  const r = await fetch(test.base + '/api/login', {
+  const login = (no, password) => fetch(test.base + '/api/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ no: '005822', password: '005822' })
-  });
-  const j = await r.json();
-  if (!j.ok) return check('重启后密码不变（改密 → 重启 → 登录）', false, '超管 005822 登录不上：' + j.msg);
-  const sid = (r.headers.get('set-cookie') || '').split(';')[0];
-  const ch = await fetch(test.base + '/api/password', {
-    method: 'POST', headers: { cookie: sid, 'content-type': 'application/json' },
-    body: JSON.stringify({ old: '005822', new: PWD })
-  });
-  if (ch.status !== 200) return check('重启后密码不变（改密 → 重启 → 登录）', false, `改密 ${ch.status}`);
+    body: JSON.stringify({ no, password })
+  }).then((x) => x.json()).catch(() => ({}));
 
   const again = await test.restart();
-  if (!again) return check('重启后密码不变（改密 → 重启 → 登录）', false, '重启后实例起不来');
-  const ok = await fetch(test.base + '/api/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ no: '005822', password: PWD })
-  }).then((x) => x.json());
-  const old = await fetch(test.base + '/api/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ no: '005822', password: '005822' })
-  }).then((x) => x.json());
-  check('重启后密码不变（改密 → 重启 → 登录）', ok.ok === true && old.ok === false,
-    `新密码 ${ok.ok ? 'ok' : '不行'} / 旧密码 ${old.ok ? '还能用（不对）' : '已失效'}`);
-  return ok.ok && !old.ok;
+  if (!again) {
+    check('改密 → 真重启 → 新密码仍然可用', false, '重启后实例起不来');
+    return false;
+  }
+  const adminNew = await login('admin', 'Admin-E2e-2026');
+  const adminOld = test.adminPwd ? await login('admin', test.adminPwd) : { ok: false };
+  const empReset = await login('1004', '1004');
+  const a = check('改密 → 真重启 → 管理账号新密码可登录、一次性初始密码失效',
+    adminNew.ok === true && adminOld.ok === false,
+    `新 ${adminNew.ok ? 'ok' : '不行'} / 旧 ${adminOld.ok ? '还能用（不对）' : '已失效'}`);
+  const b = check('重置过的员工密码在重启后仍然有效', empReset.ok === true, JSON.stringify(empReset).slice(0, 120));
+  return a && b;
 }
 
-function e2e(base) {
-  /* e2e 会直接改库做夹具；把测试库路径显式传给它，它自己也会拒绝在真实库上跑。 */
+function e2e(base, adminPwd) {
+  /* e2e 会直接改库做夹具；把测试库路径显式传给它，它自己也会拒绝在真实库上跑。
+     admin 的一次性初始密码也从这里传给 e2e，它才能走完「首次登录 → 强制改密」。 */
   const r = spawnSync(process.execPath, [path.join(ROOT, '_dev', 'e2e.mjs'), base],
-    { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, CADENCE_DB: TEST_DB } });
+    { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, CADENCE_DB: TEST_DB, CADENCE_TEST_ADMIN_PWD: adminPwd || '' } });
   const out = (r.stdout || '') + (r.stderr || '');
   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
   const total = out.split('\n').filter((l) => /^(PASS|FAIL)\s/.test(l)).length;
@@ -586,7 +597,7 @@ async function main() {
     if (!test) ok = false;
     else {
       try {
-        ok = e2e(test.base) && ok;
+        ok = e2e(test.base, test.adminPwd) && ok;
         ok = await restartPwdCheck(test) && ok;
       } finally {
         test.stop();

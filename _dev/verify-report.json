@@ -1,17 +1,17 @@
 {
- "at": "2026-11-11T01:39:11.282Z",
+ "at": "2026-11-11T01:53:36.289Z",
  "mode": "--full",
- "head": "5ed66b2",
- "digest": "00883c41dffa65d6",
- "docsDigest": "76a0a8e2b55874ec",
- "evidenceDigest": "1aa7ef98a9f3266d",
+ "head": "0c7f627",
+ "digest": "552ba5e62fcb599a",
+ "docsDigest": "a69833113b7fed19",
+ "evidenceDigest": "7f6b4eebaf258634",
  "algo": 2,
  "files": 99,
  "codeFiles": 30,
  "evidenceFiles": 64,
  "each": {
   ".agents/README.md": "9f024413a763",
-  ".agents/SPEC.md": "c5c018d421ec",
+  ".agents/SPEC.md": "d01a613519d5",
   ".agents/archive/PLAN-20261104.md": "d27d3373908e",
   ".agents/archive/README.md": "664e067febdc",
   ".agents/archive/contracts/2026-11-03-三级节点.md": "387852267d92",
@@ -47,12 +47,12 @@
   "DEVELOPMENT.md": "e746d075a277",
   "README.md": "dc5eee0e855c",
   "_dev/dbg.mjs": "f1e71aeafd1b",
-  "_dev/e2e.mjs": "409ae7ef99c2",
+  "_dev/e2e.mjs": "8330620aa011",
   "_dev/gate-selftest.mjs": "3f2d6cc6d7b8",
   "_dev/probe-intake.mjs": "ffa983e63c91",
   "_dev/probe-late.mjs": "4c7d78b0ac09",
   "_dev/shot-once.mjs": "6b6bece753b3",
-  "_dev/verify.mjs": "956f36599d4f",
+  "_dev/verify.mjs": "2c6b0779650d",
   "artifacts/contracts/TASK-20261110-auth-export.md": "91e885e27e14",
   "artifacts/contracts/TASK-20261110-task-import.md": "158ffef72859",
   "artifacts/runs/TASK-20261109-gate-hardening/candidate-a1.patch": "fd13e3c61ca3",
@@ -93,17 +93,17 @@
   "docs/prototype.html": "a9e79c9b1948",
   "emp-template.csv": "7a0dc7894ef3",
   "import-emp.js": "6ac2401a5941",
-  "public/app.js": "b8e752250422",
+  "public/app.js": "77568cd3877e",
   "public/changelog.js": "74f665a86fbf",
-  "public/index.html": "f28731337eff",
+  "public/index.html": "731b889cedd2",
   "readme-no-node.txt": "676bc166e1a8",
-  "server.js": "efa5e7f6666e",
-  "specs/features/auth-and-transfer.md": "60830f29eeec",
+  "server.js": "db9a96a55d8c",
+  "specs/features/auth-and-transfer.md": "19f1c00b01de",
   "specs/modules/README.md": "287287e49f71",
   "specs/modules/_template.md": "0896e628dbe1",
   "specs/modules/app-ui.md": "a63fca09d714",
-  "specs/modules/server-api.md": "7ea7cecb8f8a",
-  "specs/modules/server-data.md": "069c1786edf0",
+  "specs/modules/server-api.md": "02f3684a9c68",
+  "specs/modules/server-data.md": "c224202a0ae3",
   "specs/modules/tooling.md": "365c68ad9277",
   "specs/modules/version.md": "225ce7f29555",
   "version.js": "51d0048018bc",
@@ -154,14 +154,24 @@
    "info": "v0.8.5 · D:\\ai_project\\ai_work\\Cadence\\_dev\\.test-db\\workbench.db"
   },
   {
-   "name": "e2e 200 项",
+   "name": "测试实例打印了 admin 一次性初始密码",
+   "ok": true,
+   "info": "（已交给 e2e 做首次登录）"
+  },
+  {
+   "name": "e2e 205 项",
    "ok": true,
    "info": ""
   },
   {
-   "name": "重启后密码不变（改密 → 重启 → 登录）",
+   "name": "改密 → 真重启 → 管理账号新密码可登录、一次性初始密码失效",
    "ok": true,
-   "info": "新密码 ok / 旧密码 已失效"
+   "info": "新 ok / 旧 已失效"
+  },
+  {
+   "name": "重置过的员工密码在重启后仍然有效",
+   "ok": true,
+   "info": "{\"ok\":true,\"me\":{\"no\":\"1004\",\"name\":\"王浩\",\"role\":\"研发工程师\",\"dept\":\"产品部\",\"mgrNo\":\"1012\"},\"admin\":false}"
   }
  ]
 }

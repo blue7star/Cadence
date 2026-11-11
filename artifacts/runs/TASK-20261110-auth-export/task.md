@@ -6,22 +6,24 @@
 ## 元信息
 
 task_id: TASK-20261110-auth-export
-contract_version: 1
+contract_version: 2
 base_revision: 41b9ae2
 gate_level: G2
 status: PLANNED
 owner: Planner
-modules: server-api, server-data, app-ui, tooling
+modules: server-api, server-data, app-ui, tooling, version
 sibling_tasks: TASK-20261110-task-import
 blueprint_impact: required
 parallel_group: none
 
 ## 受理
 
+> **口径变更（2026-11-11，cv2）**：原第 4 项「超管 = 花名册里的 005822 / `meta.auth.admin_no` / `CADENCE_ADMIN_NO`」已被用户否决，改为独立管理账号 `admin`（独立 `admin_auth` 表，不占工号、不进 `emp`；首次启动随机生成初始密码、只打印一次；首次登录强制改密；不读环境变量）。`requirement_quote` 保留用户原话，不改写。同轮追加：发版 `version.js` 也归本契约（`modules` 增 `version`）。
+
 requirement_quote: 初始密码 = 本人工号，登录页给提示；登录后用户可自助改密（不做强制首登改密）。重置密码只有**超管一人**（用户本人 005822 之外再加一个可配置的 `auth.admin_no`，默认指向他）。不做上级重置链。状态枚举取**四值**（待办/进行中/已完成/暂缓），导出导入都按四值处理，不许降级合并。
 user_problem: 工作台现在只凭「工号 + 姓名」登录，同事之间只要知道姓名就能冒用对方身份查看和改动任务，离职或工号外泄后也没有任何收口手段；管理者手上近八百条任务只存在于界面里，换机、备份、线下整理、交给别人接手都没有出口。
 out_of_scope: 本批不做导入、不做文件上传与预览、不做 TLS 与反代、不做 Secure cookie、不做密码复杂度策略与找回密码、不做上级重置链、不做权限分级（超管之外仍平权）、不做 xlsx 与 JSON 格式、不导规则与分类树与知情人名单、不改 task 表结构（只新增 cred 与 sess 两张表）。
-acceptance_command: node _dev/verify.mjs --full（前置：服务已在 8788 端口以本次代码启动；期望退出码 0）
+acceptance_command: node _dev/verify.mjs --full（自起 8799 测试库副本实例，跑完收摊；期望退出码 0）
 stop_conditions: 出现以下任一情况立刻停下问人：需要修改 task 表结构或既有列语义；需要把 cookie 设为 Secure 或在 http 下强制扫码登录；需要引入新的 npm 依赖（本项目零依赖，含 cookie jar 库）；005822 或 CADENCE_ADMIN_NO 指向的工号在花名册里不存在且无法确定超管；e2e 改造超出「登录助手 + cookie 透传」的范围；导出文件需要声明 v2 或更高格式版本。
 
 ## 目标与范围

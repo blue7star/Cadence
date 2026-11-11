@@ -1,9 +1,9 @@
 {
- "at": "2026-11-11T01:53:36.289Z",
+ "at": "2026-11-11T02:00:15.338Z",
  "mode": "--full",
- "head": "0c7f627",
- "digest": "552ba5e62fcb599a",
- "docsDigest": "a69833113b7fed19",
+ "head": "a110b05",
+ "digest": "84e59b99152f7969",
+ "docsDigest": "020265aa4b579b7a",
  "evidenceDigest": "7f6b4eebaf258634",
  "algo": 2,
  "files": 99,
@@ -43,8 +43,8 @@
   ".gitignore": "4dd5c40a9523",
   ".pre-commit-config.yaml": "89deecd06e4e",
   "AGENTS.md": "6df3bef10254",
-  "CHANGELOG.md": "07a57b3a1e24",
-  "DEVELOPMENT.md": "e746d075a277",
+  "CHANGELOG.md": "679134e7dbfb",
+  "DEVELOPMENT.md": "37339d9d270a",
   "README.md": "dc5eee0e855c",
   "_dev/dbg.mjs": "f1e71aeafd1b",
   "_dev/e2e.mjs": "8330620aa011",
@@ -106,7 +106,7 @@
   "specs/modules/server-data.md": "c224202a0ae3",
   "specs/modules/tooling.md": "365c68ad9277",
   "specs/modules/version.md": "225ce7f29555",
-  "version.js": "51d0048018bc",
+  "version.js": "03912006c581",
   "停止工作台.bat": "613ef29c9a7f",
   "启动工作台.bat": "9f0f6ac1d337"
  },
@@ -121,7 +121,7 @@
   {
    "name": "版本自检（当前版本有登记、结构合法）",
    "ok": true,
-   "info": "通过：当前 v0.8.5，已登记 34 个版本。"
+   "info": "通过：当前 v0.9.0，已登记 35 个版本。"
   },
   {
    "name": "CHANGELOG.md 与 version.js 一致",
@@ -151,7 +151,7 @@
   {
    "name": "测试实例在跑（独立测试库，真实库不动）",
    "ok": true,
-   "info": "v0.8.5 · D:\\ai_project\\ai_work\\Cadence\\_dev\\.test-db\\workbench.db"
+   "info": "v0.9.0 · D:\\ai_project\\ai_work\\Cadence\\_dev\\.test-db\\workbench.db"
   },
   {
    "name": "测试实例打印了 admin 一次性初始密码",

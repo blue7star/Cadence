@@ -1514,17 +1514,14 @@ function viewSettings() {
     <div class="note" style="margin-top:10px">上级不是必填项：不设上级照样能发布任务、承接任务。只是不设上级的人不会出现在别人的「下属」名单里，上级也就看不到你的常规工作与专项进展。</div>
     <div class="note" style="margin-top:6px">一个账号只有一个直属上级；防环校验会拒绝选择自己或自己的下级。改上级后，已发布的任务仍保留原上级可见，新增任务只对新上级可见。</div>
   </div>
-  <div class="card" style="margin-bottom:14px">
-    <div class="card-h"><h2>密码与数据出口</h2><span class="hint">初始密码=工号，改完请自己记住</span></div>
+  <div class="card" id="pwdCard" style="margin-bottom:14px">
+    <div class="card-h"><h2>修改密码</h2><span class="hint">初始密码 = 工号，改完请自己记住</span></div>
     <div class="split" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
       <div class="auth-field" style="margin:0"><label>原密码</label><input id="pwd_old" type="password" autocomplete="current-password"/></div>
       <div class="auth-field" style="margin:0"><label>新密码（至少 6 位）</label><input id="pwd_new" type="password" autocomplete="new-password"/></div>
-      <button class="btn sm" data-act="change-pwd">修改密码</button>
+      <button class="btn sm primary" data-act="change-pwd">修改密码</button>
     </div>
-    <div class="split" style="margin-top:12px">
-      <button class="btn sm primary" data-act="export-tasks">导出我的任务（CSV）</button>
-    </div>
-    <div class="note" style="margin-top:10px">导出只包含你直接负责或已承接的常规与专项任务，一行一个阶段；文件用 Excel 能直接打开，也可以原样导回来（导入在下一批）。</div>
+    <div class="note" style="margin-top:10px">改完密码，其它设备上的登录会立即失效。忘了密码只能找管理员重置为工号。</div>
   </div>
   <div class="grid-2">
     <div class="card">
@@ -1598,6 +1595,7 @@ function renderAdmin() {
   $('#meName').textContent = '系统管理员';
   $('#meMeta').textContent = '管理账号 · admin';
   $('#meMgr').textContent = '';
+  renderAcct('管', '系统管理员', '管理账号 · admin');
   const pill = $('#workdayPill');
   pill.style.display = 'none';
   const badge = $('#intakeBadge');
@@ -1662,6 +1660,63 @@ function renderMe() {
   const m = $('#meMgr');
   m.textContent = me.mgr ? '上级：' + me.mgr.name : '上级：未设置 · 点此设置';
   m.style.color = me.mgr ? '' : '#b45309';
+  renderAcct(me.name.slice(-1), me.name, `${me.dept} · ${me.role} · ${me.no}`);
+}
+
+/* 右上角账号区：谁在登录、改密码/退出都从这里进，不用先摸到侧边栏底部 */
+function renderAcct(ava, name, meta) {
+  const a = $('#topAva'), n = $('#topName');
+  if (a) a.textContent = ava;
+  if (n) n.textContent = name;
+  const mn = $('#menuName'), mm = $('#menuMeta');
+  if (mn) mn.textContent = name;
+  if (mm) mm.textContent = meta;
+}
+
+function closeAcctMenu() {
+  const menu = $('#acctMenu'), btn = document.querySelector('[data-act="acct-toggle"]');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+/* 设置页里定位到改密码卡片：菜单点一次就到，不用在长页面里找 */
+function goPassword() {
+  closeAcctMenu();
+  if (view !== 'settings') { view = 'settings'; render(); }
+  const card = $('#pwdCard');
+  if (!card) return;
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 1200);
+  const inp = $('#pwd_old');
+  if (inp) setTimeout(() => inp.focus(), 350);
+}
+
+/* 导出：走 fetch 才拿得到状态码——直接 location.href 的话，会话过期会整页跳成一坨 JSON。
+   点下去先禁用并写「正在导出…」，成功/失败都回到按钮原样，用户知道点上了。 */
+async function exportTasks() {
+  const btn = $('#exportBtn');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '正在导出…'; }
+  try {
+    const res = await fetch('/api/export/tasks.csv');
+    if (res.status === 401) { onAuthLost(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const fn = (cd.match(/filename="?([^";]+)"?/) || [])[1] || 'cadence-tasks.csv';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fn;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast(`已导出 ${Math.max(1, Math.round(blob.size / 1024))} KB · ${fn}`);
+  } catch (e) {
+    toast('导出失败：' + (e.message || '网络异常'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
 }
 /* ============ 任务详情（整页，不用抽屉） ============ */
 /* 左抽屉只有 460px 宽，一列控件往下堆；管理者点开一条任务想看的是「到哪了、卡在哪」，
@@ -2711,6 +2766,8 @@ async function loadState() {
 document.addEventListener('click', e => {
   const nav = e.target.closest('.nav-item');
   if (nav) { view = nav.dataset.view; render(); return; }
+  /* 账号菜单：点到菜单外面就收起（菜单内的菜单项自己负责关） */
+  if (!e.target.closest('#acct')) closeAcctMenu();
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act, id = el.dataset.id;
@@ -2751,8 +2808,19 @@ document.addEventListener('click', e => {
       }
       break;
     case 'export-tasks':
-      /* 走浏览器直接下载：带 cookie，服务端只按会话里的人导 */
-      location.href = '/api/export/tasks.csv';
+      /* 走 fetch 再触发下载：要拿到状态码才能区分「会话过期」和「导出成功」 */
+      exportTasks();
+      break;
+    case 'acct-toggle': {
+      const menu = $('#acctMenu');
+      const btn = document.querySelector('[data-act="acct-toggle"]');
+      if (!menu) break;
+      menu.hidden = !menu.hidden;
+      if (btn) btn.setAttribute('aria-expanded', String(!menu.hidden));
+      break;
+    }
+    case 'go-pwd':
+      goPassword();
       break;
     case 'change-pwd': {
       const oldPwd = ($('#pwd_old') || {}).value || '';
@@ -3447,7 +3515,7 @@ document.addEventListener('submit', e => {
 
 $('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') tryCloseModal(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { if ($('#modalWrap').classList.contains('show')) tryCloseModal(); else closeTaskPage(); }
+  if (e.key === 'Escape') { closeAcctMenu(); if ($('#modalWrap').classList.contains('show')) tryCloseModal(); else closeTaskPage(); }
   if (e.key === 'Enter' && $('#auth').classList.contains('show') && (e.target.id === 'a_no' || e.target.id === 'a_name')) {
     e.preventDefault(); doLogin();
   }

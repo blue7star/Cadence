@@ -53,6 +53,24 @@ body.admin-mode #nav{display:none}
 .topbar h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
 .topbar .sub{color:var(--ink3);font-size:12px;margin-left:2px}
 .spacer{flex:1}
+/* 账号菜单：右上角一眼可见，改密码不用先绕进设置页找卡片 */
+.acct{position:relative}
+.acct-btn{display:flex;align-items:center;gap:6px;border:1px solid transparent;background:transparent;
+  border-radius:18px;padding:3px 8px 3px 3px;cursor:pointer;font:inherit;color:var(--ink)}
+.acct-btn:hover,.acct-btn[aria-expanded=true]{background:#f1f5f9;border-color:var(--line)}
+.ava.sm{width:24px;height:24px;font-size:11px}
+.acct .caret{color:var(--ink3);font-size:10px}
+.acct-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:196px;background:#fff;border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 10px 28px rgba(15,23,42,.13);padding:6px;z-index:40}
+.acct-head{padding:7px 9px 8px;border-bottom:1px solid var(--line2);margin-bottom:4px}
+.acct-head b{display:block;font-size:12.5px}
+.acct-head small{display:block;color:var(--ink3);font-size:11px;margin-top:2px}
+.acct-menu button{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:7px;
+  padding:8px 9px;font:inherit;font-size:12.5px;color:var(--ink);cursor:pointer}
+.acct-menu button:hover{background:#f1f5f9}
+body.admin-mode #exportBtn{display:none}
+/* 从账号菜单跳到「修改密码」时闪一下边框，让人知道落在了哪里 */
+.card.flash{box-shadow:0 0 0 3px rgba(37,99,235,.18);transition:box-shadow .25s}
 .content{padding:18px 22px 70px;max-width:1320px;width:100%}
 
 .pill{font-size:11.5px;border-radius:20px;padding:3px 10px;background:#f1f5f9;color:var(--ink2);border:1px solid var(--line)}
@@ -550,7 +568,20 @@ tbody tr:hover{background:#fafbfd}
       <div class="spacer"></div>
       <span class="pill" id="workdayPill"></span>
       <span class="sync" id="syncPill"><i></i><span>连接中</span></span>
+      <button class="btn sm" id="exportBtn" data-act="export-tasks"
+        title="导出我的任务（CSV，一行一个阶段；含直接负责与已承接的常规/专项）">导出 CSV</button>
       <button class="cv-chip" id="appVer" hidden title="查看更新记录"></button>
+      <div class="acct" id="acct">
+        <button class="acct-btn" data-act="acct-toggle" aria-haspopup="menu" aria-expanded="false" title="账号">
+          <span class="ava sm" id="topAva">·</span>
+          <span id="topName">—</span><span class="caret">▾</span>
+        </button>
+        <div class="acct-menu" id="acctMenu" hidden role="menu">
+          <div class="acct-head"><b id="menuName">—</b><small id="menuMeta">—</small></div>
+          <button role="menuitem" data-act="go-pwd">账号与密码</button>
+          <button role="menuitem" data-act="logout">退出登录</button>
+        </div>
+      </div>
     </header>
     <div class="content" id="view"></div>
   </div>

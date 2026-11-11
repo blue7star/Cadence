@@ -15,8 +15,8 @@ not_run: none
 
 - 会话门：所有接口绑 `sess`，无会话 401；`me ≡ session.no`，带别人的 `me` 403。
 - 登录 / 退出 / 改密 / 管理员重置密码 / 「仍用初始密码」名单五个接口。
-- 独立管理账号：`admin_auth` 表，账号 `admin`，不占工号、不进 `emp`；首次启动随机生成初始密码、
-  只在启动日志打印一次；首登强制改密；不读 `CADENCE_ADMIN_NO`。
+- 独立管理账号：`admin_auth` 表，账号 `admin`，不占工号、不进 `emp`；随机初始密码打在启动日志里，
+  改密前每次重启都换一个新的（旧密码立刻作废），改过之后不再生成；首登强制改密；不读 `CADENCE_ADMIN_NO`。
 - 导出：`GET /api/export/tasks.csv`（UTF-8 BOM、`#` 注释头、一行一阶段、任务级列只在首行）。
 - `_dev/e2e.mjs` 每个身份先登录 + cookie 透传；e2e 夹具迁到 `VACUUM INTO` 的测试库副本，
   `--full` 自起 8799 实例、跑完收摊，真实库不动。
@@ -61,21 +61,22 @@ PASS  契约门禁反面用例（M1/M8 会拦）  · 通过：26/26 个用例符
 PASS  工作区干净（只验已入索引的树）  · 索引即待提交的树
 PASS  测试实例在跑（独立测试库，真实库不动）  · v0.9.0 · D:\ai_project\ai_work\Cadence\_dev\.test-db\workbench.db
 PASS  测试实例打印了 admin 一次性初始密码  · （已交给 e2e 做首次登录）
+PASS  未改密时重启：打印新密码，旧密码作废、新密码可登录且仍要求改密  · 新 ok / 旧 已作废 / 是否换了密码 true
 PASS  e2e 205 项
-PASS  改密 → 真重启 → 管理账号新密码可登录、一次性初始密码失效  · 新 ok / 旧 已失效
+PASS  改密 → 真重启 → 管理账号新密码可登录、旧密码失效、且不再打印新初始密码  · 新 ok / 旧 已失效 / 重启还打印 否
 PASS  重置过的员工密码在重启后仍然有效  · {"ok":true,"me":{"no":"1004","name":"王浩","role":"研发工程师","dept":"产品部","mgrNo":"1012"},"admin":false}
 
-[通过] 12 项全绿
+[通过] 13 项全绿
 提交：git add -A → git commit（pre-commit 会当场重跑同一套验证）
 提交后：python .agents/gates/gate.py --ci --repo . 确认整体门禁（读 HEAD，提交信息要带 Task: trailer）
 ```
 
 ### 2.2 `python .agents/gates/gate.py --ci --repo .`（提交后，读 HEAD）
 
-在 `cae9f12` 上运行：
+在 `e3e5796` 上运行：
 
 ```
-{"base": "HEAD~1", "checks": [{"detail": "TASK-20261110-auth-export (G2) admitted, 3 protected paths", "id": "M1", "ok": true, "state": "PASS"}, {"detail": "TASK-20261110-auth-export 受理五字段齐备", "id": "M8", "ok": true, "state": "PASS"}, {"detail": "5 blueprints updated", "id": "M3", "ok": true, "state": "PASS"}, {"detail": "1 PASS events bound", "id": "M2", "ok": true, "state": "PASS"}, {"detail": "version authority: version.js", "id": "M4", "ok": true, "state": "PASS"}, {"detail": "2 snapshots verified", "id": "M6", "ok": true, "state": "PASS"}, {"detail": "0 dead links", "id": "M5", "ok": true, "state": "PASS"}], "exit": 0, "legacy": 0, "mode": "ci", "scope": "project", "status": "pass"}
+{"base": "HEAD~1", "checks": [{"detail": "TASK-20261110-auth-export (G2) admitted, 7 protected paths", "id": "M1", "ok": true, "state": "PASS"}, {"detail": "TASK-20261110-auth-export 受理五字段齐备", "id": "M8", "ok": true, "state": "PASS"}, {"detail": "5 blueprints updated", "id": "M3", "ok": true, "state": "PASS"}, {"detail": "1 PASS events bound", "id": "M2", "ok": true, "state": "PASS"}, {"detail": "version authority: version.js", "id": "M4", "ok": true, "state": "PASS"}, {"detail": "2 snapshots verified", "id": "M6", "ok": true, "state": "PASS"}, {"detail": "0 dead links", "id": "M5", "ok": true, "state": "PASS"}], "exit": 0, "legacy": 0, "mode": "ci", "scope": "project", "status": "pass"}
 ```
 
 ## 3. 与契约的差异
@@ -83,6 +84,8 @@ PASS  重置过的员工密码在重启后仍然有效  · {"ok":true,"me":{"no"
 - `out_of_scope` 原文写「只新增 cred 与 sess 两张表」；实际实现按同条 `stop_conditions` 的第 4 项
   （独立 admin 账号）多了一张 `admin_auth`，`task.md` 的「读法（cv3）」已写明这处放宽。
 - `modules` 增加了 `version`（0.9.0 发版归本契约），因此 `contract_version` 从 1 走到 3。
+- admin 初始密码从「只打印一次」改为「改密前每次启动都重新生成」：`task.md` 里 cv2 那段是当时的决定记录，
+  按「契约摘要不可回改」的既有规则保持原样，现行口径以 `specs/features/auth-and-transfer.md` §C8 与本文件为准。
 - 本轮收口删除了 `verify-report` / `--recheck` / `pass-anchors`——这是第二轮复核提出、用户拍板的
   「砍重复实现」，不是范围蔓延。
 

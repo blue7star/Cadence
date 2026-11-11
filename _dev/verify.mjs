@@ -1,21 +1,18 @@
 'use strict';
 /* 本地门禁：提交前那道真正会拦人的闸。
  *
- * 为什么自建而不用 ai-native-engineering 的 gates/gate.py：
- * 它的 M1/M3 只比 `HEAD~1...HEAD`，0.4.7–0.4.13 七个版本堆在工作区没提交时，
- * `gate.py --ci` 照样返回 pass。门禁看不见「即将提交的这棵树」，就等于没有门禁。
- * 这里换个口径：先算「已经 git add 的这棵树」的摘要（索引 blob，LF 归一），
- * 校验通过才把摘要记下来；pre-commit 再复核摘要没变过。报告进版本库，任何人 checkout 后能复算。
+ * 2026-11-11 收口：这里只做「当场验证」，不再产出任何可被手改的凭证。
+ * 之前有三套东西都在回答「这棵树验过没有」——入库的 verify-report.json、--recheck 复算、
+ * pass-anchors.md 锚点账本；结果是谁都能改报告，门禁反而要不断加校验层去追。
+ * 现在只有一条：提交时当场跑语法 + 契约状态 + e2e，跑不过就不许提交。
  *
  *   node _dev/verify.mjs --fast   静态检查（秒级，改一行就跑得动）
- *   node _dev/verify.mjs --full   静态检查 + 版本自检 + e2e（提交前跑这个）
- *   node _dev/verify.mjs --hook   pre-commit 调用：静态检查 + 复核这棵树验过
- *   node _dev/verify.mjs --recheck  换台机器 checkout 之后复算：与归档报告逐文件比对
+ *   node _dev/verify.mjs --full   静态检查 + e2e（提交前跑这个；也要工作区干净）
+ *   node _dev/verify.mjs --hook   pre-commit 调用：当场跑静态检查 + e2e
  *
  * 退出码：0 通过；1 不通过（pre-commit 会据此拦下提交）。
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -23,14 +20,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
-const REPORT = path.join(ROOT, '_dev', 'verify-report.json');
-const FAST_REPORT = path.join(ROOT, '_dev', 'verify-report-fast.json');
-const FAIL_REPORT = path.join(ROOT, '_dev', 'verify-report-last-fail.json');
-/* 生成物不参与摘要：报告里写着摘要，摘要又算报告 → 写完就自指。
-   它进版本库是为了让任何人复算，不是为了改变这棵树的身份。 */
-const GENERATED = /^_dev\/verify-report(-last-fail|-fast)?\.json$/;
-const BASE = process.env.CADENCE_BASE || 'http://localhost:8788';
 const MODE = process.argv[2] || '--fast';
+const FULL = MODE === '--full' || MODE === '--hook';
 
 const checks = [];
 function check(name, ok, info = '') {
@@ -95,33 +86,14 @@ function version() {
    - 交付段空着，状态却是 READY_FOR_REVIEW / PASS → 红（说可以复核了，可什么都没交）；
    - 交付段有内容，状态却是 PLANNED / IN_PROGRESS → 红（做完了不往前走）；
    - 交付有内容、停在 READY_FOR_REVIEW → 必须在 issues.md「未解决」表里挂编号（欠债登记，不是豁免）；
-   - PASS 另外要：一次 --full 的绿证据 + 复核记录绑在**它复核的那棵树**上（当前树，或在 `.agents/archive/pass-anchors.md` 里登记过的历史树）+ 结论就是「通过」（「有条件通过」不算）；
+   - PASS 另外要：复核方式、结论「通过」（「有条件通过」不算）、发现的问题有编号或「无」、
+     以及**绑定一个归档提交号**——git 提交本身不可变，这就是最可靠的锚；同一份契约必须写明
+     「仅对原树有效，未在现行树复核」，门禁只验那个提交在库里存在，不假装它验过现在的树；
    - 一个编号只能挂一份契约，PASS 之后也一样——否则它就从欠债凭证变成通用豁免券。
-   机器只能证明「有人写下过一条指向这版代码的复核记录」，证明不了复核真的发生了——那部分仍归人。 */
+   机器只能证明「有人写下过一条指向某个提交的复核记录」，证明不了复核真的发生了——那部分仍归人。 */
 function contracts() {
   const dir = path.join(ROOT, '.agents', 'archive', 'contracts');
   if (!fs.existsSync(dir)) return check('契约状态与复核记录', false, '找不到 .agents/archive/contracts/');
-  const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
-  const live = rep && rep.full && rep.ok ? rep.digest : null;
-  /* 独立锚点记录：每份历史 PASS 当初复核的是哪棵树、之后的树怎么变的。
-     它不改契约原文，也不代替复核结论；只在「摘要不是当前树」时提供出处。 */
-  const anchorFile = path.join(ROOT, '.agents', 'archive', 'pass-anchors.md');
-  const anchors = () => (fs.existsSync(anchorFile)
-    ? fs.readFileSync(anchorFile, 'utf8').split('\n') : []);
-  /* 账本只许追加：锚点写进去之后不能再改。
-     拿 HEAD 里的那份做前缀比对——改一个旧锚点，等于把历史证据挪个位置，
-     而门禁只认账本里的原始锚点，改了就成「自己给自己发豁免券」。
-     第一版在 HEAD 里还不存在时（或不在 git 仓库里）不设限。 */
-  const anchorsAppendOnly = () => {
-    if (!fs.existsSync(anchorFile)) return true;
-    let head;
-    try {
-      head = execFileSync('git', ['show', 'HEAD:.agents/archive/pass-anchors.md'],
-        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch { return true; }
-    const now = fs.readFileSync(anchorFile, 'utf8').replace(/\r\n/g, '\n');
-    return now.startsWith(head.replace(/\r\n/g, '\n'));
-  };
 
   const files = [];
   (function walk(d) {
@@ -138,7 +110,6 @@ function contracts() {
   const unresolved = fs.existsSync(path.join(ROOT, '.agents', 'issues.md'))
     ? fs.readFileSync(path.join(ROOT, '.agents', 'issues.md'), 'utf8').split('## 已解决')[0] : '';
   const bad = [];
-  if (!anchorsAppendOnly()) bad.push('pass-anchors.md 改写了已提交的锚点（账本只许追加）');
   const nos = (t) => [...t.matchAll(/[#＃](\d+)/g)].map((x) => x[1]);
   const debts = {}; /* 欠债编号 → 挂了它的契约名，用来发现「一张豁免券被几份契约共用」 */
 
@@ -252,8 +223,7 @@ function contracts() {
       continue;
     }
 
-    /* ── PASS：交付、证据、复核记录三样都要，而且要对得上 ── */
-    if (!live) { bad.push(`${name}：标了 PASS，但没有任何一次 --full 的绿证据`); continue; }
+    /* ── PASS：交付、复核记录、归档提交三样都要 ── */
     const way = val(seg3, '复核方式');
     const obj = val(seg3, '复核对象');
     const found = val(seg3, '发现的问题');
@@ -262,15 +232,16 @@ function contracts() {
     /* 模板写的是「新开一轮对话」，门禁原先只认「新开的对话」——按模板填的 PASS 会被误拦。
        这类「模板与门禁对不上」的错，机器只会报成「复核方式不合格」，人看了只会去改文档。 */
     if (!/^(新开(的对话|一轮对话)|独立的子代理|他人)/.test(way)) holes.push('复核方式（要写明是谁、哪种方式）');
-    /* PASS 绑的是「它复核时那棵树」，不是「现在这棵树」。
-       旧写法要求所有历史 PASS 契约都包含当前摘要——每改一次代码就得回去改历史结论，
-       等于把复核证据改成「看起来还绿」。现在：摘要等于当前树 → 通过；
-       摘要不是当前树 → 必须在 pass-anchors.md 里有一条同时写着这份契约名和这个摘要的锚点。
-       摘要写错、锚点缺失、表里查不到，照样红。 */
-    const dg = (obj.match(/树摘要\s*`?([0-9a-f]{16})`?/) || [])[1];
-    if (!dg) holes.push('复核对象（必须写 16 位树摘要）');
-    else if (dg !== live && !anchors().some((line) => line.includes(name) && line.includes(dg))) {
-      holes.push(`复核对象 ${dg} 既不是当前这棵树（${live}），也没有在 .agents/archive/pass-anchors.md 里登记锚点`);
+    /* 复核对象只能绑提交号：git 提交不可变，改不动，也不用复算摘要。
+       以前绑 16 位树摘要，树一变就得回去改历史结论，或者靠锚点账本「借」一个出处——
+       两套账最后都变成了「想办法让门禁变绿」。现在只认「归档提交 `xxxxxxx`」。 */
+    const arc = (obj.match(/(?:归档提交|commit)\s*`?([0-9a-f]{7,40})`?/) || [])[1];
+    if (!arc) holes.push('复核对象（必须写 `归档提交 `xxxxxxx``）');
+    else {
+      const exists = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${arc}^{commit}`],
+        { cwd: ROOT, encoding: 'utf8' });
+      if (exists.status !== 0) holes.push(`归档提交 ${arc} 在库里不存在`);
+      if (!/仅对原树有效/.test(s)) holes.push('必须注明「仅对原树有效，未在现行树复核」');
     }
     /* PASS 的结论只能是「通过」。「有条件通过」的意思是条件还没做完，那就是没通过。 */
     if (!/^通过/.test(verdict) || /有条件/.test(verdict)) {
@@ -289,7 +260,7 @@ function contracts() {
     if (names.length > 1) bad.push(`issues.md #${no} 被 ${names.length} 份契约共用（${names.join('、')}）——欠债要一条对一份`);
   }
 
-  return check(`契约状态 ${files.length} 份（交付即须复核，复核绑树摘要）`, bad.length === 0,
+  return check(`契约状态 ${files.length} 份（交付即须复核，PASS 绑归档提交）`, bad.length === 0,
     bad.length ? bad.join('；') : '');
 }
 
@@ -304,7 +275,7 @@ function gateSelftest() {
   if (!fs.existsSync(file)) return check('门禁反面用例', false, '找不到 _dev/gate-selftest.mjs——没人证明它拦得住绕法');
   const r = spawnSync(process.execPath, [file], {
     encoding: 'utf8', maxBuffer: 1 << 24,
-    env: { ...process.env, CADENCE_NO_SELFTEST: '1', CADENCE_NO_REPORT: '1' }
+    env: { ...process.env, CADENCE_NO_SELFTEST: '1' }
   });
   const out = ((r.stdout || '') + (r.stderr || '')).trim();
   const fails = out.split('\n').filter((l) => l.startsWith('FAIL'));
@@ -332,88 +303,12 @@ function gateContractSelftest() {
       : (fails.length ? fails.join(' | ') : out.split('\n').slice(-3).join(' ')));
 }
 
-/* ── 4. 这棵树的摘要 ─────────────────────────────────────── */
-/* 覆盖「已跟踪 + 已暂存 + 未跟踪但没被忽略」的文件，也就是 git add -A 之后要进库的那批。
-   工作区脏不脏不影响算摘要——脏状态正是要被验的对象。
-
-   但摘要只算「会改变运行行为」的文件，文档排除在外。两个原因，都是实测出来的：
-   1) 契约要把摘要写进自己，摘要又算了契约 → 写完就变，这个锚点永远对不上（自指）；
-   2) 纯文档改动不改变任何可观察行为，为它重跑 90 秒 e2e 是浪费，
-      而 AGENTS.md 第 2 节本来就允许 G0 只跑 --fast。
-   文档单独算一个 docsDigest，只作记录，不参与放行判断。 */
-/* `artifacts/` 是证据，不是运行行为：任务契约、交付、verdict、事件账本都在这儿。
-   把它算进代码摘要会让「写一条证据」就改一次代码摘要——刚验完的树立刻变成另一棵树，
-   归档契约的复核锚点永远落后一代，下次 `--full` 必红，最后只能 `--no-verify`（issues #64）。
-   所以它和 `.agents/` 一样：不进代码摘要，进证据摘要，让 `--hook` 仍能看见它变了。 */
-const DOC_ONLY = /^(docs\/|\.agents\/|artifacts\/|CHANGELOG\.md$|README\.md$|DEVELOPMENT\.md$|AGENTS\.md$|issues\.md$)/;
-/* 「证据与规矩」类文件：不改变运行行为，但改变了「能不能信这棵树」。
-   它们也排除在代码摘要之外，所以单独算一个 evidenceDigest，让 --hook 也能看见——
-   否则改完契约第 3 段、改完 AGENTS.md 的 G 分级，门禁一律认为「这棵树没变过」。 */
-/* 2026-11-05 文档归位后，契约/issue/复核/采纳记录全部收进 `.agents/`，一条前缀覆盖。 */
-const EVIDENCE = [/^\.agents\//, /^artifacts\//, /^AGENTS\.md$/];
-
-/* 2026-11-10：摘要改成对**索引里的 git blob** 做 LF 归一后再算。
-   旧写法直接读工作区原文，有两个复算不出来的洞：
-   1) 同一份代码，CRLF 检出与 LF 检出会算出两个值——「任何人 checkout 后复算」就是句空话；
-   2) 工作区里没 add 的改动会混进摘要，验的和提交的可能不是同一份东西。
-   现在同样的 blob + 同样的归一，谁算都一样；`--full` 另外要求工作区干净（见 worktreeClean），
-   提交后 `git rev-parse HEAD^{tree}` 就是这份索引，报告里也记了它的 sha。 */
-function treeDigest() {
-  const raw = execFileSync('git', ['ls-files', '-s', '-z'],
-    { cwd: ROOT, maxBuffer: 1 << 28 }).toString();
-  const entries = raw.split('\0').filter(Boolean).map((line) => {
-    const tab = line.indexOf('\t');
-    const [mode, sha, stage] = line.slice(0, tab).split(' ');
-    return { mode, sha, stage, path: line.slice(tab + 1) };
-  }).filter((e) => e.stage === '0' && !GENERATED.test(e.path))
-    .sort((a, b) => (a.path < b.path ? -1 : 1));
-
-  const batch = execFileSync('git', ['cat-file', '--batch'], {
-    cwd: ROOT, maxBuffer: 1 << 29,
-    input: entries.map((e) => e.sha).join('\n') + '\n'
-  });
-  const h = crypto.createHash('sha256');
-  const dh = crypto.createHash('sha256');
-  const eh = crypto.createHash('sha256');
-  const each = {};
-  let codeFiles = 0;
-  let evidenceFiles = 0;
-  let pos = 0;
-  for (const e of entries) {
-    const nl = batch.indexOf(10, pos);
-    const size = Number(batch.toString('utf8', pos, nl).split(' ')[2]);
-    let buf = batch.subarray(nl + 1, nl + 1 + size);
-    pos = nl + 1 + size + 1; /* 跳过内容后面那个换行 */
-    /* LF 归一：仓库里同一个文件不管以什么行尾检出，摘要必须一样 */
-    if (buf.includes(13)) buf = Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
-    each[e.path] = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 12);
-    const isDoc = DOC_ONLY.test(e.path);
-    const hh = isDoc ? dh : h;
-    if (!isDoc) codeFiles++;
-    if (EVIDENCE.some((re) => re.test(e.path))) {
-      evidenceFiles++;
-      eh.update(e.path); eh.update('\0'); eh.update(String(buf.length)); eh.update('\0'); eh.update(buf);
-    }
-    hh.update(e.path); hh.update('\0'); hh.update(String(buf.length)); hh.update('\0'); hh.update(buf);
-  }
-  return {
-    digest: h.digest('hex').slice(0, 16), docsDigest: dh.digest('hex').slice(0, 16),
-    evidenceDigest: eh.digest('hex').slice(0, 16), algo: 2,
-    files: Object.keys(each).length, codeFiles, evidenceFiles, each
-  };
-}
-
-function headRev() {
-  try {
-    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT }).toString().trim();
-  } catch { return ''; }
-}
-
-/* --full 只验「已经全部 add 的树」：人跑的是这份，提交的也得是这份。
-   报告是生成物，每跑一次都会变，不算脏。 */
+/* ── 4. 工作区 ───────────────────────────────────────────── */
+/* 只验「已经全部 add 的树」：人跑的是这份，提交的也得是这份。
+   不再算摘要——没有报告要跟索引对账，唯一要证明的就是「你验的和你提交的是同一份」。 */
 function worktreeClean() {
   const list = (args) => execFileSync('git', args, { cwd: ROOT }).toString()
-    .split('\n').filter((f) => f && !GENERATED.test(f));
+    .split('\n').filter(Boolean);
   const bad = [...new Set([
     ...list(['diff', '--name-only']),
     ...list(['ls-files', '--others', '--exclude-standard'])
@@ -422,12 +317,6 @@ function worktreeClean() {
     bad.length
       ? `未暂存/未跟踪 ${bad.length} 个：${bad.slice(0, 5).join(', ')}${bad.length > 5 ? ' …' : ''} → git add 后重跑`
       : '索引即待提交的树');
-}
-
-/* 摘要对不上时，指出是哪些文件变了——只说「树变了」等于让人自己猜 */
-function diffPaths(a = {}, b = {}) {
-  return [...new Set([...Object.keys(a), ...Object.keys(b)])]
-    .filter((k) => a[k] !== b[k]).sort();
 }
 
 /* ── 4. 服务与 e2e ───────────────────────────────────────── */
@@ -589,7 +478,9 @@ async function main() {
   console.log(`\n[校验] ${MODE}  ${path.basename(ROOT)}\n`);
   let ok = syntax() && version() && contracts() && gateSelftest();
 
-  if (MODE === '--full') {
+  if (FULL) {
+    /* 提交时当场跑，不再先看有没有「验过的报告」。
+       少了报告，也就没有了「手改报告骗过 pre-commit」这条缝。 */
     ok = worktreeClean() && ok;
     /* 自己起一个读测试库副本的实例：不依赖谁先手工把 8788 点起来，
        也不会把真实库里的人的密码改成工号、把人造任务留在真实数据里。 */
@@ -607,79 +498,14 @@ async function main() {
     }
   }
 
-  const tree = treeDigest();
-
-  if (MODE === '--recheck') {
-    /* 换台机器 checkout 之后，用同一份归档报告复算：摘要必须一样。
-       摘要只算索引 blob + LF 归一，所以「谁算都一样」这句才不是空话。 */
-    const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
-    const same = !!rep && rep.full === true && rep.ok === true
-      && rep.digest === tree.digest && rep.evidenceDigest === tree.evidenceDigest;
-    const d = rep ? diffPaths(rep.each, tree.each) : [];
-    const why = !rep ? '没有归档的报告 → 先跑 --full 并提交它'
-      : same ? `${rep.digest} · 报告 head ${rep.head} · 逐文件复算一致`
-        : `${d.length} 个文件与报告不一致${d.length ? '：' + d.slice(0, 5).join(', ') + (d.length > 5 ? ' …' : '') : ''}`;
-    check('复算：这棵树与归档报告一致', same, why);
-    ok = same && ok;
-  }
-
-  if (MODE === '--hook') {
-    /* 静态问题先报，报完再看有没有完整的验证记录 */
-    const rep = fs.existsSync(REPORT) ? JSON.parse(fs.readFileSync(REPORT, 'utf8')) : null;
-    const fast = fs.existsSync(FAST_REPORT) ? JSON.parse(fs.readFileSync(FAST_REPORT, 'utf8')) : null;
-    const codeSame = !!rep && rep.digest === tree.digest;
-    const evSame = !!rep && rep.evidenceDigest === tree.evidenceDigest;
-    /* 契约/台账/规矩改了但代码没动：跑一次 0.5 秒的 --fast 就够，不用陪跑 90 秒 e2e */
-    const fastCovers = !!fast && fast.ok === true && fast.digest === tree.digest
-      && fast.evidenceDigest === tree.evidenceDigest;
-    const bound = !!rep && rep.full === true && rep.ok === true && codeSame && (evSame || fastCovers);
-    let why = '';
-    if (bound) why = `${rep.digest} · ${rep.at.slice(11, 19)} 验过` + (evSame ? '' : '（文档改动由 --fast 覆盖）');
-    else if (!rep) why = '从来没有验证记录 → 先跑 node _dev/verify.mjs --full';
-    else if (!rep.full) why = '这棵树只跑过 --fast，缺 e2e → 重跑 --full';
-    else if (!rep.ok) why = '上次完整校验没通过 → 修完重跑 --full';
-    else if (!codeSame) {
-      const d = diffPaths(rep.each, tree.each);
-      why = `验过之后又改了 ${d.length} 个文件（${d.slice(0, 5).join(', ')}${d.length > 5 ? ' …' : ''}）→ 重跑 --full`;
-    } else if (!evSame) why = '契约 / 台账 / 规矩改过了 → 跑 node _dev/verify.mjs --fast';
-    else why = `${rep.digest} 的记录不完整 → 重跑 --full`;
-    check('这棵树跑过完整校验', bound, why);
-    ok = ok && bound;
-  }
-
-  /* 证据只许被 --full 更新。--fast 写到另一个文件：
-     它是「改一行先看一眼」的秒级自检，写进正式证据就会把上次的绿记录覆盖成 full=false。
-     失败的 --full 也不写正式证据——一次 e2e 抖动不该把唯一的绿记录弄丢；
-     靠 digest 对不上来拦「失败后又改代码」，而不是靠销毁证据。
-     `CADENCE_NO_REPORT`：门禁反面用例会拿改过的契约反复跑 --fast，那是探针，不是证据，
-     让它写报告等于用假状态覆盖真记录。 */
-  if (process.env.CADENCE_NO_REPORT) { /* 探针模式：只判绿红，不写任何证据 */ } else if (MODE === '--full') {
-    const report = {
-      at: new Date().toISOString(), mode: MODE, head: headRev(),
-      digest: tree.digest, docsDigest: tree.docsDigest, evidenceDigest: tree.evidenceDigest,
-      algo: tree.algo,
-      files: tree.files, codeFiles: tree.codeFiles, evidenceFiles: tree.evidenceFiles,
-      each: tree.each, full: true, ok, checks
-    };
-    if (ok) fs.writeFileSync(REPORT, JSON.stringify(report, null, 1), 'utf8');
-    else {
-      fs.writeFileSync(FAIL_REPORT, JSON.stringify(report, null, 1), 'utf8');
-      if (fs.existsSync(REPORT)) console.log('（这次没通过，正式的绿证据保留不动，见 verify-report-last-fail.json）');
-    }
-  } else if (MODE === '--fast') {
-    fs.writeFileSync(FAST_REPORT, JSON.stringify({
-      at: new Date().toISOString(), mode: MODE, ok,
-      digest: tree.digest, evidenceDigest: tree.evidenceDigest
-    }, null, 1), 'utf8');
-  }
-
   const failed = checks.filter((c) => !c.ok);
   console.log('');
   if (ok) {
-    console.log(`[通过] ${checks.length} 项全绿 · 树 ${tree.digest}`
-      + `（${tree.codeFiles} 个代码文件 / ${tree.files - tree.codeFiles} 个文档）`);
-    if (MODE === '--full') console.log('可以提交：git add -A && git commit -m "…"');
-    else if (MODE === '--fast') console.log('--fast 不跑 e2e：只适用于「代码没动、只改了文档/契约」的提交');
+    console.log(`[通过] ${checks.length} 项全绿`);
+    if (MODE === '--full') {
+      console.log('提交：git add -A → git commit（pre-commit 会当场重跑同一套验证）');
+      console.log('提交后：python .agents/gates/gate.py --ci --repo . 确认整体门禁（读 HEAD，提交信息要带 Task: trailer）');
+    } else if (MODE === '--fast') console.log('--fast 不跑 e2e：只适用于「改一行先看一眼」，不能当提交依据');
     process.exit(0);
   }
   console.log(`[不通过] ${failed.length}/${checks.length} 项有问题，提交会被拦下：`);

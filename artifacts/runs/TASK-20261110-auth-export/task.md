@@ -6,10 +6,10 @@
 ## 元信息
 
 task_id: TASK-20261110-auth-export
-contract_version: 2
+contract_version: 3
 base_revision: 41b9ae2
 gate_level: G2
-status: PLANNED
+status: READY_FOR_REVIEW
 owner: Planner
 modules: server-api, server-data, app-ui, tooling, version
 sibling_tasks: TASK-20261110-task-import
@@ -41,7 +41,7 @@ stop_conditions: 出现以下任一情况立刻停下问人：需要修改 task 
   - 失败 5 次锁 5 分钟（按工号 + IP）；登录错误文案合并，不再区分「工号不存在」与「密码错」。
   - `GET /api/export/tasks.csv`：范围、列定义、BOM、一行一阶段与续行规则、转义按 `specs/features/auth-and-transfer.md` §4。
   - 前端：登录页提示、改密入口、超管入口、导出按钮、401 处理。
-  - `_dev/e2e.mjs` 改造：每个身份先登录、cookie 透传；新增认证与导出断言。**这是本批正式工作量（163 项）。**
+  - `_dev/e2e.mjs` 改造：每个身份先登录、cookie 透传；新增认证与导出断言。**这是本批正式工作量（现为 205 项）。**
   - `.agents/SPEC.md` §2「一期不做密码」同步修订；`specs/modules/server-api.md`、`server-data.md`、`app-ui.md`、`tooling.md` 的职责与不变量同步。
 - 范围外：见元信息 `out_of_scope`；导入相关的接口、预览、红线判定一律不在本批。
 - 已批准的 L0-L2a 决策（Human 已拍板）：

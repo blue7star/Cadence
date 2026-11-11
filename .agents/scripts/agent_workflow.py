@@ -421,11 +421,15 @@ def bump_contract(
     evidence: Path | None,
     contract: Path | None,
 ) -> dict[str, object]:
-    """Open a sibling run at a higher contract version; the old run is never rewritten.
+    """Raise the contract version inside the same run, before work starts.
 
-    A new run directory (not an appended event) keeps the state machine untouched and
-    leaves the previous ledger byte-for-byte as history; gate compares the highest
-    contract_version PLANNED event against the current task.md digest.
+    It used to open a sibling `<task_id>-cvN/` run, which meant a contract bump
+    restarted the state machine from a fresh PLANNED event: the old chain's
+    history stayed in another directory and the new one looked untouched. The
+    gate now rejects two chains for one task, so a bump rewrites the single
+    PLANNED event at the higher version — allowed only while nothing but the
+    plan exists. Once work has started, a changed contract is a new task, not a
+    silent restart.
     """
     events = validate_run(run_dir)
     task_id = str(events[0].get("metadata", {}).get("task_id", ""))
@@ -436,12 +440,24 @@ def bump_contract(
     )
     if contract_version <= recorded:
         raise PublicError("contract_version_not_higher", recorded=recorded)
-    bumped = run_dir.parent / f"{run_dir.name}-cv{contract_version}"
-    initialize(bumped, task_id, contract_version, base_revision, evidence, contract)
+    if any(event.get("state") != "PLANNED" for event in events):
+        raise PublicError(
+            "contract_bump_after_work_started",
+            task_id=task_id,
+            hint="已进入实现/复核的链不重写；契约变了请开新 task_id",
+        )
+    ledger = run_dir / "events.jsonl"
+    recorded_bytes = ledger.read_bytes()
+    ledger.unlink()
+    try:
+        initialize(run_dir, task_id, contract_version, base_revision, evidence, contract)
+    except PublicError:
+        ledger.write_bytes(recorded_bytes)
+        raise
     return {
         "status": "success",
         "state": "PLANNED",
-        "run": bumped.as_posix(),
+        "run": run_dir.as_posix(),
         "contract_version": contract_version,
     }
 
@@ -462,30 +478,16 @@ def _gate_module() -> Any:
 def _run_candidates(run_root: Path, task_id: str) -> list[Path]:
     if not run_root.is_dir():
         return []
-    pattern = re.compile(rf"{re.escape(task_id)}(-cv[0-9]+)?")
-    return [
-        path
-        for path in run_root.iterdir()
-        if path.is_dir() and pattern.fullmatch(path.name) and (path / "events.jsonl").is_file()
-    ]
+    # 精确匹配一个目录：`<task_id>-cvN` 那种「另一条链」已经不合法（gate 会判同任务双链）。
+    path = run_root / task_id
+    return [path] if path.is_dir() and (path / "events.jsonl").is_file() else []
 
 
 def _latest_run(run_root: Path, task_id: str) -> Path:
     candidates = _run_candidates(run_root, task_id)
     if not candidates:
         raise PublicError("run_not_found", task_id=task_id, run_root=str(run_root))
-    best = candidates[0]
-    best_version = -1
-    for path in candidates:
-        events = validate_run(path)
-        version = max(
-            int(event.get("metadata", {}).get("contract_version", 0))
-            for event in events
-            if event.get("state") == "PLANNED"
-        )
-        if version >= best_version:
-            best, best_version = path, version
-    return best
+    return candidates[0]
 
 
 def task_start(

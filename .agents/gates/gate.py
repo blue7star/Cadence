@@ -240,10 +240,21 @@ def read_events(repo: Path) -> list[dict]:
     empty read.
     """
     adapted: list[dict] = []
+    owners: dict[str, str] = {}
     for run_dir in run_directories(repo):
         relative = run_dir.relative_to(repo).as_posix()
         events = _read_run_events(run_dir)
         _verify_chain(relative, events)
+        # 一个任务只能有一条事件链。曾经用 `<task_id>-cvN/` 另开一条链来「补契约」，
+        # 结果等于绕过状态机重启一次 PLANNED：旧链的 FAIL 还在，新链从零开始又「干净」了。
+        # 现在同 task_id 出现第二条链直接判账本损坏，补契约走 bump-contract（同一条链内重写 PLANNED）。
+        task_id = str((events[0]["metadata"] or {}).get("task_id") or "")
+        if task_id in owners:
+            raise LedgerError(
+                f"{relative} 与 {owners[task_id]} 声明了同一个任务 {task_id}——"
+                "一个任务只允许一条事件链（补契约用 bump-contract，不新开目录）"
+            )
+        owners[task_id] = relative
         epoch = int((events[0]["metadata"] or {}).get("rule_epoch") or 0)
         for event in events:
             metadata = event["metadata"]

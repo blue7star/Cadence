@@ -79,7 +79,7 @@
 
 ### C9 全部接口绑会话后，现有 e2e 会大面积红
 
-- 事实：`_dev/e2e.mjs` 163 项检查里，大量请求直接带 `me:'1012'` 之类参数（[app.js L2586-L2588](../../public/app.js#L2586-L2588) 的同类用法）；Node 自带 `fetch`（undici）**不会自动保存 cookie**。
+- 事实：`_dev/e2e.mjs` 205 项检查里，大量请求直接带 `me:'1012'` 之类参数（[app.js L2586-L2588](../../public/app.js#L2586-L2588) 的同类用法）；Node 自带 `fetch`（undici）**不会自动保存 cookie**。
 - 冲突：`me ≡ session.no` 一上线，所有带 `me` 的请求都会 403；`node _dev/verify.mjs --full` 必红，而它是提交前必过的那道门。
 - 结论：e2e 改造是第一批的**正式工作项**，不是「顺手修一下」。需要：登录助手（每身份一次）+ 手动 cookie 头透传 + 换身份时重新登录。零依赖约束下不引 cookie jar 库。
 

@@ -33,8 +33,8 @@ specs/modules/         # 模块边界、不变量、依赖方向（蓝图，权�
 docs/product-design.html  # 产品设计方案（含一期范围、权限、决策记录）
 docs/prototype.html       # 交互原型（无后端，localStorage，供对照）
 .githooks/pre-commit   # 提交门禁入口（需 git config core.hooksPath .githooks）
-_dev/verify.mjs        # 门禁本体：语法/版本/CHANGELOG/服务版本/e2e/树摘要
-_dev/e2e.mjs           # 端到端自检（84 项），脚本进版本库、产物不进
+_dev/verify.mjs        # 门禁本体：语法/版本/CHANGELOG/契约状态/e2e
+_dev/e2e.mjs           # 端到端自检（205 项），脚本进版本库、产物不进
 启动工作台.bat / 停止工作台.bat  # Windows 一键启停
 readme-no-node.txt     # 未安装 Node 时的提示（由 bat 用 type 输出）
 ```
@@ -245,14 +245,10 @@ e2e 与「改密 → 重启 → 新密码可登录、旧密码失效」都跑在
 **真实库一个字节都不动。** e2e 的固定基线会重置全员密码、删测试工号（`9xxxxx`）、造夹具任务，
 所以 `e2e.mjs` 拒绝在真实库上跑（未给 `CADENCE_DB` 或指向 `data/workbench.db` 直接退出 2）。
 
-`verify.mjs` 是提交门禁的本体。它算的是「已经 `git add` 的这棵树」的摘要：对索引里的 git blob 做
-LF 归一后逐个哈希，所以同一个 commit 在任何人机器上复算出来的值都一样（2026-11-10 之前读的是工作区原文，
-CRLF / LF 检出会得出两个值）。`--full` 另外要求**工作区干净**（没有未暂存的改动、没有未跟踪的文件），
-避免「验的是 A、提交的是 B」。全部绿才把摘要写进 `_dev/verify-report.json`；`--hook` 模式再复核摘要没变过。
-所以「验过之后又改了代码」会被拦，并列出改动了哪几个文件——这正是 0.4.7–0.4.13 七版积压时缺的那道闸。
-
-报告里同时记了 `head`（验证时的 HEAD）和 `each`（每个文件的哈希）；换台机器 checkout 后跑
-`node _dev/verify.mjs --recheck` 就能复算并逐文件核对，不需要重跑 e2e。
+`verify.mjs` 是提交门禁的本体，**它不留任何可被手改的凭证**：每次当场跑一遍，绿了才允许提交，
+跑出来的退出码就是结论。2026-11-11 之前它把结果写进 `_dev/verify-report.json` 入库、`--hook` 再去
+对账——结果是手改报告就能骗过 pre-commit，门禁只好不断加校验层。现在没有报告、没有 `--recheck`、
+没有锚点账本；`--full` 要求**工作区干净**（验的就是要提交的那份），`--hook` 当场重跑同一套检查。
 
 钩子要在每台机器上启用一次，**不做就静默失效**：
 
@@ -261,8 +257,8 @@ git config core.hooksPath .githooks
 ```
 
 脚本里的 Chromium 路径取自本机 Playwright 缓存，换机器需要改 `_dev/e2e.mjs` 顶部的 `CHROME` 常量。
-`_dev/` 下的**脚本进版本库**（e2e 得能换机器复跑），产物不进：截图在 `_dev/shots/`。
-唯一的例外是 `_dev/verify-report.json`——它是**证据**，跟着提交一起进库，否则「这棵树验过」无法被别人复算。
+`_dev/` 下的**脚本进版本库**（e2e 得能换机器复跑），产物不进：截图在 `_dev/shots/`，
+验证报告（`_dev/verify-report*.json`）已不再生成，也没有需要入库的证据文件。
 
 ## 8. 换机器部署
 

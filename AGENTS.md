@@ -50,7 +50,7 @@
 
 | 轨 | 实现 | 管什么 |
 |---|---|---|
-| 代码门禁 | `_dev/verify.mjs` | 语法、版本一致性、CHANGELOG、服务版本、e2e、树摘要（含未提交/未跟踪文件） |
+| 代码门禁 | `_dev/verify.mjs` | 语法、版本一致性、CHANGELOG、契约状态、门禁反例、工作区干净、e2e（**当场跑，不留入库的报告**） |
 | 契约门禁 | `.agents/gates/gate.py`（M1-M8） | 契约存在、证据绑定候选（哈希）、模块蓝图同步、版本权威、引用完整、快照封存、受理字段完备 |
 
 **G1-G3 改动走三 agent 闭环**（`ai-native-engineering` 采纳后，取代旧的一页三段契约）：
@@ -63,7 +63,7 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
 - 契约用 `.agents/templates/` 三件套（task / delivery / verdict），事件流在 `artifacts/runs/<id>/events.jsonl`（哈希链，只追加，禁手改）。
 - 旧 `docs/contracts/` 的一页三段自 2026-11-04 起**退役**，已归档到 `.agents/archive/contracts/`（只读留档），新契约不再用。
 - `git commit` 信息带 `Task: <task_id>` trailer；pre-commit 跑 `gate.py --fast --staged` 拦「已 add 的受保护路径缺契约」，CI 跑 `gate.py --ci` 拦「没有证据的合并」。
-- 树摘要仍分三把尺子（代码 / 证据 / 文档），见第 5 节——它管「代码验过没」，gate.py 管「流程走完没」，两者管的是两件事。
+- 树摘要与锚点账本已撤掉（2026-11-11 收口）：`verify.mjs` 不再写 `verify-report.json`、不做 `--recheck`、不认 `pass-anchors.md`。它管「这棵树现在跑不跑得通」（当场跑，凭证就是退出码），`gate.py` 管「流程走完没」，两者管的是两件事。
 
 `gate.py` 三条边界要记牢：`NOT_RUN` 绝不等于 PASS；pre-commit 未建账本时只提示不拦，CI 对 `no_evidence` 退出 1；`--scope` 只能用 `project`。
 
@@ -76,17 +76,18 @@ Planner 写 task.md → Worker 实现 + delivery.md → Reviewer 独立写 verdi
 ## 5. 提交纪律
 
 - **改完就提交，不要攒。** 一次提交只做一件事。发版单独一个 `release(vX.Y.Z): …`。
-- 提交前必须过双轨：
+- 提交前必须过双轨。**顺序固定**，别倒：
 
 ```bash
-node _dev/verify.mjs --full                      # 代码门禁：语法 + 版本 + CHANGELOG + 服务版本 + e2e
-python .agents/gates/gate.py --ci --repo .       # 契约门禁：M1-M8（G1 以上改动）
-git add -A && git commit -m "feat(日历): 一句话"
+git add -A                                       # ① 先入索引：验的和要提交的是同一份
+node _dev/verify.mjs --full                      # ② 代码门禁：语法 + 版本 + CHANGELOG + 契约状态 + 工作区干净 + e2e
+git commit -m "feat(日历): 一句话" -m "Task: TASK-xxxxxxxx"   # ③ pre-commit 当场重跑 ②，并跑 gate.py --fast --staged
+python .agents/gates/gate.py --ci --repo .       # ④ 提交后判流程：读 HEAD 这条提交（默认 HEAD~1...HEAD）
 ```
 
-- 树摘要分三把尺子：代码摘要 `digest`（js/html/bat/库脚本）、证据摘要 `evidenceDigest`（契约/issue/蓝图/AGENTS/practice/SPEC）、文档摘要 `docsDigest`（其余文档）。前两把参与判定，别混。
+- ④ 之所以在提交之后：`--ci` 认的是 `Task:` trailer 与提交里的树，提交前它看不到你要提交的东西。`--full` 绿只代表「这棵树跑得通」，不代表流程走完——两者说法不同不是冲突，是先后。
 - `pre-commit` 自动跑**两条**：`verify.mjs --hook` 与 `gate.py --fast --staged`。缺 node 或 python 一律失败退出，不静默跳过——跳过等于把闸拆了。
-- `--full` 不通过时不覆盖已有绿证据；拦「失败后又改代码」靠摘要对不上，不靠销毁证据。
+- `--hook` 与 `--full` 是同一套检查，当场重跑：所以不存在「验过之后又改代码」的缝隙，也没有需要入库对账的报告。
 - 新克隆的仓库启用钩子：`git config core.hooksPath .githooks`。**这是唯一「不做就静默失效」的一步。**
 
 ## 6. 出问题先归因，再修

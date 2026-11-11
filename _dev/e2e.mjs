@@ -2203,14 +2203,18 @@ async function main() {
     check('日历上出的是子任务名，父阶段不再单独出一条',
       cal.sub >= 1 && cal.parent === 0, JSON.stringify(cal));
 
-    await js(`moveTask('${tree.id}','2026-11-10',0);'ok'`);
+    /* 目标日不能写死：过了那一年这天，「拖到过去」会被拖拽守卫拦下，测试跟着过期。
+       取「今天 + 3 天」并跳过周末（专项阶段不排周末，拖过去也看不见）。 */
+    let TARGET = addDaysStr(new Date().toLocaleDateString('sv-SE'), 3);
+    while ([0, 6].includes(new Date(TARGET + 'T00:00:00Z').getUTCDay())) TARGET = addDaysStr(TARGET, 1);
+    await js(`moveTask('${tree.id}','${TARGET}',0);'ok'`);
     await sleep(900);
     const moved = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
       const t=j.tasks.find(x=>x.id==='${tree.id}');
       const p=t.stages.find(s=>!s.pid), k=t.stages.find(s=>s.pid);
       return {ps:p.start,ks:k.start,st:t.status};})()`);
     check('拖有子任务的阶段，子任务跟着平移同样的天数',
-      moved.ps === '2026-11-10' && moved.ks === '2026-11-10', JSON.stringify(moved));
+      moved.ps === TARGET && moved.ks === TARGET, JSON.stringify({ ...moved, TARGET }));
 
     /* 勾选放在拖动之后：勾完唯一子任务任务就完成了，已完成的任务拖不动。
        这段派给了 1002（未派发），按口径只能他勾——先派发，再以他的身份勾。 */

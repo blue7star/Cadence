@@ -859,7 +859,9 @@ def legacy_run_count(repo: Path) -> int:
     return count
 
 
-def check_m3(repo: Path, base: str, staged: bool = False) -> tuple[bool | None, str]:
+def check_m3(
+    repo: Path, base: str, staged: bool = False, task: str | None = None
+) -> tuple[bool | None, str]:
     paths = changed_paths(repo, base, staged)
     if staged and not paths:
         return None, "no staged changes: nothing evaluated"
@@ -873,7 +875,20 @@ def check_m3(repo: Path, base: str, staged: bool = False) -> tuple[bool | None, 
         contracts = staged_contracts(repo)
         if not contracts:
             return None, "NOT_RUN: 暂存区没有与 task.md 匹配的 PLANNED 契约，M3 无从校验"
-        task_id, fields = contracts[0]
+        # 暂存时可能同时有多份契约覆盖受保护路径（比如门槛改动前后各一份）。
+        # 以前这里闷头取 contracts[0]，于是 --task 指的那份没被查，pre-commit 绿、CI 红。
+        # 现在跟 M1 一个口径：有 --task 就用它，只有一份就自动，多份就明说不猜。
+        if task:
+            chosen = next((item for item in contracts if item[0] == task), None)
+            if chosen is None:
+                return False, f"--task {task} 没有匹配的暂存契约（M1 应已拦下）"
+            task_id, fields = chosen
+        elif len(contracts) == 1:
+            task_id, fields = contracts[0]
+        else:
+            return False, (
+                f"暂存区有多份匹配契约 {[item[0] for item in contracts]}，M3 不猜——用 --task 指定"
+            )
     else:
         task_id = trailer_value(commit_message(repo), "Task")
         if not task_id:
@@ -1024,7 +1039,7 @@ def run(args: argparse.Namespace) -> dict:
     plan = [
         ("M1", lambda: check_m1(repo, base, staged, getattr(args, "task", None))),
         ("M8", lambda: check_m8(repo, base, staged, getattr(args, "task", None))),
-        ("M3", lambda: check_m3(repo, base, staged)),
+        ("M3", lambda: check_m3(repo, base, staged, getattr(args, "task", None))),
     ]
     if args.ci:
         plan += [("M2", lambda: check_m2(repo)), ("M4", lambda: check_m4(repo, scope)), ("M6", lambda: check_m6(repo))]

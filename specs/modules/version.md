@@ -23,3 +23,4 @@ paths: version.js
 |---|---|---|---|
 | — | 迁移自 `docs/modules.md` | — | 初始蓝图，历史见 git |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: version.js`：模块归属由蓝图声明 |
+| TASK-20261110-auth-export | 见 git | — | 0.9.0：认证与导出、独立管理账号；版本权威仍是 `version.js`（`--check` / `--write`） |

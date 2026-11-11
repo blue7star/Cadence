@@ -80,8 +80,11 @@ PASS  重置过的员工密码在重启后仍然有效  · {"ok":true,"me":{"no"
 
 ### 2.2 `python .agents/gates/gate.py --ci --repo .`
 
-提交后运行，原始输出见 `.agents/` 门禁日志（本文件在提交前写定，故此处只留命令与期望）。
-基线（改动前 `40725ae`）已跑过一次 `--ci`，全 PASS；提交后的输出随交付回复一并给出。
+在提交 `032dbcf` 上运行（读 `HEAD~1...HEAD`）：
+
+```
+{"base": "HEAD~1", "checks": [{"detail": "TASK-20261111-stage-interval (G2) admitted, 10 protected paths", "id": "M1", "ok": true, "state": "PASS"}, {"detail": "TASK-20261111-stage-interval 受理五字段齐备", "id": "M8", "ok": true, "state": "PASS"}, {"detail": "5 blueprints updated", "id": "M3", "ok": true, "state": "PASS"}, {"detail": "1 PASS events bound", "id": "M2", "ok": true, "state": "PASS"}, {"detail": "version authority: version.js", "id": "M4", "ok": true, "state": "PASS"}, {"detail": "2 snapshots verified", "id": "M6", "ok": true, "state": "PASS"}, {"detail": "0 dead links", "id": "M5", "ok": true, "state": "PASS"}], "exit": 0, "legacy": 0, "mode": "ci", "scope": "project", "status": "pass"}
+```
 
 ## 3. 与契约的差异
 

@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS sess(
 /* 管理账号与花名册彻底分表：admin 不占工号、不进 emp。
    它不参与任何业务数据（下属列表、任务可见范围、导出、上级选择都只认 emp），
    所以「超管会不会被当成员工」这类问题从根上不存在。
-   只存哈希；初始密码首次启动随机生成、打印一次，must_change=1 时除改密/退出外全部拒绝。 */
+   只存哈希；must_change=1 期间每次启动重新生成随机密码并打印，改密后不再生成。 */
 CREATE TABLE IF NOT EXISTS admin_auth(
   account TEXT PRIMARY KEY, hash TEXT, salt TEXT, must_change INTEGER DEFAULT 1, changed_at TEXT
 );
@@ -1281,8 +1281,11 @@ const LOCK_FAILS = 5;                      /* 连续失败 5 次 */
 const LOCK_MS = 5 * 60 * 1000;             /* 锁 5 分钟 */
 
 /* 管理账号：固定账号名 admin，独立于花名册（不占工号、不进 emp）。
-   不读环境变量、也没有写死的默认密码——初始密码首次启动随机生成，只打印这一次。
-   之后库里只有 scrypt 哈希；重启不会再打印，忘了就只能按下面的说明重置库里的 admin_auth 行。 */
+   不读环境变量、也没有写死的默认密码。密码由服务自己管，目标是「永远不会丢到找不回来」：
+   - 还没人改过（must_change=1）：每次启动都重新生成一个随机密码并打印，同时更新库里的哈希。
+     上一次的日志找不到了，重启一次就有新的；代价是没改密之前，重启会让上一个密码作废。
+   - 改过之后（must_change=0）：不再生成、不再打印，改了就是改了。
+   库里始终只有 scrypt 哈希，日志是唯一能拿到明文的地方。 */
 const ADMIN_ACCOUNT = 'admin';
 
 function setAdminPassword(pwd, mustChange) {
@@ -1300,8 +1303,11 @@ function verifyAdmin(pwd) {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 const ADMIN_FIRST_PWD = (() => {
-  if (db.prepare('SELECT account FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT)) return '';
-  /* 12 位 base64url：不含易混字符，够一个人抄到浏览器里，也不是「工号」那种可猜的口令 */
+  const row = db.prepare('SELECT must_change FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT);
+  /* 已经改过密码：行在、must_change=0，什么都不做——重启不能悄悄把用户的密码换掉 */
+  if (row && !row.must_change) return '';
+  /* 12 位 base64url：不含易混字符，够一个人抄到浏览器里，也不是「工号」那种可猜的口令。
+     没改密之前每次启动都重来一个，保证「上一份日志丢了也还能再拿到一个」。 */
   const pwd = crypto.randomBytes(9).toString('base64url');
   setAdminPassword(pwd, true);
   return pwd;
@@ -1897,9 +1903,9 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('     不要暴露到公网、访客网络或端口映射；要出内网请先加反向代理与 TLS。');
   if (ADMIN_FIRST_PWD) {
     console.log('');
-    console.log('  ⚠ 已创建管理账号 admin，初始密码（只在首次启动显示这一次）：');
+    console.log('  ⚠ 管理账号 admin 还没改过密码，这是本次启动新生成的初始密码：');
     console.log(`     ${ADMIN_FIRST_PWD}`);
-    console.log('     库里只存哈希，重启不会再显示；首次登录必须立即修改。');
+    console.log('     改密之前每次重启都会换一个新的（旧密码立即作废）；改过之后不再生成、不再打印。');
   }
   console.log('');
   console.log('  在浏览器打开上面「本机访问」那个地址就能用了。');

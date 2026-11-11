@@ -342,7 +342,7 @@ async function freshTestDb() {
   /* VACUUM INTO 拿到的是一致快照；直接复制文件会漏掉还在 WAL 里、没 checkpoint 的写入 */
   src.exec(`VACUUM INTO '${TEST_DB.replace(/\\/g, '/').replace(/'/g, "''")}'`);
   src.close();
-  /* 清掉副本里的管理账号：让测试实例每次都走「首次启动随机生成并打印一次」的真实路径，
+  /* 清掉副本里的管理账号：让测试实例每次都走「随机生成并打印」的真实路径，
      e2e 才能验 mustChange。真实库里的那一行不动。 */
   const copy = new DatabaseSync(TEST_DB);
   try { copy.prepare('DELETE FROM admin_auth').run(); } catch { /* 老库还没这张表 */ }
@@ -409,51 +409,81 @@ async function testInstance() {
   check('测试实例在跑（独立测试库，真实库不动）', j.semver === want,
     j.semver === want ? `v${want} · ${TEST_DB}` : `实例是 v${j.semver}，代码是 v${want}`);
   if (j.semver !== want) { try { child.kill(); } catch { /* 已退 */ } return null; }
-  /* 首次启动才打印：从「已创建管理账号 admin……」后面那一行取出一次性密码 */
-  const m = /初始密码[^\n]*\n\s*(\S+)/.exec(child.log());
-  const adminPwd = m ? m[1] : '';
-  check('测试实例打印了 admin 一次性初始密码', !!adminPwd,
-    adminPwd ? '（已交给 e2e 做首次登录）' : '启动日志里没抓到，检查 ensureAdmin 是否被触发');
+  /* 密码在启动日志里：从「……初始密码：」后面那一行取出 */
+  const grabPwd = (log) => {
+    const m = /初始密码[^\n]*\n\s*(\S+)/.exec(log);
+    return m ? m[1] : '';
+  };
+  const firstPwd = grabPwd(child.log());
+  check('测试实例打印了 admin 一次性初始密码', !!firstPwd,
+    firstPwd ? '（已交给 e2e 做首次登录）' : '启动日志里没抓到，检查 ADMIN_FIRST_PWD 是否被触发');
   let cur = child;
+  const stopCur = () => { try { cur.kill(); } catch { /* 已退 */ } };
+  const restart = async () => {
+    /* 真重启：换一个进程读同一份测试库。改密是写库，重启之后不该变——这条只有真重启才测得出来。 */
+    stopCur();
+    await sleep(300);
+    const c = startInstance(TEST_PORT);
+    const up = await waitUp(TEST_BASE);
+    if (!up) { try { c.kill(); } catch { /* 已退 */ } return null; }
+    cur = c;
+    return c;
+  };
+
+  /* 没改密之前重启：应该重新生成并打印一个新的，上一个立即作废。
+     这是「密码永远不会丢到找不回来」的机器证明——上一份日志丢了，重启一次就有新的。 */
+  let adminPwd = firstPwd;
+  const again = await restart();
+  if (!again) {
+    check('未改密时重启：重新打印新的初始密码', false, '重启后实例起不来');
+    stopCur();
+    return null;
+  }
+  const secondPwd = grabPwd(again.log());
+  const oldLogin = firstPwd ? await postLogin(TEST_BASE, 'admin', firstPwd) : { ok: false };
+  const newLogin = secondPwd ? await postLogin(TEST_BASE, 'admin', secondPwd) : { ok: false };
+  check('未改密时重启：打印新密码，旧密码作废、新密码可登录且仍要求改密',
+    !!secondPwd && secondPwd !== firstPwd && oldLogin.ok === false
+      && newLogin.ok === true && newLogin.mustChange === true,
+    `新 ${newLogin.ok ? 'ok' : '不行'} / 旧 ${oldLogin.ok ? '还能用（不对）' : '已作废'} / 是否换了密码 ${secondPwd && secondPwd !== firstPwd}`);
+  if (!secondPwd) { stopCur(); return null; }
+  adminPwd = secondPwd;
+
   return {
     base: TEST_BASE,
     adminPwd,
-    restart: async () => {
-      /* 真重启：换一个进程读同一份测试库。改密是写库，重启之后不该变——这条只有真重启才测得出来。 */
-      try { cur.kill(); } catch { /* 已退 */ }
-      await sleep(300);
-      const c = startInstance(TEST_PORT);
-      const up = await waitUp(TEST_BASE);
-      if (!up) { try { c.kill(); } catch { /* 已退 */ } return null; }
-      cur = c;
-      return c;
-    },
+    restart,
     /* 收摊要杀「当前」那个进程：restart 之后原来那个已经不在了 */
-    stop: () => { try { cur.kill(); } catch { /* 已退 */ } }
+    stop: stopCur
   };
 }
 
 /* 重启幂等：改密 → 杀进程 → 新进程登录。密码只该在库里，不该在内存里。
    admin 的密码由 e2e 改成 Admin-E2e-2026；员工的用 1004（e2e 结束时它被重置回工号）。 */
 async function restartPwdCheck(test) {
-  const login = (no, password) => fetch(test.base + '/api/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ no, password })
-  }).then((x) => x.json()).catch(() => ({}));
-
   const again = await test.restart();
   if (!again) {
     check('改密 → 真重启 → 新密码仍然可用', false, '重启后实例起不来');
     return false;
   }
-  const adminNew = await login('admin', 'Admin-E2e-2026');
-  const adminOld = test.adminPwd ? await login('admin', test.adminPwd) : { ok: false };
-  const empReset = await login('1004', '1004');
-  const a = check('改密 → 真重启 → 管理账号新密码可登录、一次性初始密码失效',
-    adminNew.ok === true && adminOld.ok === false,
-    `新 ${adminNew.ok ? 'ok' : '不行'} / 旧 ${adminOld.ok ? '还能用（不对）' : '已失效'}`);
+  const adminNew = await postLogin(test.base, 'admin', 'Admin-E2e-2026');
+  const adminOld = test.adminPwd ? await postLogin(test.base, 'admin', test.adminPwd) : { ok: false };
+  const empReset = await postLogin(test.base, '1004', '1004');
+  /* 改过密码之后重启不该再打印：must_change=0 时 ADMIN_FIRST_PWD 什么都不做。
+     这一条要是漏了，就等于每次重启都在偷偷重置用户的密码。 */
+  const reprinted = /初始密码[^\n]*\n\s*(\S+)/.test(again.log());
+  const a = check('改密 → 真重启 → 管理账号新密码可登录、旧密码失效、且不再打印新初始密码',
+    adminNew.ok === true && adminOld.ok === false && !reprinted,
+    `新 ${adminNew.ok ? 'ok' : '不行'} / 旧 ${adminOld.ok ? '还能用（不对）' : '已失效'} / 重启还打印 ${reprinted ? '是（不对）' : '否'}`);
   const b = check('重置过的员工密码在重启后仍然有效', empReset.ok === true, JSON.stringify(empReset).slice(0, 120));
   return a && b;
+}
+
+function postLogin(base, no, password) {
+  return fetch(base + '/api/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ no, password })
+  }).then((x) => x.json()).catch(() => ({}));
 }
 
 function e2e(base, adminPwd) {

@@ -16,7 +16,7 @@ paths: server.js, data/
 - **`op_log` 有上限（默认 20000 条）**：超限时只删「不是某人第一条 `login`」的旧行；首次登录时间是初始密码名单的证据，不随日志裁剪消失。
 - `INSERT` 列名与 `run()` 参数必须成对改，加列忘补参数只能等运行时炸。
 - **密码只存 scrypt 派生值**（`cred.hash` + 每条随机 `salt`），初始密码=工号（`initial=1`），改密后 `initial=0`；`sess` 存 `sid`/`no`/`last_seen`，滑动空闲 8h、绝对 30d。导出全程只读，不回写任何表。
-- **管理账号与花名册分表**：`admin_auth(account, hash, salt, must_change, changed_at)`，只有 `admin` 一行，不占工号、不进 `emp`；初始密码首次启动随机生成、只打印一次、库里只存 scrypt 哈希；`must_change=1` 时除改密/退出外一律 403。业务查询（下属、可见范围、导出、上级校验）只读 `emp`，所以它不会被当成同事。
+- **管理账号与花名册分表**：`admin_auth(account, hash, salt, must_change, changed_at)`，只有 `admin` 一行，不占工号、不进 `emp`；随机初始密码在 `must_change=1` 期间每次启动重新生成并打印，改密后不再生成，库里只存 scrypt 哈希；`must_change=1` 时除改密/退出外一律 403。业务查询（下属、可见范围、导出、上级校验）只读 `emp`，所以它不会被当成同事。
 
 ## 依赖与边界
 - 依赖 `node:sqlite`（零第三方）、`version.js`。

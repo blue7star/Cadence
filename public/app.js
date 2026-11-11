@@ -2638,7 +2638,7 @@ function authRender(msg) {
       <div class="auth-err" id="a_err">${msg || ''}</div>
       <div class="actions"><button class="btn primary" data-act="do-login">进入工作台</button></div>
       <div class="auth-hint">初始密码 = 本人工号（首次登录后请及时修改）。<br/>
-        管理账号 admin 的初始密码是一次性随机密码，见服务启动日志；首次登录必须修改。<br/>
+        管理账号 admin 改密前的随机密码在服务启动日志里；忘了就重启一次服务，会打印新的（旧的立即作废）。<br/>
         一期仅站内使用：不做邮件、不做企业微信、不做手机推送。</div>`;
     return;
   }

@@ -2623,7 +2623,7 @@ async function main() {
   const neverHasCred = !!neverCred && neverCred.c > 0;
 
   /* --- 管理账号 admin（独立于花名册） ---
-     初始密码是服务首次启动随机生成、只打印一次的一次性密码，
+     初始密码是服务随机生成的（改密前每次启动都会重新生成并打印），
      所以由 verify.mjs 起测试实例时从 stdout 抓出来传进来；直接跑 e2e 时没有它，只能明确跳过。 */
   const ADMIN_PWD = process.env.CADENCE_TEST_ADMIN_PWD || '';
   const ADMIN_NEW = 'Admin-E2e-2026';

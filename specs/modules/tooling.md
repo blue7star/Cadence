@@ -29,3 +29,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261112-rules-conflicts | 见 git | — | 规则体检第一批：取消 G0 轻口径（统一 `--full`）；修正 gate.py 与 verify 归档契约的职责表述；复核清单 A2/A4/D4 改绑 `delivery.md` / `verdict.md` 候选摘要；归档契约整份只读、不得补写第 3 段改 PASS；实践台账证据指针改为 `verify.mjs` 退出码；自审视口与 e2e 宽度对齐；版本 bump 改 semver 三档 |
 | TASK-20261112-rules-dedup | 见 git | — | 规则体检第二批：删 AGENTS/README/复核清单/issues 中与门禁、e2e、其他文档重复的表述；删「导入必须 --apply」「verify 不留凭证」「PASS 绑归档提交」等已被代码覆盖的说明；issues #64 重复改为 #66 并结案，统计改为 11/55 |
 | TASK-20261112-temp-daytime | 见 git | — | e2e 补快速录入条选日期的正反两条断言（落所选日、不进今日清单且日期框回默认）；蓝图 changes 随 app-ui 同步 |
+| TASK-20261112-quick-entry-b | 见 git | — | e2e 改/补录入条断言：日期 chip 记忆与「明天」文案、「将建到」提示、时间显示 09:30 不撑高、刷新回今天；原「日期框回到默认今天」断言按新口径改为「记住上次选择」 |

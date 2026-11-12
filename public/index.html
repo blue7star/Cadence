@@ -366,6 +366,34 @@ tbody tr:hover{background:#fafbfd}
 .tabs button.on{color:#1d4ed8;border-bottom-color:var(--accent);font-weight:600}
 .split{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
+/* ---------- 今日待办：一句话录入条 ---------- */
+#quickForm .q-title{flex:1;min-width:180px;height:32px;border:1px solid var(--line);border-radius:8px;
+  padding:0 10px;font-size:13px;font-family:inherit;color:var(--ink);background:#fff;outline:none}
+#quickForm .q-title:focus{border-color:var(--accent)}
+#quickForm .btn{height:32px;padding:0 10px;font-size:13px}
+.q-date{position:relative;display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 10px;
+  border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;color:var(--ink);
+  cursor:pointer;white-space:nowrap}
+.q-date:hover{border-color:#cbd3e2}
+.q-date.future{border-color:#bfd3fb;background:#f3f7ff;color:#1d4ed8}
+.q-date b{font-weight:500}
+.q-date>input{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:0;padding:0;cursor:pointer}
+.q-date svg,.q-time svg{width:13px;height:13px;color:var(--ink3);flex:0 0 13px}
+.q-date.future svg{color:#1d4ed8}
+.q-time{display:inline-flex;align-items:center;height:32px}
+.q-time-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:32px;padding:0 9px;
+  border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;color:var(--ink);cursor:pointer}
+.q-time-btn.empty{width:32px;padding:0}
+.q-time-btn b{font-weight:500}
+.q-time-btn:hover{border-color:#cbd3e2}
+.q-time>input{display:none;height:32px;width:96px;border:1px solid var(--line);border-radius:8px;
+  padding:0 10px;font-size:13px;font-family:inherit;background:#fff;outline:none}
+.q-time.editing .q-time-btn{display:none}
+.q-time.editing>input{display:block}
+.q-hint{font-size:11px;color:var(--ink3);white-space:nowrap}
+@media(max-width:840px){.q-hint{display:none}}
+@media(max-width:720px){#quickForm .btn{margin-left:auto}}
+
 /* ---------- 宽弹窗 / 表单行 ---------- */
 .modal.wide{width:900px}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}

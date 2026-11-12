@@ -68,6 +68,9 @@ let syncing = false;
 let pendingRefresh = false;
 let pollTimer = null;
 let view = 'today', calCursor = monthStart(TODAY), calMode = 'month', selDay = TODAY;
+/* 快速录入条上一次选的日期：只在本次页面生命周期里记住，刷新回到今天。
+   连建几条明天的活不用每次重选；跨过零点后由 viewToday 兜底回今天。 */
+let quickDate = '';
 /* 从日历上点一条活时，不在日历上弹详情——多半是想改状态。
    记下要定位的那一行（任务 id + 阶段序号），渲染完把右侧清单滚过去并高亮。 */
 let focusKey = '';
@@ -847,7 +850,45 @@ function statCard(cls, label, n, extra) {
 }
 
 /* ============ 视图：今日待办 ============ */
+/* 日期 chip 的文案：近三天说人话，再远就报日期。 */
+function quickWhenLabel(d) {
+  const n = diffDays(d, TODAY);
+  if (n === 0) return '今天';
+  if (n === 1) return '明天';
+  if (n === 2) return '后天';
+  return fmt(d);
+}
+/* 日期一变，chip 文案与「将建到 X」同步；提示条本身常驻 DOM，用 display 控制，不改变行高。 */
+function syncQuickDate() {
+  const i = $('#qDate');
+  if (!i) return;
+  const v = i.value || TODAY;
+  quickDate = v;
+  const lab = $('#qDateLabel');
+  if (lab) lab.textContent = quickWhenLabel(v);
+  const wrap = i.closest('.q-date');
+  if (wrap) wrap.classList.toggle('future', v !== TODAY);
+  const hint = $('#qHint');
+  if (hint) {
+    hint.textContent = `将建到 ${fmt(v)}`;
+    hint.style.display = v === TODAY ? 'none' : '';
+  }
+}
+/* 时间收成一个按钮：没填只显示时钟；填了显示 09:30；展开时原地换成原生 time 输入。 */
+function syncQuickTime() {
+  const i = $('#qTime'), w = $('#qTimeWrap');
+  if (!i || !w) return;
+  const v = i.value || '';
+  w.classList.remove('editing');
+  const txt = $('#qTimeText');
+  if (txt) txt.textContent = v;
+  const btn = w.querySelector('.q-time-btn');
+  if (btn) btn.classList.toggle('empty', !v);
+}
 function viewToday() {
+  /* 跨过零点后，上次记的日期可能已经过期，别让用户莫名把活建到昨天 */
+  if (quickDate && quickDate < TODAY) quickDate = '';
+  const qd = quickDate || TODAY;
   const mine = S.tasks.filter(t => isMineTask(t) && t.end >= addDays(TODAY, -30));
   const list = todayTasks();
   const doneN = list.filter(o => o.step ? o.step.done : o.t.status === 'done').length;
@@ -868,9 +909,19 @@ function viewToday() {
           <span class="mini">按优先级与时间排序</span>
         </div>
         <form class="split" id="quickForm" style="margin-bottom:10px">
-          <input id="qTitle" placeholder="新建临时任务，回车即创建…" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none"/>
-          <input type="date" id="qDate" value="${TODAY}" title="哪天做" style="flex:0 0 132px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
-          <input type="time" id="qTime" title="几点做（可选）" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
+          <input id="qTitle" class="q-title" placeholder="新建临时任务，回车即创建…"/>
+          <span class="q-date ${qd !== TODAY ? 'future' : ''}" data-act="qdate-open" title="哪一天做">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="3" width="11.6" height="10.4" rx="1.8"/><path d="M2.2 6.4h11.6M5.4 1.8v2.4M10.6 1.8v2.4"/></svg>
+            <b id="qDateLabel">${quickWhenLabel(qd)}</b>
+            <input type="date" id="qDate" value="${qd}" aria-label="哪一天做"/>
+          </span>
+          <span class="q-time" id="qTimeWrap">
+            <button type="button" class="q-time-btn empty" data-act="qtime-open" title="几点做（可选）">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.3 1.5"/></svg><b id="qTimeText"></b>
+            </button>
+            <input type="time" id="qTime" aria-label="几点做（可选）"/>
+          </span>
+          <span class="q-hint" id="qHint" style="display:${qd !== TODAY ? '' : 'none'}">将建到 ${fmt(qd)}</span>
           <button class="btn primary" type="submit">+ 临时任务</button>
         </form>
         <div class="tlist">
@@ -2979,6 +3030,22 @@ document.addEventListener('click', e => {
       break;
     case 'new': openNewTask(el.dataset.type || 'temp'); break;
     case 'new-day': openNewTask('temp', { date: selDay }); break;
+    /* 日期 chip：整块都是点击区，点一下直接开原生选择器（没有 showPicker 就退回聚焦） */
+    case 'qdate-open': {
+      const di = $('#qDate');
+      if (!di) break;
+      try { if (di.showPicker) di.showPicker(); else di.focus(); } catch (err) { di.focus(); }
+      break;
+    }
+    /* 时间：先原地展开原生输入，再开选择器；展开不改变行高 */
+    case 'qtime-open': {
+      const tw = $('#qTimeWrap'), ti = $('#qTime');
+      if (!tw || !ti) break;
+      tw.classList.add('editing');
+      ti.focus();
+      try { if (ti.showPicker) ti.showPicker(); } catch (err) { /* 聚焦即可，手动选 */ }
+      break;
+    }
     case 'new-rule': openRuleModal(); break;
     case 'rtab': routineTab = el.dataset.tab; render(); break;
     case 'rule-toggle': {
@@ -3431,6 +3498,9 @@ document.addEventListener('click', e => {
 
 /* 抽屉内字段编辑 */
 document.addEventListener('change', e => {
+  /* 快速录入条：选完日期/时间立刻把 chip 与提示同步，别等到提交 */
+  if (e.target.id === 'qDate') { syncQuickDate(); return; }
+  if (e.target.id === 'qTime') { syncQuickTime(); return; }
   /* 知情人多选：勾上就加进名单，取消就去掉；改完重画列表，把「已选 N 人」同步上 */
   if (e.target.closest('#f_obs_list') && e.target.matches('input[type=checkbox]')) {
     const no = e.target.dataset.no;
@@ -3561,6 +3631,8 @@ document.addEventListener('submit', e => {
   /* 默认今天；选了别的日子就落在那一天（临时任务仍是单日：start=end）。
      清空日期框时浏览器给空串，按「今天」兜底，不让任务掉到一个没日期的状态。 */
   const day = $('#qDate').value || TODAY;
+  /* 记住这次选的日期：连建几条明天的活不用重选；刷新页面回到今天 */
+  quickDate = day;
   const c = otherCat();
   S.tasks.push({
     id: uid('t'), type: 'temp', title, ownerNo: S.me.no, assigneeNo: S.me.no, assignee: '我',
@@ -3586,6 +3658,10 @@ document.addEventListener('input', e => {
     if (box) box.innerHTML = mgrListHTML(authKw);
   }
   if (e.target.id === 'f_obs_kw') renderObserverList(e.target.value);
+});
+/* 时间框失焦就收起（没选值则回到图标态），不让展开态挂在页面上 */
+document.addEventListener('focusout', e => {
+  if (e.target.id === 'qTime') syncQuickTime();
 });
 
 /* ============ 启动 ============ */

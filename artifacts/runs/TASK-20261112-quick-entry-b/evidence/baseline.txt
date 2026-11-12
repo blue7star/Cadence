@@ -1,0 +1,11 @@
+# Baseline — TASK-20261112-quick-entry-b
+
+- 采集时间：2026-11-12
+- base_revision：c34934e（main；上一个任务 30a49da 之后，另一会话提交了文档）
+- 需求来源：用户「停，我说的是这里的，还是刚刚那个问题，设计不好」+ 后续确认按 B 落码的六条口径。
+- 改前实测（1600×1000，上一版）：
+  - 标题 392.6×30.0、日期 132×30.1、时间 80.7×32.7、按钮 88.8×30.4；间距 8px；
+  - 时间框顶边比标题高 1.4px、高 2.7px；内边距 7/10、6/8、6/12 三套；
+  - 视口 831px 时标题仅 194.9px；762px 时整条换成两行（高 71.1），按钮落到第二行最左。
+- 改前截图：`walkthrough/01-before-today-1600.png`、`02-before-tomorrow-1600.png`（沿用上一任务交付时的 1600 截图）。
+- 受影响文件（受保护面）：public/app.js、public/index.html（app-ui）、_dev/e2e.mjs + specs/modules/*（tooling）、version.js（version）。

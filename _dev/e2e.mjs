@@ -1071,16 +1071,38 @@ async function main() {
     const x=(s.tasks||[]).find(t=>t.title==='自检明日任务');
     return {start:x?x.start:null, end:x?x.end:null, type:x?x.type:null}})()`);
   const dayList = await js(`(document.querySelector('#view .tlist')||{}).innerText||''`);
-  const qDateReset = await js(`document.querySelector('#qDate') ? document.querySelector('#qDate').value : null`);
+  const chipInfo = await js(`(function(){
+    const l=document.querySelector('#qDateLabel'), h=document.querySelector('#qHint'), d=document.querySelector('#qDate');
+    return {chip:l?l.textContent:'', date:d?d.value:null, hint:h?h.textContent:'', hintShown:h?getComputedStyle(h).display!=='none':false}})()`);
   check('快速录入条选明天：任务落在明天，不是写死今天',
     !!dayDb.start && dayDb.start === dayTest.target && dayDb.end === dayTest.target && dayDb.type === 'temp',
     JSON.stringify({ ...dayTest, ...dayDb }));
   check('建的不是今天时，提示写明落在哪一天',
     dayToast.includes(dayTest.label) && !dayToast.includes('今日待办'),
     JSON.stringify({ dayToast, expect: dayTest.label }));
-  check('明天的任务不进今日清单，日期框回到默认今天',
-    !dayList.includes('自检明日任务') && qDateReset === dayTest.today,
-    JSON.stringify({ inList: dayList.includes('自检明日任务'), qDateReset }));
+  check('明天的任务不进今日清单，日期 chip 记住上次选择并显示「明天」',
+    !dayList.includes('自检明日任务') && chipInfo.chip === '明天' && chipInfo.date === dayTest.target,
+    JSON.stringify({ inList: dayList.includes('自检明日任务'), ...chipInfo }));
+  check('非今天时按钮左侧提示「将建到哪天」',
+    chipInfo.hintShown && chipInfo.hint.includes(dayTest.label),
+    JSON.stringify({ hint: chipInfo.hint, shown: chipInfo.hintShown }));
+
+  /* 时间收成图标：填了显示 09:30，行高保持 32 */
+  const timeUi = await js(`(function(){const t=document.querySelector('#qTime');
+    t.value='09:30'; t.dispatchEvent(new Event('change',{bubbles:true}));
+    const b=document.querySelector('.q-time-btn');
+    return {text:(document.querySelector('#qTimeText')||{}).textContent||'',
+      btnW:+b.getBoundingClientRect().width.toFixed(1),
+      rowH:+document.querySelector('#quickForm').getBoundingClientRect().height.toFixed(1)}})()`);
+  check('时间默认收成图标，填后显示 09:30 且不把行撑高',
+    timeUi.text === '09:30' && timeUi.rowH <= 33, JSON.stringify(timeUi));
+
+  /* 刷新后「上次选择」必须失效，回到今天 */
+  await goto(BASE);
+  await waitFor(`typeof S!=='undefined' && S && S.me && S.me.no`, 8000);
+  const fresh = await js(`(function(){const d=document.querySelector('#qDate'), l=document.querySelector('#qDateLabel');
+    return {date:d?d.value:null, today:TODAY, label:l?l.textContent:null}})()`);
+  check('刷新页面后日期回到今天', fresh.date === fresh.today && fresh.label === '今天', JSON.stringify(fresh));
 
   await nav('routine');
   await js(`(function(){const bs=[...document.querySelectorAll('[data-act=new-rule]')];

@@ -11,8 +11,6 @@ paths: version.js
 
 ## 不变量
 - `SEMVER` 是唯一版本源，且必须是 `CHANGELOG` 里最新的键。
-- 分组只能用四类：`新增能力` / `体验增强` / `口径变更` / `问题修复`。
-- `CHANGELOG.md` 必须与 `--write` 输出逐字一致（`verify.mjs` 会比对）。
 - `INV-4 版本号按 semver 本义递增`：修复 bump Z、新能力 bump Y、破坏性变更 bump X（0.x 阶段的破坏性变更可用 Y）。登记在 `version.js` 并跑 `--write`；拒绝点：`verify.mjs` 的「版本自检」；反例：`node version.js --check` 在 `SEMVER` 未登记时退出非 0。
 
 ## 依赖与边界
@@ -27,3 +25,4 @@ paths: version.js
 | TASK-20261110-auth-export | 见 git | — | 0.9.0：认证与导出、独立管理账号；版本权威仍是 `version.js`（`--check` / `--write`） |
 | TASK-20261111-stage-interval | 见 git | — | 0.9.2：阶段区间校验按「区间相交」重判，跨年排期不再误报；补 INV-4（用户可见的修复必须 bump Z） |
 | TASK-20261112-rules-conflicts | 见 git | — | INV-4 改为 semver 三档口径：修复 bump Z、新能力 bump Y、破坏性 bump X（0.x 可用 Y）；删除「用户可见变化一律 bump Z」 |
+| TASK-20261112-rules-dedup | 见 git | — | 删除「分组只能四类」与「CHANGELOG 逐字一致」两条，均由 `version.js --check` 与 `verify.mjs` 自动校验；保留 SEMVER 唯一源与 INV-4 |

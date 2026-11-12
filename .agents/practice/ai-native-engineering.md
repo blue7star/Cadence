@@ -9,7 +9,7 @@ project_id: Cadence
 task_id: TASK-20261104-cadence-review-loop
 status: EVIDENCE_READY
 created_at: 2026-11-04
-updated_at: 2026-11-04
+updated_at: 2026-11-12
 recorder: Planner（AI 助手）
 owner: Planner
 project_fact_owner: 由下表各指针文件各自持有；本文件只持方法层观察，不持项目事实
@@ -208,3 +208,65 @@ OBSERVED (2026-11-03，上一轮记录在 ai-skills/practice/，已转只读)
 - 只改文档口径，未改 `server.js` / `public/app.js` / `version.js` / `_dev/`，也未改 `gate.py` 的判定逻辑。
 - 本批不删纯重复项、不做「降级为代码判定」；删除凭据按 Human 要求逐条记在下一批（同文件追加）。
 - 未发现清单之外的新矛盾对；未自签 PASS、未写 verdict。
+
+## 追加记录 · 2026-11-12 · 第二批删除凭据（49 条）
+
+> 对应 `TASK-20261112-rules-dedup`。只删「纯重复 / 已被代码或 e2e 覆盖」的文档表述；没有删带编号的领域不变量（INV-1~INV-4）、没有删 archive 历史档案、没有改任何业务代码。每条都写三样：原文位置、原来挡什么、现在靠什么兜。
+
+| # | 原文位置 | 原来挡什么 | 现在靠什么兜 |
+|---|---|---|---|
+| 1 | `AGENTS.md` §3 G2 四条触发面 | 改接口/表/身份/日期前先写契约 | `.agents/gates/protected.json` + M1 按路径拦 |
+| 2 | `AGENTS.md` §3 契约面下限五项 | 划出「不算微调」的边界 | M1 按受保护路径判定，不看这份清单 |
+| 3 | `AGENTS.md` §6 八类 fail_source 表 | 同一标签对应同一种修法 | `.agents/issues.md` 分类表（唯一口径） |
+| 4 | `AGENTS.md` §7 不换 VERSION 文件 | 防止版本源分叉 | `gate.py` M4 `version_authority: version.js` |
+| 5 | `AGENTS.md` §7 其余红线指针 | 把人导向 adoption-log | 指针不是规则；adoption-log 仍可查 |
+| 6 | `AGENTS.md` §5 pre-commit 跑两条、缺工具失败 | 防止闸被静默跳过 | `.githooks/pre-commit` 的 `exit 1` |
+| 7 | `AGENTS.md` §5 `--hook` 与 `--full` 同一套 | 防止验后改码 | `verify.mjs` 的 `--hook` 实现 |
+| 8 | `.agents/README.md` 受保护面/protected.json | 防止拿脚手架默认 `app/` 当防线 | `protected.json` + `protected_rules()` |
+| 9 | `.agents/README.md` M8 五字段 | 防止受理字段没写完就开工 | `gate.py check_m8` |
+| 10 | `.agents/README.md` selftest「26 条」 | 说明反例覆盖量 | `verify.mjs` 每次跑 `gate.py --selftest` |
+| 11 | `.agents/README.md` `--scope` 只能 project | 防止项目仓库放松判定 | `gate.py` 的 `--scope` 默认值与校验 |
+| 12 | `.agents/README.md` M4 需版本权威 | 防止 M4 假装 PASS | `check_m4` 的 `NOT_RUN` 分支 |
+| 13 | `.agents/README.md` pre-commit 与 CI 边界 | 区分提交点与合并点 | `gate.py exit_code()` 的 `staged/no_evidence` 分支 |
+| 14 | `.agents/README.md` 门禁不生成派生账本 | 防止第二份真相 | `gate.py` 只读 `events.jsonl` 的实现 |
+| 15 | `.agents/README.md` block 情形表 | 让人预知哪些情况会被拦 | `gate.py` 各 check 与其自测用例 |
+| 16 | `.agents/issues.md`「一个编号只能被一份契约挂」 | 防止一个欠债号被多份契约共用 | `verify.mjs contracts()` 的 debts 去重 |
+| 17 | `review-checklist.md` A1 工作区无关改动 | #9 七个版本堆在工作区 | `verify.mjs worktreeClean()` |
+| 18 | `review-checklist.md` A2 上一轮改动已提交 | 改动被覆盖后无法判断 | `worktreeClean()` + `gate.py` M2 候选摘要 |
+| 19 | `review-checklist.md` A3 验的是当前代码 | #11 e2e 跑旧进程还报绿 | `verify.mjs` 比对测试实例 `semver` |
+| 20 | `review-checklist.md` A4 复核对象是精确候选 | 拿 A 版证据评 B 版代码 | `gate.py` M2/M6 校验 `candidate_digest` 与快照 |
+| 21 | `review-checklist.md` B2 maintain 幂等 | 重复跑生成重复实例 | 确定性 id `ri_<rule>_<周期>` + 主键 |
+| 22 | `review-checklist.md` B3 可见性四视角 | 派完断线、越权可见 | e2e 下属/上级/知情人视角断言 |
+| 23 | `review-checklist.md` B4 日期算法边界 | 跨月/闰年/周末算错 | e2e 日期用例 |
+| 24 | `review-checklist.md` B5 状态与节点对齐 | `done` 与叶子不一致 | `stageStatusFromLeaves()` |
+| 25 | `review-checklist.md` B6 逾期判定 | 已完成仍算逾期 | `chipLate()` + e2e |
+| 26 | `review-checklist.md` D2 fail_source 标对/两次改规则 | 归因错导致修错地方 | `AGENTS.md` §6 + `issues.md` 分类表 |
+| 27 | `app-ui.md` 导出 fetch+Blob/401 | 401 渲成裸 JSON、无反馈 | `public/app.js` + e2e 401/导出断言 |
+| 28 | `app-ui.md` `ownRows()` 只提交自己的行 | 误改他人任务 | `applySync()` 的 `owner_no` 过滤 |
+| 29 | `app-ui.md` 勾选框只给责任人 | 承接人勾别人的段 | `toggleStage` 判权 + e2e |
+| 30 | `app-ui.md` 派生副本只维护完成 | 承接人改计划字段 | `stageRef` 只由 `/api/stage/join` 写入 |
+| 31 | `app-ui.md` 列表卡片按层级排 | #55 编号与时间错位 | `stageRows()` + e2e 编号序列断言 |
+| 32 | `app-ui.md` INV-1 日期单一判定入口 | 绕过界面写重叠数据 | `tooling` INV-1 + `checkStageIntervals` + e2e 6.9 |
+| 33 | `app-ui.md` 日历格子是阶段/节点 | 把父任务当条目铺进格子 | `occOn()` + e2e |
+| 34 | `app-ui.md` 三通道视觉互不覆盖 | 来源/状态/逾期叠色看不清 | CSS + e2e `getComputedStyle` 断言 |
+| 35 | `server-api.md` 登录失败计数上限 | 匿名请求撑大内存表 | `pruneLoginFails()` 实现 |
+| 36 | `server-api.md` 派发须 activated、stage_ref 服务端独占 | 派给没登录过的人、客户端造假副本 | `upsertTask` activated 校验 + `joinStage` |
+| 37 | `server-api.md` 已派发叶子完成态以库为准 | 旧快照冲掉他人完成态 | `keepForeignDone()` + `server-data` INV-2 |
+| 38 | `server-api.md` status 由叶子推 | 一段没勾就挂 `done` | `stageStatusFromLeaves()` |
+| 39 | `server-data.md` 实例幂等 | 重复生成常规实例 | 确定性 id + 主键 + `SELECT 1` 预检 |
+| 40 | `server-data.md` task 三列归属 | 截止日被承接人改、发布人丢失 | `upsertTask` 判权 + e2e |
+| 41 | `server-data.md` 常规只按工作日生成 | 周末铺活 | `isWorkday()` |
+| 42 | `server-data.md` `op_log` 上限 | 日志无限增长 | `pruneOpLog()` |
+| 43 | `server-data.md` 口令 scrypt/会话时长/导出只读 | 明文口令、导出回写 | `server.js` 实现与 e2e |
+| 44 | `server-data.md` 管理账号分表说明 | 把 admin 塞进 `emp` | `server-api.md`「管理账号是独立身份」保留 |
+| 45 | `tooling.md` 导入不带 `--apply` 不写库 | 误写生产花名册 | `import-emp.js` 参数分支 |
+| 46 | `tooling.md` verify 不留凭证 | 入库报告被当成通过凭证 | `verify.mjs` 的机制本身 |
+| 47 | `tooling.md` PASS 绑归档提交 | 拿旧证据评新树 | `verify.mjs contracts()` 的归档提交校验 |
+| 48 | `version.md` 分组只能四类 | CHANGELOG 分组漂移 | `node version.js --check` |
+| 49 | `version.md` CHANGELOG 与 `--write` 逐字一致 | 手改 CHANGELOG | `verify.mjs version()` 比对 |
+
+### 本批没有删的
+
+- 带编号的领域不变量（`server-api` INV-1~4、`server-data` INV-1~3、`tooling` INV-1、`version` INV-4）：它们是规范来源，代码只是执行点。
+- `app-ui` INV-2 / INV-3：按 `tooling` INV-1 的严格读法，它们也是「只在前端成立」的规则。本批不顺手删，留给 Human 决定是否降级或改写进「公开行为」。
+- `archive/` 下全部历史契约：2026-11-12 起整份只读，删改都算改写历史证据。

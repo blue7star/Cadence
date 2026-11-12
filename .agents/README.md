@@ -18,7 +18,7 @@
 
 ## 门禁在哪
 
-- `.agents/gates/gate.py` —— M1–M8 唯一实现，没有第二套逻辑。
+- `.agents/gates/gate.py` —— M1–M8 的唯一实现。`_dev/verify.mjs` 里的 `contracts()` 只校验 2026-11-04 前归档的旧契约（只读历史），不参与新契约判定。
 - 在项目根运行：`python .agents/gates/gate.py --ci`（合并前/CI，按 `base...HEAD` 判）；`python .agents/gates/gate.py --fast --staged`（pre-commit，M1/M8/M3，只判索引区）。
 - `--staged` 的边界：**未 add 的工作区改动不拦**（草稿不该挡人）；**已 add 的受保护路径没有匹配契约 → `BLOCKED`**（拦在即将进入历史的那一刻）。CI 的 `pull_request` 仍按 `base...HEAD` 判。
 - 受保护面写在同一目录的 `protected.json`（本项目真实代码路径），**不是**脚手架默认的 `app/`；模块归属由蓝图 `paths:` 声明，不从文件名猜。

@@ -12,6 +12,6 @@
 契约模板见 `.agents/templates/`。
 
 这批文件保留的原因：里面记着当时的决策依据与复核结论，`.agents/issues.md` 有若干条
-指向它们当欠债凭证。**正文不改**（第 1/2 段是历史事实）；**第 3 段复核可按
-`.agents/review-checklist.md` 补全**，补完把状态从 `READY_FOR_REVIEW` 改成 `PASS`，
-再把 `issues.md` 里对应的欠债编号下架。新问题记到 `.agents/issues.md`。
+指向它们当欠债凭证。**整份只读**：第 1/2 段是历史事实，第 3 段复核同样属于历史证据，
+不得补写，也不得靠补写把状态改成 `PASS`。状态与事实不符时，在 `issues.md` 登记欠债并注明
+「该契约未复核」，不追认。新问题记到 `.agents/issues.md`。

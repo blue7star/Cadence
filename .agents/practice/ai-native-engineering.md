@@ -35,7 +35,7 @@ Cadence 的方法层观察只写在这里。两者不是并行真相：那份是
 | 问题归因与分类口径 | `.agents/issues.md` |
 | 新契约模板与账本 | `.agents/templates/`、`artifacts/runs/` |
 | 复核清单 | `.agents/review-checklist.md` |
-| 门禁实现与证据 | `_dev/verify.mjs`、`_dev/verify-report.json`、`.githooks/pre-commit` |
+| 门禁实现与证据 | `_dev/verify.mjs`（凭证就是退出码）、`.githooks/pre-commit` |
 
 ## 观察（现象 + 根因假设，不下结论）
 
@@ -181,3 +181,30 @@ OBSERVED (2026-11-03，上一轮记录在 ai-skills/practice/，已转只读)
 
 不变量若只有描述、没有「拒绝点 + 反例」两个字段，它迟早退化成注释：写在谁都能改的前端函数里，绕过界面就失效。
 判断一个约束有没有落地，只看一句话——**能不能举出一条绕过界面、被服务端拒绝的 e2e 反例**。
+
+## 追加记录 · 2026-11-12 · 规则体系体检：先修 8 对矛盾
+
+> 性质：口径修正（append-only）。对应 `TASK-20261112-rules-conflicts`。**上半部分第 100–107 行的证据表已失效**：`verify-report.json`、`evidence_digest`、`--recheck` 已于 2026-11-11 收口时删除，现行凭证是 `node _dev/verify.mjs --full` 的退出码，以本节为准。
+
+### 判定原则
+
+一条规则的唯一正当性来自「它现在还在挡什么具体风险」。说不出挡什么的删；代码能自动判定的挪进代码；已被代码覆盖的文档复述删；两条互相矛盾的，选「按文档做事不会被门禁拦」的一边。
+
+### 本轮修掉的 8 对矛盾
+
+| # | 冲突双方 | 裁决 | 依据 |
+|---|---|---|---|
+| 1 | `AGENTS.md` G0 轻口径 vs 提交前必须 `--full` | 取消 G0 快路径，所有改动统一 `--full` | Human：pre-commit 本来就跑 e2e，G0 从来没有真正更快 |
+| 2 | `.agents/README.md`「gate.py 是 M1–M8 唯一实现」 vs `verify.mjs` 的 `contracts()` 仍在校验归档契约 | 保留两套，但写明分工：gate 管新契约，`contracts()` 只管 2026-11-04 前的归档历史 | 删掉任一侧都会让归档欠债失去校验 |
+| 3 | 复核清单 A2/A4/D4 仍按「契约第 3 段」 vs 新流程 `task/delivery/verdict` | 清单改绑 `delivery.md` 改动清单与 `verdict.md` 的 `candidate_digest` | 按旧清单复核找不到「第 3 段」 |
+| 4 | 归档 README 允许补第 3 段并改 PASS vs 「历史证据不可改写」 | 归档契约整份只读，状态不符只在 `issues.md` 登记欠债 | 补写会让归档提交与结论脱钩 |
+| 5 | 实践台账证据 URI 指向 `verify-report.json` vs 报告机制已撤 | 指针改为 `verify.mjs` 退出码；旧条目保留并声明失效 | 证据不能指向不存在的文件 |
+| 6 | 复核清单 D3「可感知变化一律 bump Z」 vs semver 与本项目新能力按 Y 走 | 删「一律 Z」，改 semver 三档：修复 Z / 新能力 Y / 破坏 X | Human：按 semver 本义 |
+| 7 | `app-ui` INV-4 周末规则（只在前端） vs `tooling` INV-1「只在前端拦的不叫不变量」 | 删除 app-ui INV-4；周末仍由日历渲染与单日任务的既有断言覆盖 | 它按自己的元规则就不该出现在不变量里 |
+| 8 | 复核清单/蓝图要求 1440 视口 vs e2e `--window-size=1600,1000` | 文档统一为「与 e2e 的 `--window-size` 一致（当前 1600×1000）」 | 截图自审与机器验收必须看同一宽度 |
+
+### 执行纪律
+
+- 只改文档口径，未改 `server.js` / `public/app.js` / `version.js` / `_dev/`，也未改 `gate.py` 的判定逻辑。
+- 本批不删纯重复项、不做「降级为代码判定」；删除凭据按 Human 要求逐条记在下一批（同文件追加）。
+- 未发现清单之外的新矛盾对；未自签 PASS、未写 verdict。

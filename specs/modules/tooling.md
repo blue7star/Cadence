@@ -29,3 +29,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261110-auth-export | 见 git | — | `paths:` 补 `specs/features/`；pre-commit 支持 `GATE_TASK`；e2e 改会话身份、新增认证与导出断言、错误汇总区分预期 401；e2e 夹具迁到 `VACUUM INTO` 的测试库副本，`--full` 自起实例并补重启后密码幂等 |
 | TASK-20261110-auth-export | 见 git | — | 收口：撤掉 `verify-report.json` / `--recheck` / `pass-anchors.md`，`--hook` 当场跑与 `--full` 同一套；PASS 契约改绑归档提交号；事件链按 task_id 唯一（跨目录分叉检测），`bump-contract` 改为同链重写 PLANNED；M3 暂存时按 `--task` 选契约，不再取第一份（消除 pre-commit 绿 / CI 红） |
 | TASK-20261111-stage-interval | 见 git | — | e2e 6.9 新增阶段区间断言（跨年空档放行、压中间段、压最后段、首尾相接、改期自身、三条直调 `/api/sync` 拒收）；导出夹具 `e2` 由「越出父窗口的子任务」改为并列一级段（原夹具本身违反新不变量）；`review-checklist.md` 补一条「领域约束是否有服务端拒绝点与反例」；INV-1 落地 |
+| TASK-20261112-rules-conflicts | 见 git | — | 规则体检第一批：取消 G0 轻口径（统一 `--full`）；修正 gate.py 与 verify 归档契约的职责表述；复核清单 A2/A4/D4 改绑 `delivery.md` / `verdict.md` 候选摘要；归档契约整份只读、不得补写第 3 段改 PASS；实践台账证据指针改为 `verify.mjs` 退出码；自审视口与 e2e 宽度对齐；版本 bump 改 semver 三档 |

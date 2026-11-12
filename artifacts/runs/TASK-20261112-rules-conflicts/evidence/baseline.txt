@@ -1,0 +1,5 @@
+baseline 2026-11-12
+HEAD 19a977e
+工作区: clean
+范围: AGENTS.md / .agents/README.md / .agents/review-checklist.md / .agents/archive/README.md / .agents/practice/ai-native-engineering.md / specs/modules/{tooling,app-ui,version}.md
+目的: 修 8 对规则矛盾；不改业务代码、不删纯重复项、不降级。

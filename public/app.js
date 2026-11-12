@@ -869,7 +869,8 @@ function viewToday() {
         </div>
         <form class="split" id="quickForm" style="margin-bottom:10px">
           <input id="qTitle" placeholder="新建临时任务，回车即创建…" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none"/>
-          <input type="time" id="qTime" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
+          <input type="date" id="qDate" value="${TODAY}" title="哪天做" style="flex:0 0 132px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
+          <input type="time" id="qTime" title="几点做（可选）" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px"/>
           <button class="btn primary" type="submit">+ 临时任务</button>
         </form>
         <div class="tlist">
@@ -3557,14 +3558,18 @@ document.addEventListener('submit', e => {
   e.preventDefault();
   const title = $('#qTitle').value.trim();
   if (!title) { toast('先写点什么'); return; }
+  /* 默认今天；选了别的日子就落在那一天（临时任务仍是单日：start=end）。
+     清空日期框时浏览器给空串，按「今天」兜底，不让任务掉到一个没日期的状态。 */
+  const day = $('#qDate').value || TODAY;
   const c = otherCat();
   S.tasks.push({
     id: uid('t'), type: 'temp', title, ownerNo: S.me.no, assigneeNo: S.me.no, assignee: '我',
-    start: TODAY, end: TODAY, time: $('#qTime').value || '', std: '', status: 'todo',
+    start: day, end: day, time: $('#qTime').value || '', std: '', status: 'todo',
     cat1: c.c1, cat2: c.c2, imp: null, urg: null, stages: [],
     routineId: null, planDate: null, detached: false, intakeStatus: null
   });
-  save(); render(); toast('已加入今日待办');
+  save(); render();
+  toast(day === TODAY ? '已加入今日待办' : `已加到 ${fmt(day)}`);
 });
 
 $('#modalWrap').addEventListener('click', e => { if (e.target.id === 'modalWrap') tryCloseModal(); });

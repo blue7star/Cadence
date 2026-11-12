@@ -1,0 +1,11 @@
+# Baseline — TASK-20261112-temp-daytime
+
+- 采集时间：2026-11-12
+- base_revision：98d0f4f（main，工作区干净）
+- 需求来源：用户原话「工作台有一个体验优化的问题，如果我要在这里建明天的任务就会很不顺手，最好是可以选择 天，时，去做」
+- 现状证据（改前，1600×1000）：`walkthrough/01-before-today-1600.png`
+  - 快速录入条只有「标题 / 时间点 / + 临时任务」三个控件，没有日期；
+  - 代码事实：`#quickForm` 提交时 `start: TODAY, end: TODAY`（public/app.js 提交处理器）；
+  - 建未来任务的现有路径：日历待办 → 点格子 → 面板底部（需滚动）→「+ 在这一天加临时任务」→ 弹窗。
+- 受影响文件（受保护面）：public/app.js（app-ui）、_dev/e2e.mjs + specs/modules/app-ui.md（tooling）、version.js（version）。
+- 说明：本轮不改 server.js、不改表结构、不改导出/导入格式。

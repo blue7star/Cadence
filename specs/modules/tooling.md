@@ -28,3 +28,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261111-stage-interval | 见 git | — | e2e 6.9 新增阶段区间断言（跨年空档放行、压中间段、压最后段、首尾相接、改期自身、三条直调 `/api/sync` 拒收）；导出夹具 `e2` 由「越出父窗口的子任务」改为并列一级段（原夹具本身违反新不变量）；`review-checklist.md` 补一条「领域约束是否有服务端拒绝点与反例」；INV-1 落地 |
 | TASK-20261112-rules-conflicts | 见 git | — | 规则体检第一批：取消 G0 轻口径（统一 `--full`）；修正 gate.py 与 verify 归档契约的职责表述；复核清单 A2/A4/D4 改绑 `delivery.md` / `verdict.md` 候选摘要；归档契约整份只读、不得补写第 3 段改 PASS；实践台账证据指针改为 `verify.mjs` 退出码；自审视口与 e2e 宽度对齐；版本 bump 改 semver 三档 |
 | TASK-20261112-rules-dedup | 见 git | — | 规则体检第二批：删 AGENTS/README/复核清单/issues 中与门禁、e2e、其他文档重复的表述；删「导入必须 --apply」「verify 不留凭证」「PASS 绑归档提交」等已被代码覆盖的说明；issues #64 重复改为 #66 并结案，统计改为 11/55 |
+| TASK-20261112-temp-daytime | 见 git | — | e2e 补快速录入条选日期的正反两条断言（落所选日、不进今日清单且日期框回默认）；蓝图 changes 随 app-ui 同步 |

@@ -26,3 +26,4 @@ paths: version.js
 | TASK-20261111-stage-interval | 见 git | — | 0.9.2：阶段区间校验按「区间相交」重判，跨年排期不再误报；补 INV-4（用户可见的修复必须 bump Z） |
 | TASK-20261112-rules-conflicts | 见 git | — | INV-4 改为 semver 三档口径：修复 bump Z、新能力 bump Y、破坏性 bump X（0.x 可用 Y）；删除「用户可见变化一律 bump Z」 |
 | TASK-20261112-rules-dedup | 见 git | — | 删除「分组只能四类」与「CHANGELOG 逐字一致」两条，均由 `version.js --check` 与 `verify.mjs` 自动校验；保留 SEMVER 唯一源与 INV-4 |
+| TASK-20261112-temp-daytime | 见 git | — | 0.9.3：今日待办快速录入条可选日期；用户可见变化按 INV-4 bump Z |

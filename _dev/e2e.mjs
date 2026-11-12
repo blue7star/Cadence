@@ -1056,6 +1056,32 @@ async function main() {
   const tempOk = (await txt('#view')).includes('自检临时任务');
   check('空态下可快速建临时任务', tempOk);
 
+  /* 快速录入条选日期：建明天的任务要落在明天，且不能混进今天的清单 */
+  const dayTest = await js(`(function(){
+    const target = addDays(TODAY, 1);
+    document.querySelector('#qTitle').value='自检明日任务';
+    document.querySelector('#qDate').value=target;
+    document.querySelector('#quickForm').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+    return {today:TODAY, target, label:fmt(target)};
+  })()`);
+  await sleep(350);
+  const dayToast = await js(`(document.querySelector('#toast')||{}).textContent||''`);
+  await sleep(2200);
+  const dayDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
+    const x=(s.tasks||[]).find(t=>t.title==='自检明日任务');
+    return {start:x?x.start:null, end:x?x.end:null, type:x?x.type:null}})()`);
+  const dayList = await js(`(document.querySelector('#view .tlist')||{}).innerText||''`);
+  const qDateReset = await js(`document.querySelector('#qDate') ? document.querySelector('#qDate').value : null`);
+  check('快速录入条选明天：任务落在明天，不是写死今天',
+    !!dayDb.start && dayDb.start === dayTest.target && dayDb.end === dayTest.target && dayDb.type === 'temp',
+    JSON.stringify({ ...dayTest, ...dayDb }));
+  check('建的不是今天时，提示写明落在哪一天',
+    dayToast.includes(dayTest.label) && !dayToast.includes('今日待办'),
+    JSON.stringify({ dayToast, expect: dayTest.label }));
+  check('明天的任务不进今日清单，日期框回到默认今天',
+    !dayList.includes('自检明日任务') && qDateReset === dayTest.today,
+    JSON.stringify({ inList: dayList.includes('自检明日任务'), qDateReset }));
+
   await nav('routine');
   await js(`(function(){const bs=[...document.querySelectorAll('[data-act=new-rule]')];
     const b=bs.find(x=>x.offsetParent!==null)||bs[0]; b.click(); return 'ok'})()`);

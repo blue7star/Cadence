@@ -1,0 +1,26 @@
+{
+  "collected_at": "2026-11-13",
+  "source": "data/workbench.db (read-only) + GET /api/export/tasks.csv (session 1012, v0.9.6)",
+  "me": "1012",
+  "total_tasks_in_db": 578,
+  "mine_direct": 142,
+  "mine_by_type": { "routine": 136, "special": 3, "temp": 3 },
+  "export_rows_before": 162,
+  "export_rows_after": 165,
+  "delta_rows": 3,
+  "temp_in_db_total": 6,
+  "temp_mine_in_scope": 3,
+  "temp_others_excluded": 3,
+  "assign_owned_excluded": 2,
+  "temp_mine_with_time": 1,
+  "time_value_sample": "1012_t6 回复客户续约邮件 time=16:00",
+  "live_export_check": {
+    "status": 200,
+    "header_columns": 25,
+    "data_rows": 165,
+    "temp_rows": 3,
+    "temp_rows_stage_columns_empty": true,
+    "other_temp_ids_in_file": 0
+  },
+  "note": "行数增量全部来自 3 条临时任务，每条无阶段、占 1 行；别人的 3 条 temp 与我发布的 2 条 assign 均未进入文件。"
+}

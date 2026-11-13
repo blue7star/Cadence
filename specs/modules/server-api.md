@@ -9,7 +9,7 @@ paths: server.js
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
 - 六个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。
 - 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
-- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规与专项；一行一阶段，UTF-8 BOM + `\r\n`。
+- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。
 
 ## 不变量
 - **身份只来自会话**：所有接口先过 `sid` cookie 的会话门，`me` 与会话不符 403、无会话 401；不接受「按请求里的 me 当身份」。导出因此没有「导别人」的口子。
@@ -39,5 +39,6 @@ paths: server.js
 | TASK-20261109-subtask-upstream | 见 git | — | 子任务完成上行汇总；勾选判权收紧到责任人；旧快照不得覆盖他人完成态 |
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: server.js`：模块归属由蓝图声明，M1 不再按文件名猜 |
 | TASK-20261110-auth-export | 见 git | — | 认证（login/logout/password/管理账号重置）与会话门；导出 `/api/export/tasks.csv`；会话门加 `emp.active` 校验（停用即失效，并清该工号会话）；初始密码名单口径改为「仍在用初始密码的全部在职员工」，含从没登录、尚无 cred 行的人；管理账号改名为独立 `admin`（分表、不进 emp、首登强制改密），新增 `/api/admin/sessions` |
+| TASK-20261113-export-temp | 见 git | — | 导出范围扩到 `temp`（本人负责/承接），类型列新增「临时」；临时任务无阶段，整条一行、阶段列留空 |
 | TASK-20261111-stage-interval | 见 git | — | `upsertTask` 新增 `checkStageIntervals`：同层区间不相交（首尾相接合法）、子阶段在父窗口内、任务周期等于一级阶段包络；只判本次写入改变区间的请求，通过后把周期收敛到包络；INV-1~INV-4 落地 |
 | TASK-20261112-rules-dedup | 见 git | — | 删除 4 条已被代码覆盖的公开行为（登录失败计数上限、派发 activated/stage_ref 独占、已派发叶子完成态以库为准、status 由叶子推）；INV-1~INV-4 保留为规范来源 |

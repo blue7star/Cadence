@@ -29,3 +29,4 @@ paths: version.js
 | TASK-20261112-temp-daytime | 见 git | — | 0.9.3：今日待办快速录入条可选日期；用户可见变化按 INV-4 bump Z |
 | TASK-20261112-quick-entry-b | 见 git | — | 0.9.4：录入条改一句话形态（日期 chip、时间图标、将建到提示、记住日期） |
 | TASK-20261113-quick-detail | 见 git | — | 0.9.5：录入条按钮改为打开完整弹窗并预填，回车仍直接建 |
+| TASK-20261113-export-temp | 见 git | — | 0.9.6：导出纳入临时任务；用户可见变化按 INV-4 bump Z |

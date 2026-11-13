@@ -1517,7 +1517,7 @@ const EXPORT_COLUMNS = [
   '开始日', '计划结束', '总截止', '完成日期', '更新时间', '分类一ID', '分类二ID',
   '阶段编号', '阶段名称', '阶段开始', '阶段结束', '阶段负责人', '阶段完成', '阶段完成日', '父阶段编号'
 ];
-const TYPE_OUT = { routine: '常规', special: '专项' };
+const TYPE_OUT = { routine: '常规', special: '专项', temp: '临时' };
 const STATUS_OUT = { todo: '待办', doing: '进行中', paused: '暂缓', done: '已完成' };
 
 /* RFC 4180：含逗号/引号/换行才加引号，内部引号翻倍。不做自定义转义——人看到的必须是原文。 */
@@ -1535,15 +1535,15 @@ function localIso(d) {
   return `${base}${off >= 0 ? '+' : '-'}${p2(Math.floor(Math.abs(off) / 60))}:${p2(Math.abs(off) % 60)}`;
 }
 
-/* 范围（定义域）严格按 Spec §4.1：只要我直接负责或已承接的常规/专项。
-   不含 type='assign'（我发布、别人还没接）、type='temp'（stage_ref 派生副本）、
-   我只作为知情人的、我负责某一段但任务不在我名下的。 */
+/* 范围（定义域）严格按 Spec §4.1：只要我直接负责或已承接的常规/专项/临时。
+   临时任务 owner 就是我（stage_ref 派生的副本也是），无阶段，整条占一行、阶段列留空。
+   不含 type='assign'（我发布、别人还没接）、我只作为知情人的、我负责某一段但任务不在我名下的。 */
 function exportTasksCsv(meNo) {
   const me = getEmp(meNo);
   const catName = {};
   for (const c of db.prepare('SELECT id,name FROM cat WHERE owner_no=?').all(meNo)) catName[c.id] = c.name;
   const rows = db.prepare(`SELECT * FROM task
-      WHERE type IN ('routine','special') AND owner_no=?
+      WHERE type IN ('routine','special','temp') AND owner_no=?
         AND (assignee_no IS NULL OR assignee_no='' OR assignee_no=?)
       ORDER BY start_date, id`).all(meNo, meNo);
 

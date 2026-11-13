@@ -2723,7 +2723,10 @@ async function main() {
       ] },
     { id: 't_e2e_export_done', type: 'special', title: 'E2E导出已完成', ownerNo: '1012', assigneeNo: '1012',
       start: '2026-11-01', end: '2026-11-08', dueDate: '2026-11-08', status: 'done',
-      stages: [{ id: 'd1', pid: null, name: '整段', start: '2026-11-01', end: '2026-11-08', done: true, doneAt: '2026-11-08' }] }
+      stages: [{ id: 'd1', pid: null, name: '整段', start: '2026-11-01', end: '2026-11-08', done: true, doneAt: '2026-11-08' }] },
+    /* 临时任务：无阶段，导出应整条占一行、阶段列留空；不能因为没阶段被漏掉 */
+    { id: 't_e2e_export_temp', type: 'temp', title: 'E2E临时任务', ownerNo: '1012', assigneeNo: '1012',
+      start: '2026-11-12', end: '2026-11-12', dueDate: '2026-11-12', cat1: '1012_c2' }
   ] });
   check('导出用例任务写入成功', (prep.json || {}).ok === true && ((prep.json || {}).errors || []).length === 0,
     JSON.stringify((prep.json || {}).errors || []).slice(0, 200));
@@ -2733,22 +2736,33 @@ async function main() {
   const rows2 = lines2.slice(4).map(csvSplit);
 
   const stNow = (await stateAs('1012')) || {};
-  const mineTasks = (stNow.tasks || []).filter(t => (t.type === 'routine' || t.type === 'special')
+  const mineTasks = (stNow.tasks || []).filter(t => (t.type === 'routine' || t.type === 'special' || t.type === 'temp')
     && t.ownerNo === '1012' && (!t.assigneeNo || t.assigneeNo === '1012'));
   const mineIds = new Set(mineTasks.map(t => t.id));
   const fileIds = new Set(rows2.map(r => r[0]).filter(Boolean));
-  check('导出的任务集合 == 我直接负责/已承接的常规+专项',
+  check('导出的任务集合 == 我直接负责/已承接的常规+专项+临时',
     fileIds.size === mineIds.size && [...fileIds].every(id => mineIds.has(id)),
     `文件 ${fileIds.size} / 库里 ${mineIds.size}`);
-  check('导出不包含发布给别人的待接收任务与派生副本',
-    ![...fileIds].some(id => {
-      const t = (stNow.tasks || []).find(x => x.id === id);
-      return t && (t.type === 'assign' || t.type === 'temp');
-    }));
+  /* 临时任务也要导，但「我发布、别人还没接」的 assign 仍不能出现 */
+  const assignIds = new Set(dbAll(`SELECT id FROM task WHERE type='assign' AND owner_no='1012'`).map(r => r.id));
+  check('导出不包含发布给别人的待接收任务',
+    assignIds.size > 0 && ![...fileIds].some(id => assignIds.has(id)),
+    `assign ${assignIds.size} 条 / 文件里 ${[...fileIds].filter(id => assignIds.has(id)).length} 条`);
+  const otherTemp = new Set(dbAll(`SELECT id FROM task WHERE type='temp' AND owner_no<>'1012'`).map(r => r.id));
+  check('导出不包含别人的临时任务',
+    ![...fileIds].some(id => otherTemp.has(id)),
+    `别人的临时任务 ${otherTemp.size} 条 / 文件里混入 ${[...fileIds].filter(id => otherTemp.has(id)).length} 条`);
+  const tempRow = rows2.filter(r => r[0] === 't_e2e_export_temp');
+  check('临时任务出现在导出里，类型列是「临时」，整条只占一行',
+    tempRow.length === 1 && tempRow[0][2] === '临时' && tempRow[0][1] === 'E2E临时任务',
+    JSON.stringify(tempRow.map(r => [r[0], r[1], r[2]])));
+  check('临时任务行阶段相关列全空',
+    tempRow.length === 1 && tempRow[0].slice(17).every(v => v === ''),
+    JSON.stringify(tempRow.length ? tempRow[0].slice(17) : null));
 
   /* 用 DB 直查对账：上面那条是「文件 vs /api/state」，两边都出自同一个接口实现，
      真出偏差时会一起错。这里换成与接口无关的 SQL，按 Spec §4.1 的定义域直接取。 */
-  const dbIds = new Set(dbAll(`SELECT id FROM task WHERE type IN ('routine','special') AND owner_no='1012'
+  const dbIds = new Set(dbAll(`SELECT id FROM task WHERE type IN ('routine','special','temp') AND owner_no='1012'
       AND (assignee_no IS NULL OR assignee_no='' OR assignee_no='1012')`).map(r => r.id));
   check('导出集合与库里直查一致（不拿 /api/state 自证）',
     dbIds.size === fileIds.size && [...dbIds].every(id => fileIds.has(id)),

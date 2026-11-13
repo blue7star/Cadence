@@ -31,3 +31,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261112-temp-daytime | 见 git | — | e2e 补快速录入条选日期的正反两条断言（落所选日、不进今日清单且日期框回默认）；蓝图 changes 随 app-ui 同步 |
 | TASK-20261112-quick-entry-b | 见 git | — | e2e 改/补录入条断言：日期 chip 记忆与「明天」文案、「将建到」提示、时间显示 09:30 不撑高、刷新回今天；原「日期框回到默认今天」断言按新口径改为「记住上次选择」 |
 | TASK-20261113-quick-detail | 见 git | — | e2e 改用真实回车验证快速建（字段走默认）；新增「点按钮只开弹窗、任务数不变且预填标题/日期/时间」与「弹窗提交后落库字段一致」两条 |
+| TASK-20261113-export-temp | 见 git | — | e2e 导出断言扩到临时任务：集合含 temp、类型列「临时」、整条一行且阶段列全空；仍不含 assign 与别人的 temp；DB 直查同步改类型集合 |

@@ -30,3 +30,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261112-rules-dedup | 见 git | — | 规则体检第二批：删 AGENTS/README/复核清单/issues 中与门禁、e2e、其他文档重复的表述；删「导入必须 --apply」「verify 不留凭证」「PASS 绑归档提交」等已被代码覆盖的说明；issues #64 重复改为 #66 并结案，统计改为 11/55 |
 | TASK-20261112-temp-daytime | 见 git | — | e2e 补快速录入条选日期的正反两条断言（落所选日、不进今日清单且日期框回默认）；蓝图 changes 随 app-ui 同步 |
 | TASK-20261112-quick-entry-b | 见 git | — | e2e 改/补录入条断言：日期 chip 记忆与「明天」文案、「将建到」提示、时间显示 09:30 不撑高、刷新回今天；原「日期框回到默认今天」断言按新口径改为「记住上次选择」 |
+| TASK-20261113-quick-detail | 见 git | — | e2e 改用真实回车验证快速建（字段走默认）；新增「点按钮只开弹窗、任务数不变且预填标题/日期/时间」与「弹窗提交后落库字段一致」两条 |

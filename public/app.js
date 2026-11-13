@@ -909,7 +909,7 @@ function viewToday() {
           <span class="mini">按优先级与时间排序</span>
         </div>
         <form class="split" id="quickForm" style="margin-bottom:10px">
-          <input id="qTitle" class="q-title" placeholder="新建临时任务，回车即创建…"/>
+          <input id="qTitle" class="q-title" placeholder="回车直接建，按钮填细节…"/>
           <span class="q-date ${qd !== TODAY ? 'future' : ''}" data-act="qdate-open" title="哪一天做">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="3" width="11.6" height="10.4" rx="1.8"/><path d="M2.2 6.4h11.6M5.4 1.8v2.4M10.6 1.8v2.4"/></svg>
             <b id="qDateLabel">${quickWhenLabel(qd)}</b>
@@ -922,7 +922,7 @@ function viewToday() {
             <input type="time" id="qTime" aria-label="几点做（可选）"/>
           </span>
           <span class="q-hint" id="qHint" style="display:${qd !== TODAY ? '' : 'none'}">将建到 ${fmt(qd)}</span>
-          <button class="btn primary" type="submit">+ 临时任务</button>
+          <button class="btn primary" type="button" data-act="qdetail" title="打开完整表单：填任务类型、优先级、分类、达成标准；回车则按默认直接建">+ 临时任务…</button>
         </form>
         <div class="tlist">
           ${list.length ? list.map(o => taskRow(o.t, o.step, o.si)).join('') : '<div class="empty">今天还没有安排，先加一条临时任务？</div>'}
@@ -2312,6 +2312,8 @@ function observerFieldHTML(type) {
 
 function taskModalBody(type, preset) {
   const today = (preset && preset.date) || TODAY;
+  const endDay = (preset && preset.end) || today;
+  const timeVal = (preset && preset.time) || '';
   const base = `
   <div class="field"><label>任务名称</label><input id="f_title" placeholder="例如：季度经营分析报告" value="${preset && preset.title ? esc(preset.title) : ''}"/></div>
   <div class="field"><label>任务类型</label>
@@ -2320,8 +2322,8 @@ function taskModalBody(type, preset) {
   ${assigneeFieldHTML(type, preset && preset.assigneeNo)}
   <div class="field"><label>起止时间 / 时间点（可选）</label><div class="row">
     <input type="date" id="f_start" value="${today}" style="flex:1"/>
-    <input type="date" id="f_end" value="${today}" style="flex:1"/>
-    <input type="time" id="f_time" style="flex:0 0 96px"/>
+    <input type="date" id="f_end" value="${endDay}" style="flex:1"/>
+    <input type="time" id="f_time" value="${timeVal}" style="flex:0 0 96px"/>
   </div></div>
   <div class="field"><label>达成标准</label><textarea id="f_std" placeholder="什么算完成，验收看什么">${preset && preset.std ? esc(preset.std) : ''}</textarea></div>
   ${catInputsHTML(type === 'temp' ? otherCat().c1 : null, type === 'temp' ? otherCat().c2 : null, 'm')}
@@ -3037,6 +3039,15 @@ document.addEventListener('click', e => {
       try { if (di.showPicker) di.showPicker(); else di.focus(); } catch (err) { di.focus(); }
       break;
     }
+    /* 按钮 = 细致设置：不直接建，打开完整弹窗，把录入条里已经敲好的标题/日期/时间带过去 */
+    case 'qdetail': {
+      const qt = $('#qTitle'), qdate = $('#qDate'), qtime = $('#qTime');
+      const title = qt ? qt.value.trim() : '';
+      const date = qdate ? (qdate.value || TODAY) : TODAY;
+      const time = qtime ? (qtime.value || '') : '';
+      openNewTask('temp', { title, date, end: date, time });
+      break;
+    }
     /* 时间：先原地展开原生输入，再开选择器；展开不改变行高 */
     case 'qtime-open': {
       const tw = $('#qTimeWrap'), ti = $('#qTime');
@@ -3662,6 +3673,15 @@ document.addEventListener('input', e => {
 /* 时间框失焦就收起（没选值则回到图标态），不让展开态挂在页面上 */
 document.addEventListener('focusout', e => {
   if (e.target.id === 'qTime') syncQuickTime();
+});
+/* 录入条里按回车 = 直接建。按钮已改成 type=button，这里显式兜住隐式提交，
+   标题/日期/时间三个控件里按回车都算。 */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (!['qTitle', 'qDate', 'qTime'].includes(e.target.id)) return;
+  e.preventDefault();
+  const f = $('#quickForm');
+  if (f) f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 });
 
 /* ============ 启动 ============ */

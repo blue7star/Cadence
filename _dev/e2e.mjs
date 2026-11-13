@@ -1050,11 +1050,19 @@ async function main() {
   const emptyHint = await txt('#view');
   check('清空后今日待办有空态提示', emptyHint.includes('还没有安排') || emptyHint.includes('暂无'), emptyHint.replace(/\s+/g, ' ').slice(0, 120));
 
-  await js(`(function(){document.querySelector('#qTitle').value='自检临时任务';
-    document.querySelector('#quickForm').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));return 'ok'})()`);
+  /* 真按一次回车：不是手动 dispatch submit，走浏览器的隐式提交（按钮已改成 type=button） */
+  await js(`(function(){const t=document.querySelector('#qTitle'); t.focus(); t.value='自检临时任务'; return document.activeElement.id})()`);
+  await S('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await S('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
   await sleep(2200);
   const tempOk = (await txt('#view')).includes('自检临时任务');
-  check('空态下可快速建临时任务', tempOk);
+  check('空态下按回车可快速建临时任务', tempOk);
+  const tempDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
+    const x=(s.tasks||[]).find(t=>t.title==='自检临时任务');
+    return x?{type:x.type,time:x.time,std:x.std,cat1:x.cat1,imp:x.imp}:null})()`);
+  check('回车直接建：字段走默认（时间空、达成标准空、其他/临时、无优先级）',
+    !!tempDb && tempDb.type === 'temp' && tempDb.time === '' && tempDb.std === '' && tempDb.cat1 === '其他' && tempDb.imp === null,
+    JSON.stringify(tempDb));
 
   /* 快速录入条选日期：建明天的任务要落在明天，且不能混进今天的清单 */
   const dayTest = await js(`(function(){
@@ -1103,6 +1111,59 @@ async function main() {
   const fresh = await js(`(function(){const d=document.querySelector('#qDate'), l=document.querySelector('#qDateLabel');
     return {date:d?d.value:null, today:TODAY, label:l?l.textContent:null}})()`);
   check('刷新页面后日期回到今天', fresh.date === fresh.today && fresh.label === '今天', JSON.stringify(fresh));
+
+  /* 按钮 = 细致设置：不建任务，只打开完整弹窗，并把标题/日期/时间带过去 */
+  const detail = await js(`(async ()=>{
+    const before = S.tasks.length;
+    const d = document.querySelector('#qDate'), t = document.querySelector('#qTime');
+    document.querySelector('#qTitle').value = '自检细节任务';
+    d.value = addDays(TODAY, 1); d.dispatchEvent(new Event('change',{bubbles:true}));
+    t.value = '10:15'; t.dispatchEvent(new Event('change',{bubbles:true}));
+    document.querySelector('[data-act=qdetail]').click();
+    const s = await (await fetch('/api/state?me=1012')).json();
+    return {before, afterLocal:S.tasks.length, afterServer:(s.tasks||[]).length,
+      open:document.querySelector('#modalWrap').classList.contains('show'),
+      title:document.querySelector('#f_title').value,
+      start:document.querySelector('#f_start').value,
+      end:document.querySelector('#f_end').value,
+      time:document.querySelector('#f_time').value,
+      target:addDays(TODAY,1)};
+  })()`);
+  check('点「+ 临时任务…」不直接建任务，打开已预填的完整弹窗',
+    detail.open && detail.afterLocal === detail.before && detail.afterServer === detail.before &&
+    detail.title === '自检细节任务' && detail.start === detail.target &&
+    detail.end === detail.target && detail.time === '10:15',
+    JSON.stringify(detail));
+
+  /* 取消不能把录入条里已经敲好的内容烧掉；再点一次仍应带着它打开 */
+  await js(`document.querySelector('#modal [data-act=modal-cancel]').click();'ok'`);
+  await sleep(300);
+  const afterCancel = await js(`(function(){return {open:document.querySelector('#modalWrap').classList.contains('show'),
+    title:document.querySelector('#qTitle').value, n:S.tasks.filter(t=>t.title==='自检细节任务').length}})()`);
+  check('取消弹窗：不建任务，录入条里的标题还在',
+    !afterCancel.open && afterCancel.n === 0 && afterCancel.title === '自检细节任务',
+    JSON.stringify(afterCancel));
+  await js(`document.querySelector('[data-act=qdetail]').click();'ok'`);
+  const reopened = await js(`(function(){return {open:document.querySelector('#modalWrap').classList.contains('show'),
+    title:document.querySelector('#f_title').value, time:document.querySelector('#f_time').value}})()`);
+  check('再次打开弹窗仍然预填标题与时间',
+    reopened.open && reopened.title === '自检细节任务' && reopened.time === '10:15',
+    JSON.stringify(reopened));
+
+  await js(`(function(){document.querySelector('#f_std').value='周会上讲清楚本周结论';
+    document.querySelector('#f_imp').value='3';
+    document.querySelector('#f_urg').value='2';
+    document.querySelector('#modal [data-act=modal-ok]').click();return 'ok'})()`);
+  await sleep(2200);
+  const detailDb = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
+    const x=(s.tasks||[]).find(t=>t.title==='自检细节任务');
+    return x?{type:x.type,start:x.start,end:x.end,time:x.time,std:x.std,imp:x.imp,urg:x.urg,cat1:x.cat1}:null})()`);
+  check('弹窗提交后落库字段与填写一致（时间点/达成标准/优先级/分类）',
+    !!detailDb && detailDb.type === 'temp' && detailDb.start === detail.target &&
+    detailDb.end === detail.target && detailDb.time === '10:15' &&
+    detailDb.std === '周会上讲清楚本周结论' && detailDb.imp === 3 && detailDb.urg === 2 &&
+    detailDb.cat1 === '其他',
+    JSON.stringify(detailDb));
 
   await nav('routine');
   await js(`(function(){const bs=[...document.querySelectorAll('[data-act=new-rule]')];

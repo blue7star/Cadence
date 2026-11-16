@@ -46,7 +46,7 @@ node --no-warnings server.js          # 默认 8788
 PORT=8799 node --no-warnings server.js   # 换端口
 ```
 
-启动后可访问 `http://localhost:8788`，用种子花名册里的工号 **1012** 登录，初始密码就是工号 `1012`。路由用 `/api/login`、`/api/state`、`/api/sync`、`/api/rev`、`/api/setmgr`、`/api/demo`、`/api/reset`，加上六个动作接口 `/api/task/accept`、`/api/task/dispatch`、`/api/stage/join`、`/api/stage/toggle`、`/api/task/due`、`/api/notice/seen`（见第 4 节）。
+启动后可访问 `http://localhost:8788`，用种子花名册里的工号 **1012** 登录，初始密码就是工号 `1012`。路由用 `/api/login`、`/api/state`、`/api/sync`、`/api/rev`、`/api/setmgr`、`/api/demo`、`/api/reset`，加上七个动作接口 `/api/task/accept`、`/api/task/dispatch`、`/api/task/undispatch`、`/api/stage/join`、`/api/stage/toggle`、`/api/task/due`、`/api/notice/seen`（见第 4 节）。
 
 **管理账号 admin**：不占工号，不在 `emp` 里，也不参与任何业务数据。首次启动时随机生成 12 位初始密码并**只在启动日志里打印一次**（库里只存 scrypt 哈希），第一次登录必须先改密码才能进管理面板；之后只能在「管理密码」里改，**没有找回入口**——忘了就删掉 `admin_auth` 里那一行，重启会重新生成并再打印一次。
 
@@ -118,8 +118,9 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | GET | `/api/rev` | 全局版本号，供前端 7 秒轮询；变了才拉全量 |
 | POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`；返回 `{ok, rows, errors[], rev}`。`errors` 非空表示**这条任务没写进去**（例如发布给从没登录过的人），前端要把第一条原话 toast 出来。只接受 `owner_no=我` 的行；请求里缺的字段沿用库里的值（半截请求不该炸在 SQL 绑定上） |
 | POST | `/api/task/accept` | `{me, id}`，承接人接收：`owner_no := me`、`type := special`、`intake_status := accepted`。只认 `assignee_no=me` 且当前是 `pending` |
-| POST | `/api/task/dispatch` | `{me, id}`，承接人把已指定责任人的三级子任务派出去（写 `whoAt` + 一条 `dispatched` 提醒）。只认 `owner_no=me`；返回 `{n}` 派发了几段 |
-| POST | `/api/stage/join` | `{me, id, stageId}`，责任人把分给自己的一段收进待办：生成 `type=temp` + `stage_ref={taskId,stageId}` 的任务并置 `joinedAt`。幂等，重复调用返回同一个 id |
+| POST | `/api/task/dispatch` | `{me, id, stageId?, who?}`，承接人把已指定责任人的段派成子专项：每个待派发的段建一条 `type=assign` + `intake_status=pending` + `parent_task_id/parent_stage_id` 的子任务，并清空父阶段的 `who/whoAt`。带 `stageId+who` 且该段已有 pending 子专项时执行**改派**（只换 `assignee_no`）。深度 > 3 整次拒绝；已接收的子专项拒绝改派 |
+| POST | `/api/task/undispatch` | `{me, id, stageId}`，**接收前**撤回：删掉 pending 子专项，父阶段 `who` 还原成它的承接人、`whoAt` 留空。已接收的拒绝 |
+| POST | `/api/stage/join` | 旧通道（0.11.0 起无新数据）：责任人把分给自己的一段收进待办：生成 `type=temp` + `stage_ref={taskId,stageId}` 的任务并置 `joinedAt`。幂等，重复调用返回同一个 id；只为老镜像保留 |
 | POST | `/api/stage/toggle` | `{me, id, stageId, done}`，勾选某一段。权限 = 任务 owner 或该段责任人（且已 `whoAt`）。同步镜像 temp 的完成态 |
 | POST | `/api/task/due` | `{me, id, date}`，改总截止。只认发布人（`publisher_no`，老数据回落 `owner_no`） |
 | POST | `/api/notice/seen` | `{me, ids[]}`，把「有变动的任务」标已读，只清自己名下那几条 |
@@ -140,7 +141,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | `sess` | 登录会话 | `sid`(PK) `no` `created_at` `last_seen` `ip` `ua`；滑动空闲 8 小时、绝对 30 天 |
 | `admin_auth` | 管理账号 | `account`(PK，只有 `admin`) `hash` `salt` `must_change` `changed_at`；**不占工号、不进 `emp`**，业务查询一律只读 `emp`，所以它不会被当成同事/下属/上级 |
 | `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month/year)` `policy` `steps`(JSON) `active` |
-| `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（temp 反指父任务的那一段） `detached` `intake_status` |
+| `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（旧临时副本反指父任务的那一段；0.11.0 起不再写） `parent_task_id`/`parent_stage_id`（0.11.0：子专项挂靠的父任务与父阶段，`UNIQUE(parent_task_id,parent_stage_id)`；唯一索引左前缀即查询索引） `detached` `intake_status` |
 | `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |
 | `watch` | 管理者关注的“下属+规则”或“下属+专项” | `mgr_no` `sub_no` `rule_id` `kind(routine/special)` `task_id` |
 | `task_observer` | 专项任务的知情人 | `task_id` `emp_no` `created_at`，联合主键；只记“谁知道情”，不参与任何执行流转 |
@@ -206,6 +207,16 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
     - **父阶段的日期是人设的，不从子任务反推**（0.8.1 纠正）。有子任务也照样能改阶段起止，改完就是新窗口；子任务只能在窗口里排，装不下就拦下来并说清是谁出界。曾经有一版把父阶段 `start`/`end` 当成子任务并集（前端 `recalcParent()` + 服务端 `normalizeStages()` 一起重算），后果是：改阶段日期存下去被打回原样（看起来"点了保存没反应"）、加子任务会把阶段悄悄撑长、人以为自己设的时间没生效。**别再放回来**——阶段是计划，子任务是执行排布，方向和责任都不一样。
     - **计数、日历、相邻关系三处只认叶子**：`leavesOf()` 是唯一入口。`taskProg()` 与「全勾即完成」看叶子（父阶段不重复计数）；`occOn()` 跳过有子节点的阶段（子任务已经各自打点了，父再出一条就是重复）；`dragCheck()` 的上一段/下一段按**同层兄弟**取（`siblingsOf()`），按数组下标取会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。
     补充：有子任务的阶段不给勾选框，点了就是全勾/全不勾，容易误解；父阶段完成态由子任务算出来，不读它自己的 `done`。
+
+21. **派出去的一段会变成一条真正的子专项（0.11.0）**：和「子任务是节点」不是一回事——子专项是有独立生命周期的 `task` 行，能自己建阶段、排期、再往下派。约定：
+    - **派发 = 建 pending 子任务**（`type=assign`、`parent_task_id/parent_stage_id`、`intake_status=pending`），不是只打 `whoAt`；对方接收（`owner_no` 转移、`type=special`）之后才生效，接收前不进他的日历。派发后清空父阶段的 `who/whoAt`，责任完全转移到子专项。
+    - **最多三层**：新任务深度 = 父深度 + 1，`>3` 在 `dispatchTask` 里整次拒绝；界面在第三级禁用「派发」并写明原因，别让人点了才报错。
+    - **完成态只有一份**：子专项的 `status` 是唯一真相，父阶段不落自己的 `done`（`applyChildOwnership` 清空、读侧 `stagesWithChild` 派生），父任务 status 由 `syncParentFromChild` 单向上汇总。不要加双向回写。
+    - **可见集去重**：带父引用的行只从「我是负责人 / 我承接」进入，publisher、下属、`source_id`、阶段责任人一律排除；父方只在阶段上看到 `child` 摘要（状态/进度），看不到子专项的 `stages`。
+    - **删除只脱钩**：删父任务或父任务里的某一段，清空子专项的父引用并保留它；不级联删。
+    - **接收前可撤回/可改派**：`undispatch` 删 pending 子专项并把 `who` 还原到父阶段；`dispatch{stageId, who}` 只换 pending 的承接人。已接收的不支持，写进已知限制。
+    - **进度加权**：派出去的段算 1 个叶子，按子专项进度折算（`taskProg` / `taskProgressOf` 同口径），不是 0/100。
+    - 导出末尾追加 `父任务编号` / `父任务阶段编号`（共 27 列）；第二列不能叫「父阶段编号」，与阶段级 `pid` 列重名会让按列名匹配的导入整文件拒绝。
 
 21. **阶段能就地改，不用删了重建**：`stageTreeHTML()` 每行给一个「改」，点了在行后插一个 `.sedit` 表单（名称 + 起止），保存走 `stage-save`。历史数据里阶段可能只有 `date`：改成区间时要 `delete s.date`，否则 `occOn()` 还按单日取，界面上改了日期却看不到变化。
 

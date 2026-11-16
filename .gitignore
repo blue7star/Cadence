@@ -12,6 +12,9 @@ _dev/*.json
 _dev/t-*.csv
 # --full 每次重建的测试库副本（真实库 data/workbench.db 不参与 e2e）
 _dev/.test-db/
+_dev/.e2e-db/
+_dev/.api-db/
+_dev/.*.err
 
 node_modules/
 

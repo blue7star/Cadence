@@ -169,7 +169,8 @@ function ownRows() {
       start: t.start, end: t.end, time: t.time || '', std: t.std || '', status: t.status,
       cat1: t.cat1 || null, cat2: t.cat2 || null,
       imp: t.imp == null ? null : t.imp, urg: t.urg == null ? null : t.urg,
-      stages: t.stages || [], routineId: t.routineId || null, planDate: t.planDate || null,
+      /* child 是服务端挂的摘要，不是阶段字段；整段回传会把它落进库 */
+      stages: (t.stages || []).map(s => { const o = Object.assign({}, s); delete o.child; return o; }), routineId: t.routineId || null, planDate: t.planDate || null,
       sourceId: t.sourceId || null, detached: !!t.detached, intakeStatus: t.intakeStatus || null,
       observers: t.observers || []
     }));
@@ -774,7 +775,11 @@ const allLeavesDone = t => {
 const taskProg = t => {
   if (t.type === 'routine') return t.status === 'done' ? 100 : 0;
   const leaves = leavesOf(t.stages);
-  if (leaves.length) return Math.round(leaves.filter(s => s.done).length / leaves.length * 100);
+  if (leaves.length) {
+    /* 派出去的段算 1 个叶子，按子专项自己的进度加权——不是 0/100 二选一 */
+    const sum = leaves.reduce((a, s) => a + (s.child ? (s.child.progress || 0) / 100 : (s.done ? 1 : 0)), 0);
+    return Math.round(sum / leaves.length * 100);
+  }
   return t.status === 'done' ? 100 : t.status === 'doing' ? 50 : 0;
 };
 const overdue = t => t.status !== 'done' && t.end < TODAY;
@@ -1351,7 +1356,9 @@ function viewSpecial() {
           ${t.stages && t.stages.length ? stageRows(t.stages).map(r => `<div class="stage ${r.sub ? 'sub' : ''} ${r.s.done ? 'on' : ''}">
             <div class="n">${r.s.done ? '✓' : r.no}</div>
             <div class="t ${r.s.done ? 'done' : ''}"><span class="sn" style="text-decoration:${r.s.done ? 'line-through' : 'none'}">${esc(r.s.name)}</span><small>${r.s.start || r.s.end ? dateSpan(r.s) : ''}</small></div>
-            ${r.sub && r.s.who ? `<span class="mini who-ro">${esc(nameOf(r.s.who))}</span>` : ''}
+            ${r.sub && (r.s.child
+              ? `<span class="mini who-ro">${esc(nameOf(r.s.child.ownerNo))}${r.s.child.intakeStatus === 'pending' ? ' · 待接收' : ` · ${r.s.child.progress || 0}%`}</span>`
+              : (r.s.who ? `<span class="mini who-ro">${esc(nameOf(r.s.who))}</span>` : ''))}
           </div>`).join('') : '<div class="mini">还没有阶段，进入详情可拆分阶段计划</div>'}
         </div>`;
       }).join('')}
@@ -1874,7 +1881,10 @@ function taskDetailHTML(t) {
   const imPublisher = pub === S.me.no;
   const stages = t.stages || [];
   const mySubs = stages.filter(s => s.pid && s.who === S.me.no && s.whoAt);
-  const toDispatch = stages.filter(s => s.pid && s.who && !s.whoAt);
+  const toDispatch = stages.filter(s => s.pid && s.who && !s.whoAt && !s.child);
+  /* 第三级不能再往下派：按钮禁用并说清原因，不让人点了才挨骂（服务端也会拒）。 */
+  const canDispatchHere = (t.depth || 1) < 3;
+  const blockedDispatch = !canDispatchHere && toDispatch.length > 0;
   const leaves = leavesOf(stages);
   const doneN = leaves.filter(s => s.done).length;
   const prog = taskProg(t);
@@ -1925,8 +1935,9 @@ function taskDetailHTML(t) {
     : `<div class="card"><div class="card-h"><h2>阶段计划</h2>
         <span class="hint">${leaves.length ? `${doneN} / ${leaves.length} 已完成，进度按最细一级算` : '还没拆阶段'}</span></div>
         ${canPlan ? `<div class="note" id="dispatchNote" style="margin-bottom:10px;${toDispatch.length ? '' : 'display:none'}">
-          <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之前，对方那边什么都看不到。
-          <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}">派发</button></div>` : ''}
+          <b>有 ${toDispatch.length} 段已经指定了责任人，但还没派发</b>——派发之后会变成一条子专项，等对方接收才生效。
+          <button class="btn primary sm" style="margin-left:8px" data-act="task-dispatch" data-id="${t.id}" ${blockedDispatch ? 'disabled title="子专项最多三层：这条已经是第三级，不能再往下派"' : ''}>派发</button>
+          ${blockedDispatch ? '<span class="mini" style="margin-left:8px">子专项最多三层，这一级不能再派</span>' : ''}</div>` : ''}
         ${stages.length ? stageTreeHTML(t, canPlan) : (isMirror
           ? '<div class="mini">这段的计划由承接人维护，你只需要做完后勾完成。</div>'
           : '<div class="mini">大活儿建议拆成 2~5 段，进度就会按阶段自动算，不用手填百分比。</div>')}
@@ -1989,9 +2000,11 @@ function taskDetailHTML(t) {
       </div>`;
 
   /* ---- 底部：来源链路 + 删除 ---- */
-  const srcLine = src
-    ? (imPublisher ? `这是你发布的「${esc(src.title || '')}」的旧版承接副本` : `来源：${esc(nameOf(src.ownerNo))} 发布的「${esc(src.title || '')}」`)
-    : (imPublisher && t.ownerNo !== S.me.no ? `你发布的，已移交 ${esc(nameOf(t.ownerNo))}——之后怎么干由他定，你只看进度` : '');
+  const srcLine = t.parentTaskId
+    ? `来自「${esc(t.parentTitle || '一条父任务')}」的「${esc(t.parentStageName || '某一段')}」：完成会汇总到那一段；要换人请找派活的人`
+    : src
+      ? (imPublisher ? `这是你发布的「${esc(src.title || '')}」的旧版承接副本` : `来源：${esc(nameOf(src.ownerNo))} 发布的「${esc(src.title || '')}」`)
+      : (imPublisher && t.ownerNo !== S.me.no ? `你发布的，已移交 ${esc(nameOf(t.ownerNo))}——之后怎么干由他定，你只看进度` : '');
   const roWhy = mySubs.length
     ? `你负责其中 ${mySubs.length} 段，只能勾自己那段的完成；计划由 ${esc(nameOf(t.ownerNo))} 排`
     : (imPublisher ? '这条已经交出去了，你只能看进度；要改总截止点「改」' : '你没有这条任务的编辑权');
@@ -2040,8 +2053,14 @@ function draftAssignee() {
   return (el && el.value) || S.me.no;
 }
 
-/* 子任务那一段的状态。没指定人就没有这一段，不占地方。 */
+/* 子任务那一段的状态。没指定人就没有这一段，不占地方。
+   派成子专项之后，状态与进度只读子专项的摘要——父阶段没有自己的完成态。 */
 function stageTagHTML(s) {
+  if (s.child) {
+    if (s.child.intakeStatus === 'pending') return '<span class="tag warn">待接收</span>';
+    const st = ST[s.child.status] || ST.todo;
+    return `<span class="tag ${st.cls}">${st.name} · ${s.child.progress || 0}%</span>`;
+  }
   if (!s.who) return '';
   if (!s.whoAt) return '<span class="tag warn">未派发</span>';
   if (!s.joinedAt) return '<span class="tag">已派发 · 待加入</span>';
@@ -2088,7 +2107,9 @@ function refreshDispatchNote(t) {
 function stageTreeHTML(t, canEdit) {
   const stages = t.stages || [];
   const tops = stages.filter(s => !s.pid);
-  const myTick = s => s.who ? (s.who === S.me.no && s.whoAt) : canEdit;
+  /* 三层封顶：第三级任务不能往下派。界面只负责别让人点了才挨骂，判定在服务端。 */
+  const canDispatch = (t.depth || 1) < 3;
+  const myTick = s => s.child ? false : (s.who ? (s.who === S.me.no && s.whoAt) : canEdit);
   const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
     title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
   let n = 0;
@@ -2106,17 +2127,30 @@ function stageTreeHTML(t, canEdit) {
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
     </div>`;
     /* 子行只留三类信息：编号、名称+日期、谁做（下拉与状态挨在一起，是一件事）。
-       人名不再单独写一遍——下拉里已经有了，写两遍只会让人以为哪处能改哪处不能。 */
+       派成子专项之后，右边换成子专项的状态；待接收时给「撤回 / 改派」。 */
     const sub = kids.map((k, order) => {
       const ki = stages.indexOf(k);
       const tick = myTick(k);
+      const tag = `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>`;
+      let right = '';
+      if (canEdit && k.child) {
+        right = k.child.intakeStatus === 'pending'
+          ? `${tag}<select class="who-sel" data-act="stage-redispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="改派给另一个人">${stageWhoOptions(t, k.child.assigneeNo || '')}</select>
+             <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="撤回这次派发，这一段回到未派发">撤回</button>`
+          : `${tag}<span class="mini who-ro" title="子专项已被接收，换人/撤回本轮不支持">由 ${esc(nameOf(k.child.ownerNo))} 负责</span>`;
+      } else if (canEdit && canDispatch) {
+        right = `${tag}${whoSel(k, ki)}`;
+      } else if (canEdit) {
+        right = `${tag}<span class="mini" title="子专项最多三层，这一级不能再派">第三级不能再派</span>`;
+      } else {
+        right = `${tag}${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`;
+      }
       return `<div class="stage sub ${k.done ? 'on' : ''}">
-        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责'}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
+        <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.child ? '这一段已经派成子专项，完成由它自己勾' : (k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责')}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
         <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
-        ${canEdit ? `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>` : `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`}
-        ${canEdit ? whoSel(k, ki) : ''}
-        ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="改这一段的名称、日期和谁做">改</button>` : ''}
-        ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
+        ${right}
+        ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="${k.child ? '改名称和日期' : '改这一段的名称、日期和谁做'}">改</button>` : ''}
+        ${canEdit && !k.child ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
       </div>`;
     }).join('');
     return head + sub;
@@ -2633,14 +2667,35 @@ async function joinStage(taskId, stageId) {
     toast(r.existed ? '这一段已经在你的待办里了' : '已加入待办，进「今日待办」了');
   } catch (e) { toast('加入失败：' + e.message); }
 }
-/* 派发：把已指定的责任人一次性交出去。派发之前，对方那边什么都没有。 */
+/* 派发：把已指定的责任人交出去，落地成一条待接收的子专项。
+   派发之后对方并不会立刻多出一条活——他先看到「等你立项」，接收后才生效。 */
 async function dispatchTask(id) {
   try {
     const r = await api('/api/task/dispatch', { method: 'POST', body: JSON.stringify({ me: S.me.no, id }) });
     if (!r.ok) { toast(r.msg || '派发没成功'); return; }
     await refresh(true); render();
-    toast(r.n ? `已派发 ${r.n} 段，责任人会在承接台看到` : (r.msg || '没有待派发的子任务'));
+    toast(r.n ? `已派发 ${r.n} 段，对方接收后才生效` : (r.msg || '没有待派发的子任务'));
   } catch (e) { toast('派发失败：' + e.message); }
+}
+/* 撤回：仅接收前。pending 子专项收走，这一段回到「未派发」。 */
+async function undoDispatch(taskId, stageId) {
+  if (!window.confirm('撤回这次派发？对方那边这条会消失，这一段回到「未派发」。')) return;
+  try {
+    const r = await api('/api/task/undispatch', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: taskId, stageId }) });
+    if (!r.ok) { toast(r.msg || '撤回没成功'); return; }
+    await refresh(true); render();
+    toast('已撤回，这一段回到未派发');
+  } catch (e) { toast('撤回失败：' + e.message); }
+}
+/* 改派：只换待接收子专项的承接人，不产生第二条。 */
+async function redispatchStage(taskId, stageId, who) {
+  if (!who) return;
+  try {
+    const r = await api('/api/task/dispatch', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: taskId, stageId, who }) });
+    if (!r.ok) { toast(r.msg || '改派没成功'); return; }
+    await refresh(true); render();
+    toast(`已改派给 ${nameOf(who)}，等他接收`);
+  } catch (e) { toast('改派失败：' + e.message); }
 }
 /* 变更提醒「知道了」：按任务一次清掉 */
 async function markSeen(taskId) {
@@ -3217,8 +3272,9 @@ document.addEventListener('click', e => {
       row.insertAdjacentHTML('afterend', `<div class="sedit" data-idx="${i}">
         <div class="sedit-h">改第 <b>${lbl}</b> ${s.pid ? '个子任务' : '段'}「${esc(s.name || '')}」</div>
         <input class="sname" value="${esc(s.name || '')}" placeholder="${s.pid ? '子任务名称' : '阶段名称'}"/>
-        ${s.pid ? `<label class="sedit-who">谁做
+        ${s.pid && !s.child ? `<label class="sedit-who">谁做
           <select class="swho" data-sedit-who="${i}">${stageWhoOptions(t, s.who || '')}</select></label>` : ''}
+        ${s.child ? `<div class="mini" style="margin-bottom:6px">这一段已经派成子专项${s.child.intakeStatus === 'pending' ? '（待接收）' : `（由 ${esc(nameOf(s.child.ownerNo))} 负责）`}：负责人与完成态归它，这里只改名称和日期。</div>` : ''}
         <div class="row">
           <input type="date" class="sst" value="${from}"/>
           <input type="date" class="sen" value="${to}"/>
@@ -3330,6 +3386,7 @@ document.addEventListener('click', e => {
       break;
     }
     case 'task-dispatch': dispatchTask(id); break;
+    case 'stage-undispatch': undoDispatch(id, el.dataset.sid); break;
     case 'stage-join': joinStage(id, el.dataset.sid); break;
     case 'notice-seen': markSeen(el.dataset.tid); break;
     case 'due-set': {
@@ -3619,6 +3676,11 @@ document.addEventListener('change', e => {
      点开下拉那一刻读到的还是旧值，选完什么都不发生——看上去就是「改不了」。 */
   if (e.target.matches('[data-act="stage-who"]')) {
     setStageWho(t, Number(e.target.dataset.idx), e.target.value || null, e.target);
+    return;
+  }
+  /* 改派：待接收的子专项换承接人，走专用接口（不是改父阶段的 who） */
+  if (e.target.matches('[data-act="stage-redispatch"]')) {
+    redispatchStage(t.id, e.target.dataset.sid, e.target.value);
     return;
   }
   /* 加知情人：只加不改，名单本身随任务一起存 */

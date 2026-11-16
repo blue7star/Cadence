@@ -8,14 +8,18 @@ paths: server.js, data/
 ## 公开行为
 - 首次启动自动建表；表结构变更须兼容已有 `data/workbench.db`（`ALTER TABLE` 前先查 `pragma table_info`，加字段给默认值，不改已有列含义）。
 - `maintain()` 每次取 state 前按窗口补齐常规实例：日/周/月 `today-40d ~ today+80d`，年常规 `today-40d ~ today+366d`。
+- **阶段派发的父子关系**落在 `task.parent_task_id` + `task.parent_stage_id` 两列（0.11.0），不再往 `stage_ref` 的 JSON 里塞。唯一约束 `UNIQUE(parent_task_id, parent_stage_id) WHERE 两列均非空`：一段最多派出一条子专项，也是派发幂等的依据。
+- 该 partial unique index 的**左前缀就是 `parent_task_id` 的查询索引**，不另建冗余单列索引——别把它当成漏建。
+- 删除父任务或父任务里的某一段只做**脱钩**（清空子任务的两列父引用），不级联删子任务；已接收的子专项会收到一条 `kind=detached` 提醒。
 
 ## 不变量
 - **实例幂等**：同一 owner + 规则 + 周期只能有一条（`INSERT OR IGNORE`）；重复跑 `maintain` 不产生新行。
 - **规则重排只动生成窗口内的实例**：`regenRule` 删除范围是 `routineWindow(rule)` 的 `[from,to]`（日/周/月 +80d、年 +366d），窗口外的年度实例不会被删掉；反例：e2e 7.4b「改规则后年实例仍在」。
 - `INSERT` 列名与 `run()` 参数必须成对改，加列忘补参数只能等运行时炸。
 - `INV-1 未激活（从没登录过）的工号不能成为承接人或子任务责任人`。拒绝点：`upsertTask` 的 `activated` 校验；反例：e2e「绕过界面直接调接口，派给没登录过的人也进不去，并带回原因」。
-- `INV-2 已派发段的完成态以责任人为准`：非责任人的整段提交（旧快照、伪造副本）不得覆盖 `done/doneBy/doneAt`。拒绝点：`keepForeignDone`；反例：e2e「上级用旧快照改标题：标题落库，但下属的完成态没被冲掉」。
+- `INV-2 已派发段的完成态以责任人为准`：非责任人的整段提交（旧快照、伪造副本）不得覆盖 `done/doneBy/doneAt`。拒绝点：`keepForeignDone`（旧镜像段）与 `applyChildOwnership`（已派成子专项的段）；反例：e2e「上级用旧快照改标题：标题落库，但子专项的完成没被冲掉」。
 - `INV-3 task.start_date/end_date 必须等于其 stages 中一级阶段的包络，due_date 不早于该包络`。拒绝点：落库前的 `checkStageIntervals`（见 `MOD-server-api` INV-3/INV-4）；反例：e2e 6.9「直调 sync 让任务周期短于阶段包络」。
+- `INV-4 子专项的 status 是完成态的唯一真相`：父阶段不落自己的 `done`，读侧由 `stagesWithChild` 从子专项派生，写侧由 `applyChildOwnership` 强制清空；父任务 status 由 `syncParentFromChild` 单向汇总。反例：e2e「责任人完成子专项 → 父阶段由子专项派生为完成」。父引用只能由派发写入，客户端整段提交里的 `parentTaskId/parentStageId` 一律忽略。
 
 ## 依赖与边界
 - 依赖 `node:sqlite`（零第三方）、`version.js`。
@@ -30,3 +34,4 @@ paths: server.js, data/
 | TASK-20261111-stage-interval | 见 git | — | 任务行与阶段表的区间自洽（INV-3）：落库前由 `checkStageIntervals` 判定并把 `start_date/end_date` 收敛到一级阶段包络；补充 INV-1（未激活不可派活）与 INV-2（完成态归属）的编号，行为未变 |
 | TASK-20261112-rules-dedup | 见 git | — | 删除 6 条已被代码覆盖或与其他蓝图重复的公开行为（实例幂等、task 三列归属、工作日生成、op_log 上限、口令/会话/导出只读、admin 分表重复）；保留 INSERT 成对与 INV-1~INV-3 |
 | TASK-20261116-year-routine | 见 git | — | 常规实例生成窗口按周期分档（日/周/月 +80d、年 +366d）；`regenRule` 删除范围从「本月及以后」改为「本次生成窗口内」，窗口外年实例不再被删；补年周期切分与 `monthNo` 落点 |
+| TASK-20261116-stage-dispatch-nesting | 见 git | — | 新增 `parent_task_id`/`parent_stage_id` 与 partial unique index（唯一约束即查询索引）；阶段派发落地为子专项，完成态单向后汇总（INV-4）；父任务/父阶段删除只脱钩、不级联 |

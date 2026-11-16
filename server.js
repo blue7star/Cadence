@@ -121,8 +121,17 @@ CREATE INDEX IF NOT EXISTS idx_obs_emp ON task_observer(emp_no);
 ensureColumn('task', 'publisher_no', 'TEXT');
 /* 发布人定的总截止。承接人的计划结束日不得超过它。 */
 ensureColumn('task', 'due_date', 'TEXT');
-/* 子任务责任人「加入待办」生成的临时任务，用这列指回父任务的某一段 */
+/* 子任务责任人「加入待办」生成的临时任务，用这列指回父任务的某一段。
+   0.11.0 起这条通道退役：新流程不写它，只保证老数据还能读。 */
 ensureColumn('task', 'stage_ref', 'TEXT');
+/* 0.11.0：阶段派发 → 子专项。父子关系只认这两列，不再往 stage_ref 的 JSON 里塞。
+   唯一约束 = 「一段最多派出一条子专项」，也是派发幂等的依据；
+   它的左前缀就是 parent_task_id 的查询索引，不另建冗余单列索引（见 specs/modules/server-data.md）。 */
+ensureColumn('task', 'parent_task_id', 'TEXT');
+ensureColumn('task', 'parent_stage_id', 'TEXT');
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_task_parent_stage
+  ON task(parent_task_id, parent_stage_id)
+  WHERE parent_task_id IS NOT NULL AND parent_stage_id IS NOT NULL`);
 
 /* 派发之后的每一次计划变更都要让责任人看见——没有推送，就靠承接台里的这张表。
    removed 是墓碑：节点被删了，责任人得知道自己那条预约没了，不能凭空消失。 */
@@ -407,6 +416,124 @@ function stageWhoMe(r, meNo) {
   return parseStages(r.stages).some(s => s && s.pid && s.who === meNo && s.whoAt);
 }
 
+/* ============ 阶段派发 → 子专项（0.11.0） ============
+   一段最多派出一条子专项（唯一索引兜底）；子专项本身可以再派一层，最多三层。
+   完成态只有一份：子专项 status。父阶段不落自己的 done，读侧一律派生。 */
+const stageLeaves = stages => stages.filter(s => !stages.some(x => x && x.pid === s.id));
+function childOfStage(taskId, stageId) {
+  if (!taskId || !stageId) return null;
+  return db.prepare('SELECT * FROM task WHERE parent_task_id=? AND parent_stage_id=?').get(taskId, stageId) || null;
+}
+function childrenOf(taskId) {
+  return db.prepare('SELECT * FROM task WHERE parent_task_id=?').all(taskId);
+}
+/* 深度：沿 parent_task_id 往上数，顶层为 1。带 visited 防脏数据成环。 */
+function taskDepth(row) {
+  if (!row) return 0;
+  let depth = 1, cur = row, guard = 0;
+  const seen = new Set([row.id]);
+  while (cur && cur.parent_task_id && guard++ < 10) {
+    const p = db.prepare('SELECT id,parent_task_id FROM task WHERE id=?').get(cur.parent_task_id);
+    if (!p || seen.has(p.id)) break;
+    seen.add(p.id); depth++; cur = p;
+  }
+  return depth;
+}
+/* 子专项的完成日期：与导出的「完成日期」同口径（叶子 doneAt 的最大值），
+   没有阶段就取最后一次更新的日期。 */
+function childDoneAt(c) {
+  if (!c || c.status !== 'done') return null;
+  const stages = parseStages(c.stages);
+  const dates = stages.filter(s => s && s.done && s.doneAt).map(s => s.doneAt).sort();
+  return dates.length ? dates[dates.length - 1] : String(c.updated_at || '').slice(0, 10);
+}
+function taskProgressOf(row, guard, childMap) {
+  if (!row) return 0;
+  if (row.type === 'routine') return row.status === 'done' ? 100 : 0;
+  const stages = parseStages(row.stages);
+  const leaves = stageLeaves(stages);
+  if (leaves.length) {
+    let sum = 0;
+    for (const s of leaves) {
+      const child = s && s.id
+        ? (childMap ? childMap.get(row.id + '|' + s.id) : childOfStage(row.id, s.id))
+        : null;
+      /* 派出去的阶段算 1 个叶子，按子专项自己的进度加权——不是 0/100 二选一 */
+      if (child) sum += (guard ? 0 : taskProgressOf(child, true, childMap)) / 100;
+      else sum += s.done ? 1 : 0;
+    }
+    return Math.round(sum / leaves.length * 100);
+  }
+  return row.status === 'done' ? 100 : row.status === 'doing' ? 50 : 0;
+}
+/* 挂给父阶段的摘要：只有下一层的状态与进度，不带子任务的 stages。
+   「上级最多透视一层」就落在这里——想多看一层也没有字段可看。 */
+function childSummaryOf(c, childMap) {
+  return {
+    id: c.id, title: c.title, status: c.status || 'todo',
+    intakeStatus: c.intake_status || null,
+    progress: taskProgressOf(c, false, childMap),
+    ownerNo: c.owner_no, assigneeNo: c.assignee_no,
+    start: c.start_date || '', end: c.end_date || ''
+  };
+}
+/* 父阶段读侧视图：派出去的段，完成态直接取子专项，绝不读 JSON 里那份。
+   childMap 是整次请求共用的一张表（key=`taskId|stageId`），避免每个阶段各查一次库。 */
+function stagesWithChild(taskId, stages, childMap) {
+  return stages.map(s => {
+    const c = s && s.id
+      ? (childMap ? childMap.get(taskId + '|' + s.id) : childOfStage(taskId, s.id))
+      : null;
+    if (!c) return s;
+    const done = c.status === 'done';
+    return Object.assign({}, s, {
+      child: childSummaryOf(c, childMap),
+      done, doneBy: done ? c.owner_no : null, doneAt: done ? childDoneAt(c) : null
+    });
+  });
+}
+/* 子专项状态变了 → 重算父任务 status（唯一的上行方向），done 翻转时写一条提醒。
+   注意只写父任务的 status，不往父阶段的 JSON 里落 done——那是第二份真相。 */
+function syncParentFromChild(childId) {  const c = db.prepare('SELECT * FROM task WHERE id=?').get(childId);
+  if (!c || !c.parent_task_id || !c.parent_stage_id) return;
+  const p = db.prepare('SELECT * FROM task WHERE id=?').get(c.parent_task_id);
+  if (!p) return;
+  const raw = parseStages(p.stages);
+  const s = raw.find(x => x && x.id === c.parent_stage_id);
+  if (!s) return;
+  const done = c.status === 'done';
+  const changed = !!s.done !== done;
+  const derived = raw.map(x => (x && x.id === c.parent_stage_id) ? Object.assign({}, x, { done }) : x);
+  const status = derived.some(x => x && x.pid) ? stageStatusFromLeaves(derived, p.status) : p.status;
+  db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?').run(status, nowStr(), p.id);
+  if (changed) {
+    const emp = getEmp(c.owner_no);
+    const nm = emp ? emp.name : c.owner_no;
+    db.prepare(`INSERT INTO stage_notice(task_id,stage_id,emp_no,kind,summary,at)
+                VALUES(?,?,?,?,?,?)`).run(p.id, s.id || null, p.owner_no, 'stage_done',
+      done ? `${nm}完成了「${s.name || '子任务'}」` : `${nm}取消了「${s.name || '子任务'}」的完成标记`, nowStr());
+    bumpRev();
+  }
+}
+/* 父引用断了：子专项保留成独立专项，不级联删。接收过的要给一条提醒，
+   否则他那边只是父任务名字消失，看不出发生了什么。 */
+function detachChild(c, msg) {
+  db.prepare('UPDATE task SET parent_task_id=NULL,parent_stage_id=NULL,updated_at=? WHERE id=?')
+    .run(nowStr(), c.id);
+  if (c.intake_status === 'accepted' && c.owner_no) {
+    db.prepare(`INSERT INTO stage_notice(task_id,stage_id,emp_no,kind,summary,at)
+                VALUES(?,?,?,?,?,?)`).run(c.id, null, c.owner_no, 'detached', msg, nowStr());
+  }
+}
+/* 子专项被删掉（它自己的 owner 删的）之后，父阶段不再有完成来源，
+   父任务 status 得跟着回退——否则会留下「叶子都没了、整条还显示已完成」。 */
+function recomputeParentStatus(p) {
+  const derived = stagesWithChild(p.id, parseStages(p.stages));
+  if (!derived.some(x => x && x.pid)) return;
+  db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?')
+    .run(stageStatusFromLeaves(derived, p.status), nowStr(), p.id);
+}
+
 function stateFor(meNo) {
   const me = getEmp(meNo);
   if (!me) return null;
@@ -432,6 +559,10 @@ function stateFor(meNo) {
      个人工作台量级（千条以内）这样最省事，不值得为它引一层索引。 */
   const rows = db.prepare('SELECT * FROM task').all()
     .filter(r => {
+      /* 子专项只从「我是承接人」进入。派发人虽然是 owner_no（子专项由他发起），
+         但那一份活在父任务里已经有摘要行，再出现一次就是同一条活两份。
+         publisher、下属专项、source_id、阶段责任人（who 在派发时已清空）四条来源同理。 */
+      if (r.parent_task_id && r.assignee_no !== meNo) return false;
       if (r.owner_no === meNo || r.assignee_no === meNo || r.publisher_no === meNo) return true;
       /* 常规：下属的实例要看（看板要用）；
          专项：下属的专项也要看，否则「下属专项工作推进情况」永远是空的。
@@ -459,23 +590,44 @@ function stateFor(meNo) {
   for (const r of db.prepare('SELECT task_id, emp_no FROM task_observer').all()) {
     (obsMap[r.task_id] = obsMap[r.task_id] || []).push(r.emp_no);
   }
-  const tasks = allRows.map(r => ({
-    id: r.id, type: r.type, title: r.title, ownerNo: r.owner_no, assigneeNo: r.assignee_no,
-    publisherNo: r.publisher_no || r.owner_no, dueDate: r.due_date || r.end_date,
-    stageRef: parseRef(r.stage_ref),
-    assignee: r.assignee_no === meNo ? '我' : (names[r.assignee_no] || ''),
-    start: r.start_date, end: r.end_date, time: r.time || '', std: r.std || '',
-    status: r.status || 'todo', cat1: r.cat1, cat2: r.cat2,
-    imp: r.imp == null ? null : Number(r.imp), urg: r.urg == null ? null : Number(r.urg),
-    stages: parseStages(r.stages),
-    routineId: r.routine_id || null, planDate: r.plan_date || null,
-    sourceId: r.source_id || null, detached: !!r.detached,
-    intakeStatus: r.intake_status || null, auto: !!r.routine_id,
-    /* 名单只给这条任务的经手人看：知情人能看到自己「被告知过」，看不到「还有谁被告知」——
-       那是别人的社交关系，不是项目进度。 */
-    observers: (r.owner_no === meNo || r.assignee_no === meNo) ? (obsMap[r.id] || []) : [],
-    observer: obsMine.has(r.id)
-  }));
+  /* 父任务 id → 标题/阶段名。子专项的负责人看不到父任务行（可见集已排除），
+     但「这条活是从哪来的」必须说得清，否则详情里只剩一个孤立专项。 */
+  const parentInfo = r => {
+    if (!r.parent_task_id) return { title: null, stageName: null };
+    const p = db.prepare('SELECT title,stages FROM task WHERE id=?').get(r.parent_task_id);
+    if (!p) return { title: null, stageName: null };
+    const ps = parseStages(p.stages).find(x => x && x.id === r.parent_stage_id);
+    return { title: p.title, stageName: ps ? (ps.name || '') : null };
+  };
+  /* 整次请求共用一张子专项表：state 每 7 秒拉一次，不能按阶段逐条查库。 */
+  const childMap = new Map();
+  for (const c of db.prepare('SELECT * FROM task WHERE parent_task_id IS NOT NULL').all()) {
+    if (c.parent_stage_id) childMap.set(c.parent_task_id + '|' + c.parent_stage_id, c);
+  }
+  const tasks = allRows.map(r => {
+    const pi = parentInfo(r);
+    return {
+      id: r.id, type: r.type, title: r.title, ownerNo: r.owner_no, assigneeNo: r.assignee_no,
+      publisherNo: r.publisher_no || r.owner_no, dueDate: r.due_date || r.end_date,
+      stageRef: parseRef(r.stage_ref),
+      /* 父子关系与深度：深度由服务端算，界面据此禁用第三级的「派发」 */
+      parentTaskId: r.parent_task_id || null, parentStageId: r.parent_stage_id || null,
+      depth: taskDepth(r), parentTitle: pi.title, parentStageName: pi.stageName,
+      assignee: r.assignee_no === meNo ? '我' : (names[r.assignee_no] || ''),
+      start: r.start_date, end: r.end_date, time: r.time || '', std: r.std || '',
+      status: r.status || 'todo', cat1: r.cat1, cat2: r.cat2,
+      imp: r.imp == null ? null : Number(r.imp), urg: r.urg == null ? null : Number(r.urg),
+      /* 派出去的段：完成态由子专项派生，并挂一份只含下一层状态/进度的摘要 */
+      stages: stagesWithChild(r.id, parseStages(r.stages), childMap),
+      routineId: r.routine_id || null, planDate: r.plan_date || null,
+      sourceId: r.source_id || null, detached: !!r.detached,
+      intakeStatus: r.intake_status || null, auto: !!r.routine_id,
+      /* 名单只给这条任务的经手人看：知情人能看到自己「被告知过」，看不到「还有谁被告知」——
+         那是别人的社交关系，不是项目进度。 */
+      observers: (r.owner_no === meNo || r.assignee_no === meNo) ? (obsMap[r.id] || []) : [],
+      observer: obsMine.has(r.id)
+    };
+  });
 
   const rules = db.prepare('SELECT * FROM rule WHERE owner_no=?').all(meNo).map(r => ({
     id: r.id, title: r.title, cycle: r.cycle, policy: r.policy,
@@ -536,9 +688,16 @@ function bumpRev() {
     人看到的是「点了保存什么都没变」。已删除，别再放回来。） */
 function normalizeStages(raw, type) {
   const arr = Array.isArray(raw) ? raw : [];
-  if (type !== 'assign' && type !== 'special') return arr.map(s => Object.assign({}, s, { pid: null }));
-  const topIds = new Set(arr.filter(s => !s.pid && s.id).map(s => s.id));
-  return arr.map(s => {
+  /* child 是 state 读侧挂上去的摘要，不是阶段字段——客户端整段回传时必须扔掉，
+     否则它会跟着 stages 一起落库，变成一份迟早过期的副本。 */
+  const clean = arr.map(s => {
+    const o = Object.assign({}, s);
+    delete o.child;
+    return o;
+  });
+  if (type !== 'assign' && type !== 'special') return clean.map(s => Object.assign({}, s, { pid: null }));
+  const topIds = new Set(clean.filter(s => !s.pid && s.id).map(s => s.id));
+  return clean.map(s => {
     const pid = s.pid && topIds.has(s.pid) ? s.pid : null;
     return Object.assign({}, s, { pid });
   });
@@ -779,6 +938,19 @@ function notifyStageChanges(taskId, prev, next) {
   }
 }
 
+/* 已经派成子专项的段：责任与完成都归子专项。
+   整段提交里带回来的 done / who 一律不算数——「父方代勾」在服务端就不成立，
+   who 也不许落回去，否则责任人会从「我负责某段」再看到父任务一次。 */
+function applyChildOwnership(stages, taskId) {
+  for (const s of stages) {
+    if (!s || !s.id) continue;
+    const c = childOfStage(taskId, s.id);
+    if (!c) continue;
+    s.who = null; s.whoAt = null; s.joinedAt = null;
+    s.done = false; s.doneBy = null; s.doneAt = null;
+  }
+}
+
 function upsertTask(meNo, t, opts) {
   const exist = db.prepare('SELECT * FROM task WHERE id=?').get(t.id);
   const isPubPending = exist && exist.publisher_no === meNo && exist.intake_status === 'pending';
@@ -837,6 +1009,9 @@ function upsertTask(meNo, t, opts) {
   const stages = (exist && t.stages === undefined)
     ? prevStages
     : applyStageOwners(normalizeStages(t.stages, type), prevStages, assigneeNo, meNo);
+  /* 派出去的段先按子专项把责任与完成态钉死，再走区间判定——
+     父阶段 JSON 里永远不存这两个字段的「自己的版本」。 */
+  applyChildOwnership(stages, t.id);
   const ivBad = checkStageIntervals(stages, prevStages, type, t);
   if (ivBad) return { ok: false, msg: ivBad };
 
@@ -886,7 +1061,8 @@ function upsertTask(meNo, t, opts) {
   }
   dropStaleMirrors(t.id, prevStages, stages);
   let status = t.status || 'todo';
-  if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stages, status);
+  /* 派出去的叶子按子专项的完成态算状态，否则父任务会永远停在「未完成」 */
+  if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stagesWithChild(t.id, stages), status);
 
   if (exist) {
     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
@@ -924,6 +1100,18 @@ function upsertTask(meNo, t, opts) {
   /* 责任人自己的派生副本变了，往上汇总到父任务那一段——只走这一个方向。
      上级侧的改动不再往下写副本（那会变成双向循环，谁最后写谁说了算）。 */
   pullStageFromMirror(t.id);
+  /* 这一条如果是子专项，它的状态变了要往父阶段汇总；反过来不写。
+     子专项的 status 是唯一真相，父阶段只读它。 */
+  syncParentFromChild(t.id);
+  /* 段被删：挂在那一段上的子专项脱钩保留，不级联删。 */
+  if (exist && t.stages !== undefined) {
+    const nextIds = new Set(stages.filter(s => s && s.id).map(s => s.id));
+    for (const c of childrenOf(t.id)) {
+      if (c.parent_stage_id && !nextIds.has(c.parent_stage_id)) {
+        detachChild(c, `「${t.title || '父任务'}」撤掉了这一段，你这条已成为独立专项`);
+      }
+    }
+  }
 
   /* 知情人：只有任务 owner 能定。整体替换——payload 里带了 observers 就以它为准，
      不带就原样保留（/api/sync 是增量合并，"没提交"不等于"清空"）。
@@ -1006,6 +1194,15 @@ function applySync(meNo, body) {
         }
       }
       n += db.prepare('DELETE FROM task WHERE id=?').run(id).changes;
+      /* 删的如果是子专项：父阶段失去完成来源，父任务状态要回退一格。 */
+      if (r.parent_task_id) {
+        const p = db.prepare('SELECT * FROM task WHERE id=?').get(r.parent_task_id);
+        if (p) recomputeParentStatus(p);
+      }
+      /* 删父任务：子专项脱钩保留成独立专项，绝不级联删。 */
+      for (const c of childrenOf(id)) {
+        detachChild(c, `「${r.title}」已被取消，你这条已成为独立专项`);
+      }
       /* 任务没了，知情人名单跟着走——留在库里就成了孤儿，
          下一个人打开「我关注的任务」会看到一条已经删掉的专项。 */
       db.prepare('DELETE FROM task_observer WHERE task_id=?').run(id);
@@ -1077,28 +1274,94 @@ function acceptTask(meNo, id) {
   return { ok: true };
 }
 
-/* 派发：把「已指定责任人但还没派」的段一次性交出去。
-   派发之前，who 只是一个备注——不产生承接台条目、不产生待办。 */
-function dispatchTask(meNo, id) {
+/* 派发：把「已指定责任人但还没派」的段交出去，落地成一条待接收的子专项。
+   和以前的分界线：以前只打 whoAt、等人「加入待办」；现在有真的任务行，
+   接收之后它就是一条能自己拆、自己排、再派一层的专项。
+
+   两种调用：
+   - `{id}`（或 `{id, stageId}` 且该段没有子专项）：对每个待派发的段建子专项；
+   - `{id, stageId, who}` 且该段已有 pending 子专项：只改承接人（改派）。
+   已接收的子专项不在这里动——见已知限制。 */
+function dispatchTask(meNo, id, stageId, who) {
   const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
   if (!r) return { ok: false, msg: '找不到这条任务' };
   if (r.owner_no !== meNo) return { ok: false, msg: '只有承接人能派发这条任务' };
+
+  /* 改派：这一段已经有待接收的子专项，只换承接人，不产生第二条。 */
+  if (stageId) {
+    const c = childOfStage(id, stageId);
+    if (c) {
+      if (c.intake_status !== 'pending') return { ok: false, msg: '这条子专项已经被接收，不能再改派' };
+      const target = String(who || '').trim();
+      if (!target) return { ok: false, msg: '要改派给谁？' };
+      if (target === c.assignee_no) return { ok: true, n: 0, msg: '这一段还是派给同一个人' };
+      const emp = db.prepare('SELECT no,name,activated FROM emp WHERE no=? AND active=1').get(target);
+      if (!emp) return { ok: false, msg: `花名册里没有工号「${target}」，不能派给他` };
+      if (!emp.activated) {
+        return { ok: false, msg: `${emp.name} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。` };
+      }
+      db.prepare('UPDATE task SET assignee_no=?,updated_at=? WHERE id=?').run(target, nowStr(), c.id);
+      bumpRev();
+      return { ok: true, n: 1, reassigned: true };
+    }
+  }
+
+  /* 三层封顶在服务端判：新任务深度 = 本条深度 + 1，超过 3 一次都不建。 */
+  if (taskDepth(r) + 1 > 3) {
+    return { ok: false, msg: '子专项最多三层：这条已经是第三级，不能再往下派。要拆细请用任务内的「子任务」' };
+  }
+
   const stages = parseStages(r.stages);
   const now = nowStr();
-  const ins = db.prepare(`INSERT INTO stage_notice(task_id,stage_id,emp_no,kind,summary,at)
-                           VALUES(?,?,?,?,?,?)`);
-  let n = 0;
+  const created = [];
   for (const s of stages) {
-    if (!s || !s.pid || !s.who || s.whoAt) continue;
-    s.whoAt = now;
-    n++;
-    ins.run(id, s.id || null, s.who, 'dispatched',
-      `「${s.name || '子任务'}」分给你：${s.start || s.date || ''}→${s.end || s.date || ''}`, now);
+    if (!s || !s.pid || s.whoAt) continue;
+    if (stageId && s.id !== stageId) continue;
+    const target = (stageId && s.id === stageId && who) ? String(who) : s.who;
+    if (!target) continue;
+    if (childOfStage(id, s.id)) continue;
+    const emp = db.prepare('SELECT no,name,activated FROM emp WHERE no=? AND active=1').get(target);
+    if (!emp) return { ok: false, msg: `花名册里没有工号「${target}」，这个子任务不能派给他` };
+    if (!emp.activated) return { ok: false, msg: `${emp.name} 还没有登录过工作台，子任务派过去他收不到。` };
+    const childId = 'nt_' + id + '_' + (s.id || Math.random().toString(36).slice(2, 8));
+    const start = s.start || s.date || r.start_date;
+    const end = s.end || s.date || start;
+    db.prepare(`INSERT OR IGNORE INTO task
+      (id,owner_no,publisher_no,assignee_no,type,title,std,start_date,end_date,due_date,status,stages,
+       source_id,stage_ref,intake_status,parent_task_id,parent_stage_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      childId, meNo, meNo, target, 'assign', `${r.title} · ${s.name || '子任务'}`, r.std || '',
+      start, end, end, 'todo', '[]', null, null, 'pending', id, s.id, now, now
+    );
+    /* 责任转移到子专项：父阶段不再留 who，否则责任人会从「我负责某段」再看到父任务一次。 */
+    s.who = null; s.whoAt = null; s.joinedAt = null;
+    s.done = false; s.doneBy = null; s.doneAt = null;
+    created.push({ stageId: s.id, childId, who: target });
   }
-  if (!n) return { ok: true, n: 0, msg: '没有待派发的子任务' };
-  db.prepare('UPDATE task SET stages=?,updated_at=? WHERE id=?').run(JSON.stringify(stages), now, id);
+  if (!created.length) return { ok: true, n: 0, msg: '没有待派发的子任务' };
+  const status = stageStatusFromLeaves(stagesWithChild(id, stages), r.status);
+  db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
+    .run(JSON.stringify(stages), status, now, id);
   bumpRev();
-  return { ok: true, n };
+  return { ok: true, n: created.length, created };
+}
+
+/* 撤回（仅接收前）：pending 子专项直接收走，父阶段回到「已指定、未派发」。
+   接收之后的换人/撤回本轮不支持——那已经是一条独立专项，见契约的已知限制。 */
+function undispatchTask(meNo, id, stageId) {
+  const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
+  if (!r) return { ok: false, msg: '找不到这条任务' };
+  if (r.owner_no !== meNo) return { ok: false, msg: '只有承接人能撤回派发' };
+  const c = childOfStage(id, stageId);
+  if (!c) return { ok: false, msg: '这一段没有待接收的派发' };
+  if (c.intake_status !== 'pending') return { ok: false, msg: '这条子专项已经被接收，不能撤回；要调整请找它的负责人' };
+  const stages = parseStages(r.stages);
+  const s = stages.find(x => x && x.id === stageId);
+  if (s) { s.who = c.assignee_no; s.whoAt = null; s.joinedAt = null; }
+  db.prepare('DELETE FROM task WHERE id=?').run(c.id);
+  db.prepare('UPDATE task SET stages=?,updated_at=? WHERE id=?').run(JSON.stringify(stages), nowStr(), id);
+  bumpRev();
+  return { ok: true, id: c.id, who: c.assignee_no };
 }
 
 /* 加入待办：责任人把某一段收进自己的待办，落地成一条临时任务。
@@ -1147,6 +1410,8 @@ function toggleStage(meNo, id, stageId, done) {
   const stages = parseStages(r.stages);
   const s = stages.find(x => x && x.id === stageId && x.pid);
   if (!s) return { ok: false, msg: '这一段已经从任务里移除了' };
+  /* 派出去的段没有自己的勾选态：完成只由子专项的负责人勾。文案与「别人负责」同口径。 */
+  if (childOfStage(id, stageId)) return { ok: false, msg: '这一段由别人负责，只有他能勾完成' };
   const isOwner = r.owner_no === meNo;
   if (s.who) {
     if (s.who !== meNo) return { ok: false, msg: '这一段由别人负责，只有他能勾完成' };
@@ -1169,6 +1434,8 @@ function toggleStage(meNo, id, stageId, done) {
     syncMirrorStatus(id, stageId, on);
     notifyStageDone(r, s, on, meNo);
   }
+  /* 这条任务本身是子专项时，它的状态变化要汇总到父阶段。 */
+  syncParentFromChild(id);
   bumpRev();
   return { ok: true, done: on };
 }
@@ -1560,7 +1827,10 @@ function sidCookie(sid, maxAgeSec) {
 const EXPORT_COLUMNS = [
   '任务编号', '标题', '类型', '状态', '所属人', '承接人', '分类一', '分类二', '重要', '紧急',
   '开始日', '计划结束', '总截止', '完成日期', '更新时间', '分类一ID', '分类二ID',
-  '阶段编号', '阶段名称', '阶段开始', '阶段结束', '阶段负责人', '阶段完成', '阶段完成日', '父阶段编号'
+  '阶段编号', '阶段名称', '阶段开始', '阶段结束', '阶段负责人', '阶段完成', '阶段完成日', '父阶段编号',
+  /* 0.11.0：跨任务的父子关系。不能叫「父阶段编号」——第 25 列已经占了这个名字，
+     同文件两列同名会让按列名匹配的导入整文件拒绝。 */
+  '父任务编号', '父任务阶段编号'
 ];
 const TYPE_OUT = { routine: '常规', special: '专项', temp: '临时' };
 const STATUS_OUT = { todo: '待办', doing: '进行中', paused: '暂缓', done: '已完成' };
@@ -1605,10 +1875,22 @@ function exportTasksCsv(meNo) {
        所以这里不能按 id 过滤——否则这类阶段会被静默丢掉，导出看起来比页面少一截。 */
     const stages = parseStages(r.stages).filter(Boolean);
     const parents = new Set(stages.map(s => s.pid).filter(Boolean));
+    /* 派出去的段：负责人与完成态都读子专项（派生值，不落回 stage.who） */
+    const children = {};
+    for (const c of childrenOf(r.id)) if (c.parent_stage_id) children[c.parent_stage_id] = c;
+    const stageDone = s => {
+      const c = s.id ? children[s.id] : null;
+      return c ? c.status === 'done' : !!s.done;
+    };
+    const stageDoneAt = s => {
+      const c = s.id ? children[s.id] : null;
+      if (c) return c.status === 'done' ? childDoneAt(c) : '';
+      return s.done ? (s.doneAt || '') : '';
+    };
     /* 完成日期只到日期：取叶子阶段 doneAt 的最大值；无阶段任务这一列永远是空（现状，C3） */
     let completed = '';
     if (r.status === 'done') {
-      const dates = stages.filter(s => !parents.has(s.id) && s.doneAt).map(s => s.doneAt).sort();
+      const dates = stages.filter(s => !parents.has(s.id) && stageDoneAt(s)).map(stageDoneAt).sort();
       if (dates.length) completed = dates[dates.length - 1];
     }
     const taskCells = [
@@ -1618,19 +1900,26 @@ function exportTasksCsv(meNo) {
       r.start_date || '', r.end_date || '', r.due_date || r.end_date || '', completed, r.updated_at || '',
       r.cat1 || '', r.cat2 || ''
     ];
+    /* 跨任务父子关系在列定义里排最后（第 26、27 列），数据行也必须落在同一个位置。
+       混进 taskCells 会整体前移两列，按列名/列号读都会错位。 */
+    const parentCells = [r.parent_task_id || '', r.parent_stage_id || ''];
     if (!stages.length) {
-      lines.push(csvRow([...taskCells, '', '', '', '', '', '', '', '']));
+      lines.push(csvRow([...taskCells, '', '', '', '', '', '', '', '', ...parentCells]));
       continue;
     }
     stages.forEach((s, i) => {
       /* 规则实例的步骤只有 date（当天完成），没有起止区间——前端也是这么兜底的
          （app.js 里 dayOf = s[k] || s.date），导出沿用同一口径，免得出现有名字没日期的空行。 */
+      const c = s.id ? children[s.id] : null;
       const stageCells = [
-        s.id || '', s.name || '', s.start || s.date || '', s.end || s.date || '', s.who || '',
-        s.done ? '1' : '0', s.done ? (s.doneAt || '') : '', s.pid || ''
+        s.id || '', s.name || '', s.start || s.date || '', s.end || s.date || '',
+        c ? (c.assignee_no || '') : (s.who || ''),
+        stageDone(s) ? '1' : '0', stageDoneAt(s), s.pid || ''
       ];
       /* 续行规则 R2：任务级列只在首行有值，后续行必须留空 */
-      lines.push(csvRow(i === 0 ? [...taskCells, ...stageCells] : [...Array(taskCells.length).fill(''), ...stageCells]));
+      lines.push(csvRow(i === 0
+        ? [...taskCells, ...stageCells, ...parentCells]
+        : [...Array(taskCells.length).fill(''), ...stageCells, '', '']));
     });
   }
   return '\uFEFF' + lines.join('\r\n') + '\r\n';
@@ -1919,8 +2208,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/task/dispatch' && req.method === 'POST') {
       const b = body;
-      const r = dispatchTask(me, String(b.id || ''));
-      if (r.ok) logOp(me, 'dispatch', b.id + ' n=' + r.n, ip);
+      const r = dispatchTask(me, String(b.id || ''), b.stageId ? String(b.stageId) : '', b.who ? String(b.who) : '');
+      if (r.ok) logOp(me, 'dispatch', b.id + ' n=' + r.n + (r.reassigned ? ' reassign' : ''), ip);
+      return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
+    }
+    if (p === '/api/task/undispatch' && req.method === 'POST') {
+      const b = body;
+      const r = undispatchTask(me, String(b.id || ''), String(b.stageId || ''));
+      if (r.ok) logOp(me, 'undispatch', b.id + '/' + b.stageId, ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }
     if (p === '/api/stage/join' && req.method === 'POST') {

@@ -4,7 +4,7 @@
 
 ## 1. 是什么
 
-面向初级管理者的工作台：发布任务、常规工作（日/周/月固定节点）、专项工作、临时任务、日历待办、承接上级任务。
+面向初级管理者的工作台：发布任务、常规工作（日/周/月/年固定节点）、专项工作、临时任务、日历待办、承接上级任务。
 
 - 形态：单进程 Web 应用。`server.js` 同时提供 REST 接口与静态页面。
 - 后端：Node.js **22+**（依赖内置 `node:sqlite`），零第三方依赖，`npm install` 不需要跑。
@@ -139,7 +139,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | `cred` | 员工密码 | `no`(PK, 对 `emp.no`) `hash` `salt` `initial`(1=还是工号) `changed_at`；与花名册分表，导入不动它 |
 | `sess` | 登录会话 | `sid`(PK) `no` `created_at` `last_seen` `ip` `ua`；滑动空闲 8 小时、绝对 30 天 |
 | `admin_auth` | 管理账号 | `account`(PK，只有 `admin`) `hash` `salt` `must_change` `changed_at`；**不占工号、不进 `emp`**，业务查询一律只读 `emp`，所以它不会被当成同事/下属/上级 |
-| `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month)` `policy` `steps`(JSON) `active` |
+| `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month/year)` `policy` `steps`(JSON) `active` |
 | `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（temp 反指父任务的那一段） `detached` `intake_status` |
 | `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |
 | `watch` | 管理者关注的“下属+规则”或“下属+专项” | `mgr_no` `sub_no` `rule_id` `kind(routine/special)` `task_id` |
@@ -149,7 +149,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | `op_log` | 操作日志 | `actor_no` `action` `detail` `ip` |
 | `meta` | 版本号等 | `k` `v` |
 
-`rule.steps` 单节点结构：`{name, time, day|weekday, mo, plan, policy}`。`mo` 为月份偏移（0 本月、1 次月），用于跨月规则（如本月 28 日 → 次月 15 日）。
+`rule.steps` 单节点结构：`{name, time, day|weekday|monthNo, mo, plan, policy}`。`mo` 为月份偏移（0 本月、1 次月），用于跨月规则（如本月 28 日 → 次月 15 日）；`monthNo` 只给年常规用（1-12），不要拿 `mo` 代替。
 
 `task.stages` 节点结构：`{id, pid, name, start, end, done, who, whoAt, joinedAt, doneBy, doneAt}`，常规实例是 `{name, date, time, done, plan}`。`pid` 为空是一级阶段，有值表示它是那个阶段的子任务（只允许一层，见第 6 节第 20 条）。老数据没有 `id`/`pid`，一律按一级阶段处理，不需要迁移。
 
@@ -157,7 +157,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 
 ## 6. 关键设计（改动前先读）
 
-1. **常规实例由服务端生成，不由浏览器生成。** 管理者要看下属的推进情况，下属没登录也必须存在实例。`maintain()` 在每次取 `state` 前按 `today-40d ~ today+80d` 补齐；实例 ID 固定为 `ri_<ruleId>_<周期key>`，`INSERT OR IGNORE` 保证幂等。
+1. **常规实例由服务端生成，不由浏览器生成。** 管理者要看下属的推进情况，下属没登录也必须存在实例。`maintain()` 在每次取 `state` 前按窗口补齐：日/周/月是 `today-40d ~ today+80d`，年常规是 `today-40d ~ today+366d`（要能看到今年与明年各一次）；实例 ID 固定为 `ri_<ruleId>_<周期key>`（日/周=日期、月=YYYY-MM、年=YYYY），`INSERT OR IGNORE` 保证幂等。
 2. **前端不存业务数据。** `localStorage` 只放工号。`save()` 与上次同步快照做 diff，POST `/api/sync` 提交增量；连续操作走队列，避免“边存边刷新”把未推送的改动冲掉。
 3. **同步是拉模式。** 前端每 7 秒 GET `/api/rev`，版本号变了才拉全量；拉回时若弹窗或抽屉开着则延迟重渲染。
 4. **可见范围（五个来源，0.7.0 起）**：我名下的 ∪ 指派给我的 ∪ 我发布的 ∪ 下属的常规与专项 ∪ 我负责某一段的（`stages[].who=我` 且 `whoAt` 非空） ∪ 我作为知情人的专项（只读）。另外兼容一类老数据：0.6 时代的派生副本（`source_id` 指回原任务），仍按原样可见。下属的**发布/临时**任务管理者看不到——「他是我下属」不等于把他手里所有活都摊开。实现上因为子任务责任人挂在 `stages` JSON 里、SQL 过滤不到，`stateFor` 是**整表取回再在 JS 里筛**，不是一条 SQL。
@@ -165,7 +165,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 5.1 **发布对象可以不是下属**，但必须是 `emp.activated=1` 的人。`activated` 在 `/api/login` 校验通过时置 1，老库启动时用 `op_log` 里 `action='login'` 的 `actor_no` 回填。`upsertTask` **只在“新派”或“换人”时拦**（`assigneeNo !== prevAssignee`）——老任务的承接人后来离职停用，不该让发布人连改个标题都改不动。子任务责任人（`stages[].who`）同一道门禁。示例数据走 `opts.demo` 跳过这道拦。
 5.2 **知情人**：`task_observer` 只由任务 owner 维护（`observers` 出现在请求体里才整体替换，没出现则原样保留）。知情人既不是 owner 也不是 assignee，所以 `canEdit=false`、`ownRows()` 不会提交它，改不动也写不回去。知情人**不进**今日待办、日历、承接台——只在「发布任务」页的「我关注的任务」里出现。
 5.3 **示例数据的时间要落在工作日**（0.8.2 / 0.8.3）：`/api/demo` 里 `fitDemoStages()` 逐段把阶段边界推到工作日，并按阶段并集重定任务起止、把子任务收进父窗口（各自吸附边界更糟——会吸到同一天造出重叠）；**没有阶段的临时任务走 `shiftDay(d(n), 'next')`**（0.8.3 补的）。按「今天 +N 天」硬算很容易压到周末，周五生成时「明天」就是周六——那条单日临时任务会成为非工作日日历上唯一的活，看着像「周末不排活」这条规矩自己没执行。示例数据违反自己校验的话，用户学到的是错的。
-6. **规则变更重排**：按“周期归属月”重建当月及以后的实例，仅恢复 `date <= today` 的已勾选节点；已勾选的历史不丢。
+6. **规则变更重排**：按「本次生成窗口内」重建实例（日/周/月 +80d，年 +366d），仅恢复 `date <= today` 的已勾选节点；已勾选的历史不丢。窗口外的实例不删——否则年度实例会被删掉且不重建。
 7. **停用 vs 删除**（两者语义刻意不重叠，别合并）：
    - **停用**：只停今后。置 `active=0`，服务端 `regenRule()` 对 `active=0` 直接 return、`maintain()` 也只补 active 的规则，所以不会再生成；前端把**明天及以后、未完成**的实例删掉，**今天及以前原样保留**（历史不断档、当天任务不被打断）。重新启用后按窗口重建。
    - **删除**：彻底删除。规则与全部实例一起清掉；不再提供「只删规则保留实例」的选项（该诉求由停用承接），但服务端仍兼容历史数据里的 `detached` 标记。

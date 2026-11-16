@@ -12,7 +12,9 @@
 (function () {
   var SEEN_KEY = 'cadence_seen_version';
   var META = null;
-  var HISTORY = null;
+  var HISTORY = null;         // null=未取到；[]=取到但为空；数组=列表
+  var historyLoading = false; // 在途请求去重
+  var historyError = false;   // 取数失败（含 8 秒超时），可重试
   var hovering = 'current';   // 弹窗当前显示：current | history
   var overlay = null;
 
@@ -88,9 +90,46 @@
     return body;
   }
 
+  /** 取历次更新：只在未取到且无在途请求时发；8 秒超时按失败处理。 */
+  function loadHistory() {
+    if (HISTORY !== null || historyLoading) return;
+    historyLoading = true;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+
+    function finish() {
+      if (timer) clearTimeout(timer);
+      historyLoading = false;
+      if (overlay && hovering === 'history') paint();
+    }
+
+    fetch('/api/changelog', ctrl ? { signal: ctrl.signal } : undefined)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        HISTORY = (d && Array.isArray(d.versions)) ? d.versions : [];
+        finish();
+      })
+      .catch(function () {
+        historyError = true;
+        finish();
+      });
+  }
+
   /** 历次更新（全部版本倒序，当前版本打徽章）。versions 为 null 表示还在取。 */
   function renderHistory(versions) {
     var body = el('div', 'cv-body');
+    if (historyError) {
+      var fail = el('div', 'cv-empty');
+      fail.appendChild(document.createTextNode('更新记录读取失败，'));
+      var retry = el('button', 'cv-link', '点此重试');
+      retry.addEventListener('click', function () { historyError = false; paint(); });
+      fail.appendChild(retry);
+      body.appendChild(fail);
+      return body;
+    }
     if (!versions) {
       body.appendChild(el('div', 'cv-empty', '正在读取更新记录…'));
       return body;
@@ -144,6 +183,7 @@
     card.appendChild(head);
 
     card.appendChild(hovering === 'current' ? renderCurrent(entry) : renderHistory(HISTORY));
+    if (hovering === 'history' && !historyError) loadHistory();
 
     var foot = el('div', 'cv-foot');
     var left = el('button', 'cv-link', hovering === 'current' ? '查看历次更新' : '← 回到本次更新');
@@ -170,16 +210,6 @@
     document.addEventListener('keydown', onKey);
     document.body.appendChild(overlay);
     paint();
-
-    if (mode === 'history' && !HISTORY) {
-      fetch('/api/changelog').then(function (r) { return r.json(); }).then(function (d) {
-        HISTORY = (d && Array.isArray(d.versions)) ? d.versions : [];
-        if (overlay && hovering === 'history') paint();
-      }).catch(function () {
-        HISTORY = [];
-        if (overlay && hovering === 'history') paint();
-      });
-    }
   }
 
   /* ---------- 顶栏版本号 ---------- */
@@ -193,24 +223,47 @@
   }
 
   /* ---------- 启动 ---------- */
-  function boot() {
-    fetch('/api/version')
+  var metaPromise = null;
+  var signedInHandled = false;
+
+  /** 拉版本信息（只拉一次）并挂顶栏版本号；登录页也能看到版本号 */
+  function loadMeta() {
+    if (META) return Promise.resolve(META);
+    if (metaPromise) return metaPromise;
+    metaPromise = fetch('/api/version')
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d || !d.semver) return;
+        if (!d || !d.semver) throw new Error('版本信息不可用');
         META = { semver: d.semver, version: d.version, changelog: d.changelog || null };
         mountChip(d.semver);
-
-        var seen = readSeen();
-        if (seen === null) { writeSeen(d.semver); return; }   // 第一次用：不打扰
-        if (seen !== d.semver && META.changelog) open('current');
+        return META;
       })
-      .catch(function () { /* 版本接口挂了不影响工作台使用 */ });
+      .catch(function (e) { metaPromise = null; throw e; });
+    return metaPromise;
+  }
+
+  /** 登录成功（或已登录页面就绪）后调用——登录前绝不自动弹 */
+  function notifySignedIn() {
+    if (signedInHandled) return;
+    loadMeta().then(function () {
+      signedInHandled = true;
+      var seen = readSeen();
+      if (seen === null) { writeSeen(META.semver); return; }   // 第一次用：只记录，不打扰
+      if (seen !== META.semver && META.changelog) open('current');
+    }).catch(function () { /* 版本接口挂了不影响工作台使用 */ });
+  }
+
+  function boot() {
+    /* 只挂版本号，不判断更新、不弹窗、不写已读记录；弹窗由 notifySignedIn 触发 */
+    loadMeta().catch(function () { /* 版本接口挂了不影响工作台使用 */ });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 
-  // 供页面其他地方主动打开历次更新（如设置页）
-  window.cadenceChangelog = { open: function () { open('history'); } };
+  // 供页面其他地方主动打开历次更新（如设置页），以及登录成功后触发更新弹窗
+  window.cadenceChangelog = {
+    open: function () { open('history'); },
+    notifySignedIn: notifySignedIn
+  };
 })();

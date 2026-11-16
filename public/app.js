@@ -1179,7 +1179,7 @@ function followRowHTML(f) {
 /* ============ 下属常规工作：折叠 / 关注 / 当前节点 ============ */
 function isWatched(subNo, rid) { return (S.watch || []).some(w => w.subNo === subNo && w.ruleId === rid); }
 function curNodeOf(r) { return (r.nodes || []).find(n => !n.done) || null; }
-function cycleCN(c) { return c === 'day' ? '每天' : c === 'week' ? '每周' : '每月'; }
+function cycleCN(c) { return c === 'day' ? '每天' : c === 'week' ? '每周' : c === 'year' ? '每年' : '每月'; }
 function routineLineHTML(m, r) {
   const w = isWatched(m.no, r.id);
   const nodes = r.nodes || [];
@@ -1223,18 +1223,21 @@ function policyText(p) {
 function nodeDayText(r, s) {
   if (r.cycle === 'day') return '每天';
   if (r.cycle === 'week') return '周' + DOW_CN[Number(s.weekday != null ? s.weekday : 1)];
-  return (Number(s.mo) ? '次月' : '') + Number(s.day || 1) + '日';
+  if (r.cycle === 'year') return `每年 ${Number(s.monthNo || 1)} 月 ${Number(s.day || 1)} 日`;
+  return (Number(s.mo) ? '次月' : '') + Number(s.day || 1) + ' 日';
 }
 function isCrossMonth(r) {
   if (r.cycle !== 'month') return false;
   return (r.steps || []).some(s => Number(s.mo || 0) > 0);
 }
 function cycleLabel(r) {
-  return r.cycle === 'day' ? '每天' : r.cycle === 'week' ? '每周' : '每月';
+  return r.cycle === 'day' ? '每天' : r.cycle === 'week' ? '每周' : r.cycle === 'year' ? '每年' : '每月';
 }
 function viewRoutine() {
   const rules = S.rules.filter(r => r.cycle === routineTab);
   const mS = monthStart(TODAY), mE = monthEnd(TODAY);
+  const y = Number(TODAY.slice(0, 4));
+  const yS = `${y}-01-01`, yE = `${y + 1}-12-31`;
   return `
   <div class="card">
     <div class="card-h"><h2>常规工作规则</h2><span class="hint">一个周期可以只有一个节点，也可以是一组节点（如每月薪酬工作）</span>
@@ -1243,28 +1246,35 @@ function viewRoutine() {
       <button class="${routineTab === 'day' ? 'on' : ''}" data-act="rtab" data-tab="day">日常规</button>
       <button class="${routineTab === 'week' ? 'on' : ''}" data-act="rtab" data-tab="week">周常规</button>
       <button class="${routineTab === 'month' ? 'on' : ''}" data-act="rtab" data-tab="month">月常规</button>
+      <button class="${routineTab === 'year' ? 'on' : ''}" data-act="rtab" data-tab="year">年常规</button>
     </div>
     ${rules.length ? rules.map(r => {
       const steps = r.steps && r.steps.length ? r.steps : [{ name: '', day: r.day, weekday: r.weekday, time: r.time }];
-      const inst = S.tasks.filter(t => t.routineId === r.id && t.planDate >= mS && t.planDate <= mE);
+      const inst = S.tasks.filter(t => t.routineId === r.id && (r.cycle === 'year'
+        ? (t.planDate >= yS && t.planDate <= yE)
+        : (t.planDate >= mS && t.planDate <= mE)));
       const doneSteps = inst.reduce((a, t) => a + (t.stages || []).filter(s => s.done).length + (!(t.stages || []).length ? (t.status === 'done' ? 1 : 0) : 0), 0);
       const sortedInst = inst.slice().sort((a, b) => a.start < b.start ? -1 : 1);
       const liveInst = sortedInst.filter(t => t.status !== 'done' && t.end >= TODAY)[0] || sortedInst[sortedInst.length - 1];
       const liveRange = liveInst ? { start: liveInst.start, end: liveInst.end } : null;
+      const dTxt = x => r.cycle === 'year' ? fmtY(x) : fmt(x);
       let nodes = [];
-      if (r.cycle === 'month') {
+      if (r.cycle === 'month' || r.cycle === 'year') {
+        const cyc = r.cycle === 'year'
+          ? { key: String(y), from: yS, anchor: yS }
+          : { from: mS, anchor: mS };
         if (liveInst && liveInst.stages && liveInst.stages.length) {
           nodes = liveInst.stages.map(st => {
             const rs = steps.find(x => (x.name || '') === (st.name || '')) || null;
             return {
-              s: { name: st.name, time: st.time, day: rs ? rs.day : null, mo: rs ? rs.mo : st.mo },
+              s: { name: st.name, time: st.time, day: rs ? rs.day : (st.day != null ? st.day : null), mo: rs ? rs.mo : st.mo, monthNo: rs ? rs.monthNo : st.monthNo },
               plan: st.plan || st.date, actual: st.date, skip: false,
               label: rs ? nodeDayText(r, rs) : fmt(st.date)
             };
           });
         } else {
           nodes = steps.map(s => {
-            const plan = stepPlanDate(r, s, { from: mS, anchor: mS });
+            const plan = stepPlanDate(r, s, cyc);
             const pol = s.policy || r.policy || 'prev';
             const skip = !isWorkday(plan) && pol === 'none';
             return { s, plan, actual: skip ? null : shiftDay(plan, pol), skip, label: nodeDayText(r, s) };
@@ -1292,11 +1302,11 @@ function viewRoutine() {
           </div>`).join('')}
         </div>` : `<div class="split" style="margin:6px 0">
           ${inst.slice(0, 10).sort((a, b) => a.planDate < b.planDate ? -1 : 1).map(t => `<span class="tag ${t.status === 'done' ? 'done' : ''}" data-act="open" data-id="${t.id}" style="cursor:pointer">
-            ${(t.stages || []).length ? t.stages.map(s => fmt(s.date)).join(' / ') : fmt(t.planDate)}${t.planDate !== t.start && !(t.stages || []).length ? `<span style="color:#b45309"> → ${fmt(t.start)}</span>` : ''}${t.status === 'done' ? ' ✓' : ''}
+            ${(t.stages || []).length ? t.stages.map(s => dTxt(s.date)).join(' / ') : dTxt(t.planDate)}${t.planDate !== t.start && !(t.stages || []).length ? `<span style="color:#b45309"> → ${dTxt(t.start)}</span>` : ''}${t.status === 'done' ? ' ✓' : ''}
           </span>`).join('') || '<span class="mini">本月无实例</span>'}
         </div>`}
-        ${liveRange ? `<div class="mini" style="color:var(--ink2)">本周期：<b>${fmt(liveRange.start)}${liveRange.start === liveRange.end ? '' : ' → ' + fmt(liveRange.end)}</b>${isCrossMonth(r) ? ' <span class="tag warn">跨月</span>' : ''}</div>` : ''}
-        <div class="mini">本月：${inst.length} 个周期实例 · ${doneSteps} 个节点已完成${!r.active ? ' · <span style="color:#b45309">已停用：今后不再生成，今天及以前保留</span>' : ''}</div>
+        ${liveRange ? `<div class="mini" style="color:var(--ink2)">本周期：<b>${dTxt(liveRange.start)}${liveRange.start === liveRange.end ? '' : ' → ' + dTxt(liveRange.end)}</b>${isCrossMonth(r) ? ' <span class="tag warn">跨月</span>' : ''}</div>` : ''}
+        <div class="mini">${r.cycle === 'year' ? '今年与明年' : '本月'}：${inst.length} 个周期实例 · ${doneSteps} 个节点已完成${!r.active ? ' · <span style="color:#b45309">已停用：今后不再生成，今天及以前保留</span>' : ''}</div>
       </div>`;
     }).join('') : '<div class="empty">这一类还没有常规工作，点右上角新建</div>'}
   </div>
@@ -1305,6 +1315,7 @@ function viewRoutine() {
     <div class="note">
       · 常规工作是「规则」不是任务：设定周期和节点后，系统按周期生成实例，进入日历与今日待办。<br/>
       · 一个周期可以挂多个节点，每个节点可单独设月份（本月 / 次月）、日期、时间与节假日策略。<br/>
+      · 年常规：节点写「几月几日」，一次生成今年与明年各一次。跨年以后遇到节假日时，节假日表只有当年，顺延可能只按周末算（已知限制）。<br/>
       · 跨月周期：节点可以落到次月，一个周期就横跨两个月（如 10/28 → 11/15），卡片上标「跨月」并显示本周期区间。<br/>
       · 节假日：逢法定假日或周末，按节点策略「提前至前一工作日」或「顺延至后一工作日」，也可选择跳过。<br/>
       · 规则可以编辑：保存后重排本月及以后、尚未完成的周期，历史周期与已完成的不动；已勾选的节点会按名称保留。日历里拖动节点只改「本次」，规则本身不变。<br/>
@@ -2147,6 +2158,13 @@ function stepPlanDate(rule, s, c) {
     const wd = Number(s.weekday != null ? s.weekday : 1);
     return addDays(c.from, (wd + 6) % 7);
   }
+  if (rule.cycle === 'year') {
+    const y = Number(c.key);
+    const m = Math.min(Math.max(Number(s.monthNo || 1), 1), 12);
+    const dim = new Date(y, m, 0).getDate();
+    const day = Math.min(Math.max(Number(s.day || 1), 1), dim);
+    return iso(new Date(y, m - 1, day));
+  }
   const d = parse(c.from);
   const mo = Number(s.mo || 0);
   const base = new Date(d.getFullYear(), d.getMonth() + mo, 1);
@@ -2488,6 +2506,12 @@ function stepRowHTMLFor(cycle, s) {
   if (cycle === 'week') {
     return `<div class="srow">${nm}<select class="sweek">${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}" ${Number(s.weekday) === d ? 'selected' : ''}>周${DOW_CN[d]}</option>`).join('')}</select>${tm}<select class="spol">${polSel}</select>${del}</div>`;
   }
+  if (cycle === 'year') {
+    const mn = Number(s.monthNo || 1);
+    const mSel = `<select class="smonthno" title="每年的几月">${Array.from({ length: 12 }, (_, i) =>
+      `<option value="${i + 1}" ${mn === i + 1 ? 'selected' : ''}>${i + 1} 月</option>`).join('')}</select>`;
+    return `<div class="srow smonth syear">${nm}${mSel}<input class="sday" type="number" min="1" max="31" value="${Number(s.day) || 1}"/>${tm}<select class="spol">${polSel}</select>${del}</div>`;
+  }
   const mo = Number(s.mo || 0);
   const moSel = `<select class="smo" title="这个节点落在本月还是次月">
     <option value="0" ${mo === 0 ? 'selected' : ''}>本月</option>
@@ -2513,11 +2537,13 @@ function readStepRows() {
     const dayEl = r.querySelector('.sday');
     const weekEl = r.querySelector('.sweek');
     const moEl = r.querySelector('.smo');
+    const monthEl = r.querySelector('.smonthno');
     return {
       name, time, policy: pol,
       day: dayEl ? (Number(dayEl.value) || 1) : null,
       weekday: weekEl ? Number(weekEl.value) : null,
-      mo: moEl ? Number(moEl.value) : 0
+      mo: moEl ? Number(moEl.value) : 0,
+      monthNo: monthEl ? Number(monthEl.value) : null
     };
   });
 }
@@ -2534,6 +2560,7 @@ function openRuleModal(rule) {
           <option value="day" ${cycle === 'day' ? 'selected' : ''}>日常规（每个工作日）</option>
           <option value="week" ${cycle === 'week' ? 'selected' : ''}>周常规（每周一次）</option>
           <option value="month" ${cycle === 'month' ? 'selected' : ''}>月常规（每月一次）</option>
+          <option value="year" ${cycle === 'year' ? 'selected' : ''}>年常规（每年一次）</option>
         </select></div>
       </div>
       <div>
@@ -2549,7 +2576,7 @@ function openRuleModal(rule) {
     <div class="sec-title" style="margin-top:4px">本周期要做的事 <span class="mini">一个周期可以只有一个节点，也可以是一组（如薪酬工作的发邮件/交初稿/做分析/发工资）</span></div>
     <div id="stepWrap"></div>
     <button class="btn sm" data-act="rstep-add" style="margin-top:4px">+ 添加节点</button>
-    <div class="note" style="margin-top:12px">${isEdit ? '保存后重排「本月及以后、尚未完成」的周期，历史周期与已完成的保留，已勾选的节点按名称恢复。' : '保存后由服务端生成近期实例，进入今日待办与日历；每个节点会单独出现在对应日期。节点可以选「次月」，用来表达跨月周期。'}</div>
+    <div class="note" style="margin-top:12px">${isEdit ? '保存后重排生成窗口内、尚未完成的周期，历史周期与已完成的保留，已勾选的节点按名称恢复。' : '保存后由服务端生成近期实例，进入今日待办与日历；每个节点会单独出现在对应日期。节点可以选「次月」，用来表达跨月周期；年常规则写「几月几日」，一次生成今年与明年各一次。'}</div>
   `, () => {
     const title = $('#r_title').value.trim();
     if (!title) { toast('先填名称'); return false; }
@@ -2557,13 +2584,16 @@ function openRuleModal(rule) {
     let rows = readStepRows();
     if (cy === 'day') rows = [rows[0] || { name: '', time: '09:00', policy: 'prev' }];
     if (cy !== 'day' && !rows.length) { toast('至少要有一个节点'); return false; }
+    if (cy === 'year' && rows.some(r => !(r.monthNo >= 1 && r.monthNo <= 12) || !(r.day >= 1 && r.day <= 31))) {
+      toast('年常规要写清「几月几日」'); return false;
+    }
     const data = {
       title, cycle: cy,
       policy: $('#r_policy').value,
       cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       steps: cy === 'day'
         ? [{ name: rows[0].name, time: rows[0].time, policy: rows[0].policy }]
-        : rows.map(r => ({ name: r.name, day: r.day, weekday: r.weekday, mo: r.mo || 0, time: r.time, policy: r.policy })),
+        : rows.map(r => ({ name: r.name, day: r.day, weekday: r.weekday, mo: r.mo || 0, monthNo: r.monthNo || null, time: r.time, policy: r.policy })),
       active: true
     };
     if (isEdit) {
@@ -2856,7 +2886,13 @@ async function finishAuth(tip) {
   $('#auth').classList.remove('show');
   render();
   startPolling();
+  notifyChangelogSignedIn();
   if (tip) toast(tip);
+}
+
+/* 更新弹窗只在确认已登录后触发（登录页/未登录一律不弹） */
+function notifyChangelogSignedIn() {
+  if (window.cadenceChangelog && window.cadenceChangelog.notifySignedIn) window.cadenceChangelog.notifySignedIn();
 }
 
 /* ============ 装载 ============ */
@@ -3694,6 +3730,7 @@ document.addEventListener('keydown', e => {
     render();
     if (!S.me.mgr) { authStep = 'mgr'; authRender(); }
     startPolling();
+    notifyChangelogSignedIn();   // 已登录（含刷新）：按原有「看过不再弹」逻辑处理
   } catch (e) {
     $('#boot').classList.remove('show');
     /* 401 已经由 onAuthLost 切到登录页；这里只负责别把真正的网络错误说成「会话失效」 */

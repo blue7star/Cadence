@@ -1216,6 +1216,118 @@ async function main() {
   const ruleAlive = (await txt('#view')).includes('自检规则');
   check('新建数据刷新后仍在', persistedTask && ruleAlive, `任务=${persistedTask} 规则=${ruleAlive} 现场=${JSON.stringify(persistDiag)}`);
 
+  /* ---------- 7.4b 年常规：每年几月几日，今年与明年各一次 ---------- */
+  await nav('routine');
+  const yTab = await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=year]');if(!b)return false;b.click();return true})()`);
+  await sleep(500);
+  check('年常规页签存在且可切换', yTab === true, String(yTab));
+
+  await js(`(function(){const bs=[...document.querySelectorAll('[data-act=new-rule]')];
+    const b=bs.find(x=>x.offsetParent!==null)||bs[0]; b.click(); return 'ok'})()`);
+  await waitFor(`document.querySelector('#r_title')`, 4000);
+  await js(`(function(){document.querySelector('#r_title').value='自检年规则';
+    const cy=document.querySelector('#r_cycle'); cy.value='year'; cy.dispatchEvent(new Event('change',{bubbles:true}));return 'ok'})()`);
+  await sleep(500);
+  const yForm = await js(`(function(){
+    const row=document.querySelector('#stepRows .srow');
+    if(!row) return {err:'没有节点行'};
+    row.querySelector('.sname').value='年度体检';
+    const m=row.querySelector('.smonthno'); if(!m) return {err:'没有月份选择'};
+    m.value='8'; row.querySelector('.sday').value='31'; row.querySelector('.spol').value='prev';
+    return {month:m.value, day:row.querySelector('.sday').value}})()`);
+  check('年节点行有「月 / 日」输入', !yForm.err && yForm.month === '8' && yForm.day === '31', JSON.stringify(yForm));
+  await js(`document.querySelector('#modal [data-act=modal-ok]').click();'ok'`);
+
+  /* 期望年份与生成窗口同口径：窗口起点后最近的一个 8/31 */
+  const expY = await js(`(function(){const from=monthStart(addDays(TODAY,-40));let y=Number(TODAY.slice(0,4));
+    while((y+'-08-31')<from) y++; return y})()`);
+  let yState = null;
+  for (let i = 0; i < 20; i++) {
+    await sleep(400);
+    yState = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
+      const ru=(s.rules||[]).find(x=>x.title==='自检年规则');
+      if(!ru) return null;
+      return {rule:ru, inst:(s.tasks||[]).filter(t=>t.routineId===ru.id)
+        .sort((a,b)=>a.planDate<b.planDate?-1:1)
+        .map(t=>({id:t.id,plan:t.planDate,start:t.start,status:t.status}))}})()`);
+    if (yState && yState.inst.length) break;
+  }
+  check('年常规生成窗口内的那一次：id=ri_<rule>_YYYY、plan_date=YYYY-08-31',
+    !!yState && yState.inst.length === 1 &&
+    yState.inst[0].id === `ri_${yState.rule.id}_${expY}` && yState.inst[0].plan === `${expY}-08-31`,
+    JSON.stringify({ expY, yState }));
+
+  const yCal = await js(`(function(){calMode='month';calCursor='${expY}-08-01';render();
+    return document.querySelector('#view').innerText.includes('自检年规则')})()`);
+  check('年实例在日历目标月份可见', yCal === true, String(yCal));
+  /* 看完要把日历拨回今天，后面的拖拽/改期断言都以今天为基准 */
+  await js(`(function(){calMode='month';calCursor=monthStart(TODAY);selDay=TODAY;render();return 1})()`);
+
+  const yIdem = await js(`(async()=>{await (await fetch('/api/state?me=1012')).json();
+    const s=await (await fetch('/api/state?me=1012')).json();
+    const ru=(s.rules||[]).find(x=>x.title==='自检年规则');
+    return (s.tasks||[]).filter(t=>t.routineId===ru.id).length})()`);
+  check('maintain 幂等：连续两次取 state 后年实例仍是 1 条', yIdem === 1, String(yIdem));
+
+  /* 改规则：日期改到 8/30，实例不能被删掉，id 与年份不变、plan_date 跟着变 */
+  await nav('routine');
+  await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=year]');if(b)b.click();return 1})()`);
+  await sleep(400);
+  const yEditOpen = await js(`(()=>{const c=[...document.querySelectorAll('.rule-card')].find(x=>x.innerText.includes('自检年规则'));
+    if(!c) return false; c.querySelector('[data-act=rule-edit]').click(); return true})()`);
+  await sleep(400);
+  await js(`(()=>{const row=document.querySelector('#stepRows .srow');if(row)row.querySelector('.sday').value='30';return 1})()`);
+  await js(`document.querySelector('#modal [data-act=modal-ok]').click();'ok'`);
+  let yAfter = null;
+  for (let i = 0; i < 15; i++) {
+    await sleep(400);
+    yAfter = await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
+      const ru=(s.rules||[]).find(x=>x.title==='自检年规则');
+      return ru?(s.tasks||[]).filter(t=>t.routineId===ru.id).map(t=>({id:t.id,plan:t.planDate})):null})()`);
+    if (yAfter && yAfter.length === 1 && yAfter[0].plan === `${expY}-08-30`) break;
+  }
+  check('改规则后年实例仍在（id 不变、plan_date 改到 08-30）',
+    !!yEditOpen && !!yAfter && yAfter.length === 1 &&
+    yAfter[0].id === `ri_${yState.rule.id}_${expY}` && yAfter[0].plan === `${expY}-08-30`,
+    JSON.stringify({ yEditOpen, yAfter }));
+
+  /* 日/周/月回归：周期 key 形态一条都没变 */
+  const reg = await js(`(async()=>{
+    const rules=[
+      {id:'r_e2e_day', title:'自检日规则', cycle:'day', policy:'none', active:true, steps:[{name:'',time:'09:30',policy:'none'}]},
+      {id:'r_e2e_week', title:'自检周规则', cycle:'week', policy:'prev', active:true, steps:[{name:'',weekday:5,time:'17:00',policy:'prev'}]},
+      {id:'r_e2e_month', title:'自检月规则', cycle:'month', policy:'prev', active:true, steps:[{name:'',day:5,time:'09:00',policy:'prev'}]}
+    ];
+    const r=await (await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012',rules})})).json();
+    if(!r.ok) return {err:r.errors||r};
+    const s=await (await fetch('/api/state?me=1012')).json();
+    const pick=id=>(s.tasks||[]).filter(t=>t.routineId===id).map(t=>t.id);
+    return {day:pick('r_e2e_day'),week:pick('r_e2e_week'),month:pick('r_e2e_month')}})()`);
+  const oneKey = (ids, re) => Array.isArray(ids) && ids.length > 0 && ids.every(id => re.test(id));
+  check('日/周/月周期 key 形态不变（日=YYYY-MM-DD、周=YYYY-MM-DD、月=YYYY-MM）',
+    oneKey(reg.day, /^ri_r_e2e_day_\d{4}-\d{2}-\d{2}$/) &&
+    oneKey(reg.week, /^ri_r_e2e_week_\d{4}-\d{2}-\d{2}$/) &&
+    oneKey(reg.month, /^ri_r_e2e_month_\d{4}-\d{2}$/), JSON.stringify(reg));
+
+  const badRule = await js(`(async()=>{
+    const post=async body=>{const r=await (await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();return (r.errors||[]).join('|')};
+    return {
+      quarter: await post({me:'1012',rules:[{id:'r_e2e_bad',title:'自检坏规则',cycle:'quarter',policy:'prev',active:true,steps:[]}]}),
+      noMonth: await post({me:'1012',rules:[{id:'r_e2e_bad2',title:'自检坏年规则',cycle:'year',policy:'prev',active:true,steps:[{name:'',day:3,time:'09:00',policy:'prev'}]}]})
+    }})()`);
+  check('服务端拒收未知周期与「缺几月几日」的年规则，并回可读原因',
+    /quarter/.test(badRule.quarter) && /几月几日/.test(badRule.noMonth), JSON.stringify(badRule));
+
+  const yClean = await js(`(async()=>{
+    const del={rules:[${JSON.stringify(yState.rule.id)},'r_e2e_day','r_e2e_week','r_e2e_month']};
+    await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({me:'1012',del})});
+    const s=await (await fetch('/api/state?me=1012')).json();
+    return (s.tasks||[]).filter(t=>del.rules.includes(t.routineId)).length})()`);
+  check('删除年规则后它的实例一起清掉', yClean === 0, String(yClean));
+  /* 后面的 7.5 要删的是「日常规」那条，把页签切回 day */
+  await js(`(()=>{const b=document.querySelector('[data-act=rtab][data-tab=day]');if(b)b.click();return 1})()`);
+  await sleep(500);
+
   /* ---------- 7.5 删除 = 彻底删除：规则与它的安排一起清掉 ---------- */
   const delDlg = await js(`(async()=>{
     const card=[...document.querySelectorAll('.rule-card')].find(c=>c.innerText.includes('自检规则'));
@@ -2451,21 +2563,26 @@ async function main() {
 
   /* 子任务越界：阶段窗口是人设的，拖子任务不会让窗口变长，越界就得拦下并指出怎么改 */
   const GRD = 't_e2e_drag_root';
+  /* 夹具日期按今天平移：这套断言原来写死在 2026-11，到了 11 月中旬之后，
+     「拖到 11-13」就成了拖到过去，被更早的一道校验拦下。平移后语义不变。 */
+  const todayIso = await js(`TODAY`);
+  const delta = Math.max(0, Math.round((Date.parse(todayIso) - Date.parse('2026-11-13')) / 86400000) + 2);
+  const D = (d) => addDaysStr(d, delta);
   await push('1012', { tasks: [{ id: GRD, ownerNo: '1012', assigneeNo: '1012', type: 'special',
-    title: 'E2E拖子任务越界', start: '2026-11-03', end: '2026-11-25', status: 'todo',
+    title: 'E2E拖子任务越界', start: D('2026-11-03'), end: D('2026-11-25'), status: 'todo',
     stages: [
-      { id: 'g1', pid: null, name: '第一段', start: '2026-11-03', end: '2026-11-10', done: false },
-      { id: 'g2', pid: 'g1', name: '子一', start: '2026-11-03', end: '2026-11-05', done: false },
-      { id: 'g3', pid: 'g1', name: '子二', start: '2026-11-06', end: '2026-11-10', done: false },
+      { id: 'g1', pid: null, name: '第一段', start: D('2026-11-03'), end: D('2026-11-10'), done: false },
+      { id: 'g2', pid: 'g1', name: '子一', start: D('2026-11-03'), end: D('2026-11-05'), done: false },
+      { id: 'g3', pid: 'g1', name: '子二', start: D('2026-11-06'), end: D('2026-11-10'), done: false },
       /* 第二段留出空档，才测得到「延长第一段」本身，不被相邻段挡住 */
-      { id: 'g4', pid: null, name: '第二段', start: '2026-11-20', end: '2026-11-25', done: false },
+      { id: 'g4', pid: null, name: '第二段', start: D('2026-11-20'), end: D('2026-11-25'), done: false },
     ] }] });
   await js(`refresh(true);'ok'`); await sleep(900);
   const verdict = await js(`(function(){
     const t=S.tasks.find(x=>x.id==='${GRD}');
     if(!t) return null;
     const i=t.stages.findIndex(s=>s.id==='g3');
-    const r=dragCheck(t,'2026-11-13',i);
+    const r=dragCheck(t,'${D('2026-11-13')}',i);
     return {ok:r.ok, why:r.why||''};})()`);
   check('子任务拖出阶段窗口被拦下，并说清先延长这一段',
     !!verdict && verdict.ok === false && verdict.why.includes('延长'), JSON.stringify(verdict));
@@ -2488,7 +2605,7 @@ async function main() {
     box.querySelector('[data-act=stage-save]').click();
     return {msg:(document.querySelector('#toast')||{}).textContent||'', st};})()`);
 
-  const wide = await editWin('g1', '2026-11-13');
+  const wide = await editWin('g1', D('2026-11-13'));
   await sleep(900);
   await js(`refresh(true);'ok'`); await sleep(700);
   const winAfter = await js(`(function(){
@@ -2498,11 +2615,11 @@ async function main() {
     const g2=t.stages.find(s=>s.id==='g2'), g3=t.stages.find(s=>s.id==='g3');
     return {pEnd:g1.end, k2s:g2.start, k2e:g2.end, k3s:g3.start, k3e:g3.end};})()`);
   check('延长阶段窗口就生效：阶段自己变成新日期，里面的子任务一个不动',
-    !!winAfter && winAfter.pEnd === '2026-11-13' && winAfter.k2s === '2026-11-03'
-      && winAfter.k3e === '2026-11-10',
+    !!winAfter && winAfter.pEnd === D('2026-11-13') && winAfter.k2s === D('2026-11-03')
+      && winAfter.k3e === D('2026-11-10'),
     JSON.stringify({ click: wide, after: winAfter }));
 
-  const narrow = await editWin('g1', '2026-11-08');
+  const narrow = await editWin('g1', D('2026-11-08'));
   await sleep(700);
   check('阶段缩到装不下子任务时被拦，并指出是哪个子任务出界、该改哪边',
     narrow.msg.includes('子二') && narrow.msg.includes('延长'), JSON.stringify(narrow));

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 const CHROME = 'C:/Users/lanmingjian/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
 const PORT = 9334;
-const BASE = 'http://localhost:8788';
+const BASE = process.env.SHOT_BASE || 'http://localhost:8788';
 const target = process.argv[2] || 'calendar';
 const out = process.argv[3] || '_dev/shots/live.png';
 const ME = process.argv[4] || '1012';
@@ -12,7 +12,7 @@ const EXTRA = process.argv[5] || '';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const prof = fs.mkdtempSync('C:/Users/lanmingjian/AppData/Local/Temp/shot-');
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${prof}`,
-  '--window-size=1582,900', '--hide-scrollbars', '--no-first-run', 'about:blank'], { stdio: 'ignore' });
+  '--window-size=1600,1000', '--hide-scrollbars', '--no-first-run', 'about:blank'], { stdio: 'ignore' });
 await sleep(1800);
 let list = null;
 for (let i = 0; i < 15 && !list; i++) {
@@ -34,8 +34,15 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 await send('Page.enable');
 await send('Page.navigate', { url: BASE });
 await sleep(1500);
-await send('Runtime.evaluate', { expression: `localStorage.setItem('pm_mvp_me','${ME}');location.reload()` });
-await sleep(2200);
+const NO = process.env.SHOT_NO || '';
+const PWD = process.env.SHOT_PWD || '';
+if (NO) {
+  /* 认证上线后 localStorage 身份不再作数，截图必须真登录一次 */
+  await send('Runtime.evaluate', { expression: `fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({no:${JSON.stringify(NO)},password:${JSON.stringify(PWD)}})}).then(r=>r.json()).then(()=>location.reload())` });
+} else {
+  await send('Runtime.evaluate', { expression: `localStorage.setItem('pm_mvp_me','${ME}');location.reload()` });
+}
+await sleep(2600);
 /* 第一次登录的人会被要求选直属上级，截图时直接跳过，看页面本身 */
 await send('Runtime.evaluate', { expression: `(function(){const b=document.querySelector('[data-act=skip-mgr]');if(b)b.click();return !!b})()` });
 await sleep(1400);

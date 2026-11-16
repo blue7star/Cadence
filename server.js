@@ -243,6 +243,16 @@ function cyclesBetween(rule, a, b) {
     }
     return out;
   }
+  if (rule.cycle === 'year') {
+    /* 年周期按自然年切：key=YYYY。窗口由 routineWindow 给（年规则 +366 天），
+       所以「今年这次」和「明年这次」都可能落在同一个窗口里。 */
+    let y = Number(a.slice(0, 4)), guard = 0;
+    while (`${y}-01-01` <= b && guard < 5) {
+      out.push({ key: String(y), from: `${y}-01-01`, to: `${y}-12-31`, anchor: `${y}-01-01` });
+      y++; guard++;
+    }
+    return out;
+  }
   let m = monthStart(a), guard = 0;
   while (m <= b && guard < 60) {
     out.push({ key: m.slice(0, 7), from: m, to: monthEnd(m), anchor: m });
@@ -256,6 +266,14 @@ function stepPlanDate(rule, s, c) {
   if (rule.cycle === 'week') {
     const wd = Number(s.weekday != null ? s.weekday : 1);
     return addDays(c.from, (wd + 6) % 7);
+  }
+  if (rule.cycle === 'year') {
+    /* 年节点用 monthNo（1-12）+ day；不要复用月规则的 mo，mo 表达的是「本月/次月」偏移。 */
+    const y = Number(c.key);
+    const m = Math.min(Math.max(Number(s.monthNo || 1), 1), 12);
+    const dim = new Date(y, m, 0).getDate();
+    const day = Math.min(Math.max(Number(s.day || 1), 1), dim);
+    return iso(new Date(y, m - 1, day));
   }
   const d = parse(c.from);
   const mo = Number(s.mo || 0);
@@ -280,11 +298,14 @@ function ensureInstances(rule, from, to) {
     for (const s of steps) {
       const plan = stepPlanDate(rule, s, c);
       const pol = s.policy || rule.policy || 'prev';
+      /* 年节点只生成落在窗口内的那一次：窗口起点前的（今年的已经过去）不补，
+         终点后的（后年）也不提前造，避免凭空多出整年的实例。 */
+      if (rule.cycle === 'year' && (plan < from || plan > to)) continue;
       /* 日常规 = 每个工作日：周末与法定假日一律不生成（顺延会把几条堆到同一天） */
       if (rule.cycle === 'day' && !isWorkday(plan)) continue;
       if (!isWorkday(plan) && pol === 'none') continue;
       const actual = rule.cycle === 'day' ? plan : shiftDay(plan, pol);
-      built.push({ name: s.name || '', plan, date: actual, time: s.time || '', done: false, mo: Number(s.mo || 0) });
+      built.push({ name: s.name || '', plan, date: actual, time: s.time || '', done: false, mo: Number(s.mo || 0), monthNo: Number(s.monthNo || 0) });
     }
     if (!built.length) continue;
     built.sort((x, y) => (x.plan < y.plan ? -1 : 1));
@@ -301,34 +322,38 @@ function ensureInstances(rule, from, to) {
   }
 }
 
-/** 生成窗口：往前 40 天、往后 80 天，够日历前后翻页用 */
-function routineWindow() {
+/** 生成窗口：往前 40 天；往后日/周/月 80 天，年规则 366 天（要能看到明年这一次） */
+function routineWindow(rule) {
   const t = todayStr();
-  return { from: monthStart(addDays(t, -40)), to: addDays(t, 80) };
+  const ahead = rule && rule.cycle === 'year' ? 366 : 80;
+  return { from: monthStart(addDays(t, -40)), to: addDays(t, ahead) };
 }
 
 function maintain(ownerNos) {
-  const w = routineWindow();
   for (const no of ownerNos) {
     const rules = db.prepare('SELECT * FROM rule WHERE owner_no=? AND active=1').all(no);
-    for (const r of rules) ensureInstances(r, w.from, w.to);
+    for (const r of rules) {
+      const w = routineWindow(r);
+      ensureInstances(r, w.from, w.to);
+    }
   }
 }
 
 function regenRule(rule) {
   if (!rule.active) return;   /* 停用期间不重排、不补生成：已有安排原样保留 */
   const t = todayStr();
-  const monthKey = t.slice(0, 7);
   const rows = db.prepare('SELECT * FROM task WHERE routine_id=?').all(rule.id);
   const doneNames = new Set();
   for (const r of rows) {
     if (r.status === 'done') continue;
     for (const s of JSON.parse(r.stages || '[]')) if (s.done) doneNames.add(s.name || '');
   }
-  /* 本月及以后、未完成的一律重排（周期边界可能变了，旧排期不再成立） */
+  /* 只重排「本次生成窗口内」、未完成的周期。以前用的是「本月及以后」，
+     窗口外的年度实例（如明年 8 月）会被删掉、又不在窗口里重建，等于编辑一次就消失。 */
+  const w = routineWindow(rule);
   db.prepare(`DELETE FROM task WHERE routine_id=? AND status<>'done'
-              AND substr(coalesce(plan_date,start_date),1,7) >= ?`).run(rule.id, monthKey);
-  const w = routineWindow();
+              AND substr(coalesce(plan_date,start_date),1,10) >= ?
+              AND substr(coalesce(plan_date,start_date),1,10) <= ?`).run(rule.id, w.from, w.to);
   ensureInstances(rule, w.from, w.to);
   if (doneNames.size) {
     const left = db.prepare('SELECT * FROM task WHERE routine_id=?').all(rule.id);
@@ -918,7 +943,22 @@ function upsertTask(meNo, t, opts) {
   return { ok: true };
 }
 
+const RULE_CYCLES = new Set(['day', 'week', 'month', 'year']);
 function upsertRule(meNo, r) {
+  /* 没有白名单时，任何没见过的 cycle 都会静默落进月分支跑起来——宁可拒收并说清原因。 */
+  if (!RULE_CYCLES.has(r.cycle)) {
+    return `规则「${r.title || r.id}」的周期「${r.cycle}」不认识：只支持 day / week / month / year`;
+  }
+  if (r.cycle === 'year') {
+    const steps = Array.isArray(r.steps) ? r.steps : [];
+    if (!steps.length) return `年常规「${r.title || r.id}」至少要有一个节点`;
+    for (const s of steps) {
+      const m = Number(s.monthNo), d = Number(s.day);
+      if (!(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) {
+        return `年常规「${r.title || r.id}」的节点要写清「几月几日」（月份 1-12、日期 1-31）`;
+      }
+    }
+  }
   const exist = db.prepare('SELECT * FROM rule WHERE id=?').get(r.id);
   if (exist) {
     if (exist.owner_no !== meNo) return false;
@@ -932,8 +972,8 @@ function upsertRule(meNo, r) {
               VALUES(?,?,?,?,?,?,?,?,?,?)`)
     .run(r.id, meNo, r.title, r.cycle, r.policy || 'prev', r.cat1 || null, r.cat2 || null,
       JSON.stringify(r.steps || []), r.active === false ? 0 : 1, nowStr());
-  const w = routineWindow();
   const fresh = db.prepare('SELECT * FROM rule WHERE id=?').get(r.id);
+  const w = routineWindow(fresh);
   if (fresh.active) ensureInstances(fresh, w.from, w.to);
   return true;
 }
@@ -985,10 +1025,15 @@ function applySync(meNo, body) {
     n += db.prepare('DELETE FROM watch WHERE id=? AND mgr_no=?').run(id, meNo).changes;
   }
   for (const c of body.cats || []) if (upsertCat(meNo, c)) n++;
-  for (const r of body.rules || []) if (upsertRule(meNo, r)) n++;
+  /* 规则也可能被拒（周期不认识、年节点缺「几月几日」）：同样把原因带回去，不静默丢。 */
+  const errors = [];
+  for (const r of body.rules || []) {
+    const ok = upsertRule(meNo, r);
+    if (ok === true) n++;
+    else if (typeof ok === 'string') errors.push(ok);
+  }
   /* 任务可能被拒（例如下派给一个从没登录过工作台的人）。
      被拒的那条不写库，但要把原因带回去——前端要原话告诉人，不能默默失败。 */
-  const errors = [];
   for (const t of body.tasks || []) {
     const r = upsertTask(meNo, t);
     if (r.ok) n++;

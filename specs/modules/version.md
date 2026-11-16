@@ -24,6 +24,7 @@ paths: version.js
 | TASK-20261109-gate-hardening | 见 git | — | 新增 `paths: version.js`：模块归属由蓝图声明 |
 | TASK-20261110-auth-export | 见 git | — | 0.9.0：认证与导出、独立管理账号；版本权威仍是 `version.js`（`--check` / `--write`） |
 | TASK-20261111-stage-interval | 见 git | — | 0.9.2：阶段区间校验按「区间相交」重判，跨年排期不再误报；补 INV-4（用户可见的修复必须 bump Z） |
+| TASK-20261116-year-routine | 见 git | — | 0.10.0：常规工作新增「年常规」（新能力 → Y 位）；`rule.cycle` 白名单与年节点 `monthNo` 校验同步进 CHANGELOG |
 | TASK-20261112-rules-conflicts | 见 git | — | INV-4 改为 semver 三档口径：修复 bump Z、新能力 bump Y、破坏性 bump X（0.x 可用 Y）；删除「用户可见变化一律 bump Z」 |
 | TASK-20261112-rules-dedup | 见 git | — | 删除「分组只能四类」与「CHANGELOG 逐字一致」两条，均由 `version.js --check` 与 `verify.mjs` 自动校验；保留 SEMVER 唯一源与 INV-4 |
 | TASK-20261112-temp-daytime | 见 git | — | 0.9.3：今日待办快速录入条可选日期；用户可见变化按 INV-4 bump Z |

@@ -1951,7 +1951,7 @@ function taskDetailHTML(t) {
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加</button>
           </div>
-          <div class="mini" style="margin-top:7px;line-height:1.5">改哪一段，点它右边的「改」；某一段要别人做，点「+ 子任务」拆一层，选上谁做。子任务只能再拆一层。</div>
+          <div class="mini" style="margin-top:7px;line-height:1.5">改哪一段，点它右边的「改」；整段要别人做，直接在这一行选「谁做」；要拆成几段分别给不同的人，点「+ 子任务」。子任务只能再拆一层。</div>
         </div>` : ''}
       </div>`;
 
@@ -1959,7 +1959,7 @@ function taskDetailHTML(t) {
   const assigneeField = t.type === 'assign'
     ? `<select data-field="assigneeNo">${whoOpts}</select>`
     : `<div class="locked">${esc(nameOf(t.assigneeNo))}${t.assigneeNo === S.me.no ? '（本人）' : ''}<span class="mini">不可改</span></div>
-       <div class="mini" style="margin-top:5px;line-height:1.5">整件事要交给别人，去「发布任务」新建一条；只想把其中一段分给同事，在左边的阶段里拆子任务、选上谁做就行。</div>`;
+       <div class="mini" style="margin-top:5px;line-height:1.5">整件事要交给别人，去「发布任务」新建一条；只想把其中一段分给同事，在左边的阶段行直接选「谁做」就行。</div>`;
 
   const infoCard = canPlan ? `<div class="card"><div class="card-h"><h2>任务信息</h2><span class="hint">改完即存</span></div>
         <div class="field"><label>状态</label><select data-field="status">${stOpts}</select></div>
@@ -2111,6 +2111,8 @@ function stageTreeHTML(t, canEdit) {
   const tops = stages.filter(s => !s.pid);
   /* 三层封顶：第三级任务不能往下派。界面只负责别让人点了才挨骂，判定在服务端。 */
   const canDispatch = (t.depth || 1) < 3;
+  /* 只有专项/下派任务有阶段树；临时任务即使有阶段也不走派发（服务端同样拒）。 */
+  const assignable = t.type === 'assign' || t.type === 'special';
   const myTick = s => s.child ? false : (s.who ? (s.who === S.me.no && s.whoAt) : canEdit);
   const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
     title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
@@ -2121,9 +2123,18 @@ function stageTreeHTML(t, canEdit) {
     const kids = kidsOf(stages, p.id);
     const pDone = kids.length ? kids.every(k => k.done) : p.done;
     const canTickP = canEdit && !kids.length;
+    /* 一级阶段行直接设责任人（0.12.0）：选人 = 把这一整段交出去。
+       一旦这段已经有子任务（不论是这次交出去的，还是手动拆的），入口就收回到二级行，
+       否则同一段会在两行各有一个「谁做」，改哪边都不算数。 */
+    const topWho = canEdit && !kids.length && !pDone && canDispatch && assignable
+      ? `<span class="mini" style="flex:0 0 auto">谁做</span><select class="who-sel" data-act="stage-who-top"
+           data-id="${t.id}" data-idx="${pi}" data-sid="${esc(p.id || '')}"
+           title="选一个人，立刻把这一整段交给他：会生成一条同名、同起止的二级子阶段，等对方接收才生效">${stageWhoOptions(t, '')}</select>`
+      : '';
     const head = `<div class="stage ${pDone ? 'on' : ''}">
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
       <div class="t ${pDone ? 'done' : ''}"><span class="sn" style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
+      ${topWho}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务；子任务是唯一能指定责任人的层级">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
@@ -2312,7 +2323,7 @@ function assigneeFieldInner(type, sel) {
   }
   return `<div class="field"><label>承接人</label>
     <div class="locked">我（本人）<span class="mini">不可改</span></div>
-    <div class="mini" style="margin-top:5px;line-height:1.5">这类事归自己办。整件事要交给别人，用「发布任务」；只想把其中一段分出去，建好之后在阶段里拆子任务、选上谁做。</div>
+    <div class="mini" style="margin-top:5px;line-height:1.5">这类事归自己办。整件事要交给别人，用「发布任务」；只想把其中一段分出去，建好之后在阶段行直接选「谁做」。</div>
     <input type="hidden" id="f_assignee" value="${S.me.no}"/>
   </div>`;
 }
@@ -2698,6 +2709,32 @@ async function redispatchStage(taskId, stageId, who) {
     await refresh(true); render();
     toast(`已改派给 ${nameOf(who)}，等他接收`);
   } catch (e) { toast('改派失败：' + e.message); }
+}
+/* 一级阶段行「谁做」：选人 = 把这一整段交出去。服务端会先生成一条同名、同起止的
+   二级子阶段，再走同一条派发通道落成「待接收」子专项——把原来「+ 子任务 → 填名 →
+   选人 → 派发」四步并成一步。失败就把下拉复位，不让人以为已经派出去了。 */
+async function dispatchTopStage(taskId, idx, stageId, who, sel) {
+  if (!who) { if (sel) sel.value = ''; return; }
+  const t = S.tasks.find(x => x.id === taskId);
+  const s = t && (t.stages || [])[Number(idx)];
+  const sid = stageId || (s && s.id) || '';
+  if (sel) sel.disabled = true;
+  try {
+    const r = await api('/api/task/dispatch', {
+      method: 'POST',
+      body: JSON.stringify({ me: S.me.no, id: taskId, topStageId: sid, topIndex: Number(idx), who })
+    });
+    if (!r.ok) {
+      toast(r.msg || '这一段没派出去');
+      if (sel) { sel.disabled = false; sel.value = ''; }
+      return;
+    }
+    await refresh(true); render();
+    toast(`已把这一段交给 ${nameOf(who)}，等对方接收后才生效`);
+  } catch (e) {
+    if (sel) { sel.disabled = false; sel.value = ''; }
+    toast('派发失败：' + e.message);
+  }
 }
 /* 变更提醒「知道了」：按任务一次清掉 */
 async function markSeen(taskId) {
@@ -3676,6 +3713,11 @@ document.addEventListener('change', e => {
   if (!t) return;
   /* 「谁做」下拉：select 的新值只在 change 里拿得到。挂到 click 上的话，
      点开下拉那一刻读到的还是旧值，选完什么都不发生——看上去就是「改不了」。 */
+  /* 一级阶段行「谁做」：一步生成二级子阶段并立即派发（0.12.0） */
+  if (e.target.matches('[data-act="stage-who-top"]')) {
+    dispatchTopStage(t.id, e.target.dataset.idx, e.target.dataset.sid, e.target.value || '', e.target);
+    return;
+  }
   if (e.target.matches('[data-act="stage-who"]')) {
     setStageWho(t, Number(e.target.dataset.idx), e.target.value || null, e.target);
     return;

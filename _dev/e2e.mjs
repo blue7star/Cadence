@@ -2231,6 +2231,110 @@ async function main() {
     await push('1012', { del: { tasks: [FLOW] } });
     for (const no of [SUBW, OTHERW, LATER, '1002']) await act('/api/notice/seen', { me: no });
 
+    /* ---------- 9.9b 一级阶段行直接设责任人（0.12.0）----------
+       验收反馈：只有一级阶段的专项没有任何派发入口，必须先「+ 子任务 → 填名 → 选人 →
+       派发」四步；入口本身也看不见。这里从 DOM 拨那个下拉，验证「一步生成同名同窗
+       二级子阶段 + 立刻派成待接收」；再绕过界面直调，验服务端拒绝点。
+       夹具故意让一级阶段没有 id：演示数据里就有 5 条这种任务，补 id 的逻辑必须真的跑。 */
+    const TOPW = 't_e2e_topwho';
+    const TOPWT = 't_e2e_topwho_temp';
+    await push('1012', { del: { tasks: [TOPW, TOPWT] } });
+    await pushJ('1012', { tasks: [{
+      id: TOPW, type: 'special', title: 'E2E一级行派发', ownerNo: '1012', assigneeNo: '1012',
+      start: d(0), end: d(6), dueDate: d(6), status: 'todo',
+      stages: [
+        { name: '整段交给同事', start: d(0), end: d(2) },
+        { id: 'tw2', pid: null, name: '自己留着做', start: d(3), end: d(4), done: false },
+        { id: 'tw3', pid: null, name: '已完成段', start: d(5), end: d(6), done: true }
+      ]
+    }] });
+    await whoAmI('1012');
+    await js(`openTaskPage('${TOPW}');'ok'`); await sleep(800);
+
+    const topEntry = await js(`(function(){
+      const rows=[...document.querySelectorAll('#view .stage:not(.sub)')];
+      const r=rows.find(x=>x.textContent.includes('整段交给同事'));
+      const sel=r&&r.querySelector('[data-act="stage-who-top"]');
+      return {rows:rows.length, hasSel:!!sel, label:(r?r.innerText:'').includes('谁做'),
+        opts:sel?sel.querySelectorAll('option').length:0};})()`);
+    check('一级阶段行直接出现「谁做」：带可见标签，不是只能悬停猜',
+      topEntry.rows === 3 && topEntry.hasSel === true && topEntry.label === true && topEntry.opts >= 2,
+      JSON.stringify(topEntry));
+
+    const topPick = await js(`(async()=>{
+      const rows=[...document.querySelectorAll('#view .stage:not(.sub)')];
+      const r=rows.find(x=>x.textContent.includes('整段交给同事'));
+      const sel=r.querySelector('[data-act="stage-who-top"]');
+      sel.value='1003';
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,1800));
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
+      const top=(t&&t.stages||[]).find(s=>!s.pid && s.name==='整段交给同事');
+      const kid=(t&&t.stages||[]).find(s=>s.pid && top && s.pid===top.id);
+      const rowNow=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      const subRow=[...document.querySelectorAll('#view .stage.sub')].find(x=>x.textContent.includes('整段交给同事'));
+      return {topId:top&&top.id, topWho:top&&top.who, topStart:top&&top.start, topEnd:top&&top.end,
+        kid:kid&&{id:kid.id,pid:kid.pid,name:kid.name,start:kid.start,end:kid.end,who:kid.who,
+          intake:kid.child&&kid.child.intakeStatus,assignee:kid.child&&kid.child.assigneeNo},
+        topSelNow:!!(rowNow&&rowNow.querySelector('[data-act="stage-who-top"]')),
+        subTag:subRow?((subRow.querySelector('.subtag')||{}).innerText||''):'',
+        subUndo:!!(subRow&&subRow.querySelector('[data-act="stage-undispatch"]')),
+        subReassign:!!(subRow&&subRow.querySelector('[data-act="stage-redispatch"]'))};})()`);
+    check('一级阶段行选人 = 一步生成同名、同起止的二级子阶段并派成待接收',
+      !!topPick.kid && topPick.kid.pid === topPick.topId && topPick.kid.name === '整段交给同事'
+        && topPick.kid.start === topPick.topStart && topPick.kid.end === topPick.topEnd
+        && topPick.kid.intake === 'pending' && topPick.kid.assignee === '1003',
+      JSON.stringify(topPick).slice(0, 320));
+    check('一级阶段本身不存 who：责任在派出去的二级节点/子专项上',
+      topPick.topWho === null || topPick.topWho === undefined, 'topWho=' + topPick.topWho);
+    check('派完一级行收起「谁做」，二级行显示待接收并给撤回/改派（两个入口不并存）',
+      topPick.topSelNow === false && topPick.subTag.includes('待接收')
+        && topPick.subUndo === true && topPick.subReassign === true,
+      JSON.stringify({ sel: topPick.topSelNow, tag: topPick.subTag, undo: topPick.subUndo, re: topPick.subReassign }));
+
+    const dbTopStages = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
+    const dbTopNode = dbTopStages.find(s => !s.pid && s.name === '整段交给同事') || {};
+    const dbKidNode = dbTopStages.find(s => s.pid && s.pid === dbTopNode.id) || {};
+    const dbTopChild = dbGet('SELECT * FROM task WHERE parent_task_id=? AND parent_stage_id=?', TOPW, dbKidNode.id);
+    check('老数据一级阶段缺 id：派发时补上，并让子专项的父阶段引用指向它',
+      !!dbTopNode.id && !!dbKidNode.id && dbKidNode.pid === dbTopNode.id && !!dbTopChild,
+      JSON.stringify({ topId: dbTopNode.id, kidPid: dbKidNode.pid, child: dbTopChild && dbTopChild.id }));
+    check('服务端落地：pending 子专项带父引用、不写 stage_ref，节点的 who 已清空',
+      !!dbTopChild && dbTopChild.type === 'assign' && dbTopChild.intake_status === 'pending'
+        && dbTopChild.assignee_no === '1003' && !dbTopChild.stage_ref
+        && dbKidNode.who === null && dbKidNode.whoAt === null,
+      JSON.stringify(dbTopChild && [dbTopChild.type, dbTopChild.intake_status, dbTopChild.assignee_no, dbTopChild.stage_ref, dbKidNode.who]));
+
+    /* 直调接口的反向路径：入口只在一级行，服务端也要逐条拒。 */
+    const reKids = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: dbTopNode.id, who: '1004' });
+    check('反向：一级阶段已经拆过，再走一级入口被拒（不产生第二条）',
+      reKids.ok === false && /子任务/.test(reKids.msg || '')
+        && dbGet('SELECT COUNT(*) c FROM task WHERE parent_task_id=? AND parent_stage_id=?', TOPW, dbKidNode.id).c === 1,
+      JSON.stringify(reKids));
+    const reChild = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: dbKidNode.id, who: '1004' });
+    check('反向：入口只给一级阶段，指到二级阶段被拒', reChild.ok === false && /一级阶段/.test(reChild.msg || ''), JSON.stringify(reChild));
+    const reNoWho = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: 'tw2', who: '' });
+    check('反向：一级入口不选人直接调用被拒', reNoWho.ok === false && /选一个人/.test(reNoWho.msg || ''), JSON.stringify(reNoWho));
+    const reNotOwner = await act('/api/task/dispatch', { me: '1003', id: TOPW, topStageId: 'tw2', who: '1004' });
+    check('反向：非承接人不能借一级入口派发', reNotOwner.ok === false && /承接人/.test(reNotOwner.msg || ''), JSON.stringify(reNotOwner));
+    const reGhost = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: 'tw2', who: '000000' });
+    check('反向：花名册外的人不能被派', reGhost.ok === false && /花名册/.test(reGhost.msg || ''), JSON.stringify(reGhost));
+    const reDone = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: 'tw3', who: '1003' });
+    check('反向：已完成的一级阶段不能再交给别人（先把完成取消）',
+      reDone.ok === false && /已经完成/.test(reDone.msg || ''), JSON.stringify(reDone));
+
+    /* 临时任务即使有阶段也不允许走这条路（服务端拒，界面也不给入口）。 */
+    await pushJ('1012', { tasks: [{
+      id: TOPWT, type: 'temp', title: 'E2E临时不拆段', ownerNo: '1012', assigneeNo: '1012',
+      start: d(0), end: d(0), status: 'todo',
+      stages: [{ id: 'tp1', pid: null, name: '临时段', start: d(0), end: d(0), done: false }]
+    }] });
+    const reTemp = await act('/api/task/dispatch', { me: '1012', id: TOPWT, topStageId: 'tp1', who: '1003' });
+    check('反向：临时任务不拆阶段，一级入口被拒', reTemp.ok === false && /不拆阶段/.test(reTemp.msg || ''), JSON.stringify(reTemp));
+    await push('1012', { del: { tasks: [dbTopChild.id, TOPWT] } });
+    await push('1012', { del: { tasks: [TOPW] } });
+
     /* ---------- 9.10 界面上的「谁做」：真拨那个下拉，不是调接口 ----------
        教训：上一版 127 条断言全绿，而下拉拨完什么都不发生——
        stage-who 挂在 click 上，change 里没接，点开读到的是旧值。
@@ -2514,6 +2618,11 @@ async function main() {
       deep.ok === false && /三层/.test(deep.msg || '')
         && !dbGet('SELECT id FROM task WHERE parent_task_id=?', L3),
       JSON.stringify(deep));
+    const deepTop = await act('/api/task/dispatch', { me: '1004', id: L3, topStageId: 'm0', who: '1005' });
+    check('第三级借一级行入口也派不出去：深度在服务端先拒',
+      deepTop.ok === false && /三层/.test(deepTop.msg || '')
+        && !dbGet('SELECT id FROM task WHERE parent_task_id=? AND parent_stage_id=?', L3, 'm0'),
+      JSON.stringify(deepTop));
 
     const st4 = await stateAs('1004');
     const d3 = (st4.tasks || []).find(t => t.id === L3);

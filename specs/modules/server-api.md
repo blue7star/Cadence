@@ -7,7 +7,7 @@ paths: server.js
 
 ## 公开行为
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
-- 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；`undispatch` 收 `{id, stageId}`，只撤 pending。
+- 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；另收 `{id, topStageId|topIndex, who}`：**一级阶段行的一步派发**（0.12.0）——为指定的一级阶段生成一条同名、同起止的二级节点并立即派成 pending 子专项，一级阶段自身不落 `who`。`undispatch` 收 `{id, stageId}`，只撤 pending。
 - 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
 - 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。
 
@@ -23,6 +23,7 @@ paths: server.js
 - **带父引用的子专项只从「我是负责人 / 我承接」进入**：publisher、下属专项、`source_id`、阶段责任人四条来源对它一律不成立；派发时父阶段的 `who/whoAt` 清空，所以原责任人不会从「我负责某段」再看到父任务一次。反例：e2e「派发人自己的列表里没有这条子专项」「责任人那边只多出这一条子专项」。
 - **透视一层**：父任务 `state` 的阶段上挂 `child` 摘要（`id/title/status/intakeStatus/progress/ownerNo/assigneeNo/start/end`），不含子任务的 `stages`；子任务行对派发人不可见，因此拿不到二级阶段，也拿不到三级。
 - **深度封顶**：新任务深度 = 父深度 + 1，> 3 整次拒绝（「子专项最多三层：这条已经是第三级，不能再往下派」）；判定在 `dispatchTask`，不只在界面。
+- `INV-5 一级阶段行的一步派发只允许落在「未完成、未拆过的一级阶段」上`。拒绝点：`dispatchTask` 的 `topStageId/topIndex` 分支，逐条给可读原因——非 `owner_no`（只有承接人能派）、`taskDepth+1 > 3`（三层封顶同一句）、找不到阶段、目标 `pid` 非空（「这个入口只给一级阶段用」）、该一级阶段已完成、该一级阶段已有子阶段或已有子专项（「已经拆成子任务」）、`who` 为空、目标人不在花名册或未登录、任务类型不是 `assign/special`。落点仍是二级节点，一级阶段不存 `who`。反例：e2e 9.9b 六条直调拒收 + 第三级 `topStageId` 拒收。
 - **接收 = 所有权转移**（`owner_no` 变承接人、`type` 变 `special`），不派生副本；`publisher_no` 永不改；父引用保留。接收前不进对方日历（pending assign 本来就被 `isMineTask` 排除）。
 - **完成态只有一条上行通道，且只有一份真相**：子专项的 `status` 是唯一真相，父阶段不存 `done`；子专项 status 变化 → `syncParentFromChild` 重算父任务 status（叶子按子专项完成态计）并写 `stage_notice(kind=stage_done)`。不做反向下写，父方整段提交里的 `done` 由 `applyChildOwnership` 清空。
 - **删除只脱钩**：删父任务或父任务里的某一段 → 清空子专项的父引用并保留它；已接收的写 `kind=detached` 提醒。不级联删。
@@ -51,3 +52,4 @@ paths: server.js
 | TASK-20261116-year-routine | 见 git | — | 常规规则周期新增 `year`：`upsertRule` 加白名单（未知周期整条拒收并进 `errors`），年节点校验 `monthNo`(1-12)+`day`；实例 key=YYYY |
 | TASK-20261112-rules-dedup | 见 git | — | 删除 4 条已被代码覆盖的公开行为（登录失败计数上限、派发 activated/stage_ref 独占、已派发叶子完成态以库为准、status 由叶子推）；INV-1~INV-4 保留为规范来源 |
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 阶段派发落地为 pending 子专项，接收后成为独立专项；新增 `undispatch` 与 `dispatch{stageId,who}` 改派；可见集对子专项排除 publisher/下属/来源/阶段责任人；透视一层（`child` 摘要）；三层硬拦；完成态只读子专项；删除只脱钩；导出 27 列 |
+| TASK-20261117-stage-top-who | 见 git | — | `dispatch` 新增 `{topStageId|topIndex, who}`：一级阶段行一步生成同名同起止的二级节点并立即派发；新增 INV-5（入口只认未拆过的一级阶段、一级阶段不存 `who`）与逐条服务端拒绝点；三层封顶与完成态权威不变 |

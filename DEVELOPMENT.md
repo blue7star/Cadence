@@ -118,7 +118,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | GET | `/api/rev` | 全局版本号，供前端 7 秒轮询；变了才拉全量 |
 | POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`；返回 `{ok, rows, errors[], rev}`。`errors` 非空表示**这条任务没写进去**（例如发布给从没登录过的人），前端要把第一条原话 toast 出来。只接受 `owner_no=我` 的行；请求里缺的字段沿用库里的值（半截请求不该炸在 SQL 绑定上） |
 | POST | `/api/task/accept` | `{me, id}`，承接人接收：`owner_no := me`、`type := special`、`intake_status := accepted`。只认 `assignee_no=me` 且当前是 `pending` |
-| POST | `/api/task/dispatch` | `{me, id, stageId?, who?}`，承接人把已指定责任人的段派成子专项：每个待派发的段建一条 `type=assign` + `intake_status=pending` + `parent_task_id/parent_stage_id` 的子任务，并清空父阶段的 `who/whoAt`。带 `stageId+who` 且该段已有 pending 子专项时执行**改派**（只换 `assignee_no`）。深度 > 3 整次拒绝；已接收的子专项拒绝改派 |
+| POST | `/api/task/dispatch` | `{me, id, stageId?, who?}`，承接人把已指定责任人的段派成子专项：每个待派发的段建一条 `type=assign` + `intake_status=pending` + `parent_task_id/parent_stage_id` 的子任务，并清空父阶段的 `who/whoAt`。带 `stageId+who` 且该段已有 pending 子专项时执行**改派**（只换 `assignee_no`）。另收 `{id, topStageId|topIndex, who}`：一级阶段行的一步派发（0.12.0），为一级阶段生成同名同起止的二级节点并立即派发；该一级阶段已有子阶段、目标非一级阶段、深度 > 3、类型非 `assign/special` 一律拒。深度 > 3 整次拒绝；已接收的子专项拒绝改派 |
 | POST | `/api/task/undispatch` | `{me, id, stageId}`，**接收前**撤回：删掉 pending 子专项，父阶段 `who` 还原成它的承接人、`whoAt` 留空。已接收的拒绝 |
 | POST | `/api/stage/join` | 旧通道（0.11.0 起无新数据）：责任人把分给自己的一段收进待办：生成 `type=temp` + `stage_ref={taskId,stageId}` 的任务并置 `joinedAt`。幂等，重复调用返回同一个 id；只为老镜像保留 |
 | POST | `/api/stage/toggle` | `{me, id, stageId, done}`，勾选某一段。权限 = 任务 owner 或该段责任人（且已 `whoAt`）。同步镜像 temp 的完成态 |
@@ -215,6 +215,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
     - **可见集去重**：带父引用的行只从「我是负责人 / 我承接」进入，publisher、下属、`source_id`、阶段责任人一律排除；父方只在阶段上看到 `child` 摘要（状态/进度），看不到子专项的 `stages`。
     - **删除只脱钩**：删父任务或父任务里的某一段，清空子专项的父引用并保留它；不级联删。
     - **接收前可撤回/可改派**：`undispatch` 删 pending 子专项并把 `who` 还原到父阶段；`dispatch{stageId, who}` 只换 pending 的承接人。已接收的不支持，写进已知限制。
+    - **一级阶段行直接设责任人（0.12.0）**：一级阶段行选「谁做」= 把这一整段交出去。服务端在 `dispatchTask` 里为它生成一条同名、同起止的二级节点并立即派发，入口在一级行、落点仍是二级节点；一级阶段自身不落 `who`。已有子阶段的一级行不出现这个入口，改派/撤回只在二级行，避免两个入口改同一段。
     - **进度加权**：派出去的段算 1 个叶子，按子专项进度折算（`taskProg` / `taskProgressOf` 同口径），不是 0/100。
     - 导出末尾追加 `父任务编号` / `父任务阶段编号`（共 27 列）；第二列不能叫「父阶段编号」，与阶段级 `pid` 列重名会让按列名匹配的导入整文件拒绝。
 

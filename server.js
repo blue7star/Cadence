@@ -1282,7 +1282,7 @@ function acceptTask(meNo, id) {
    - `{id}`（或 `{id, stageId}` 且该段没有子专项）：对每个待派发的段建子专项；
    - `{id, stageId, who}` 且该段已有 pending 子专项：只改承接人（改派）。
    已接收的子专项不在这里动——见已知限制。 */
-function dispatchTask(meNo, id, stageId, who) {
+function dispatchTask(meNo, id, stageId, who, topStageId, topIndex) {
   const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
   if (!r) return { ok: false, msg: '找不到这条任务' };
   if (r.owner_no !== meNo) return { ok: false, msg: '只有承接人能派发这条任务' };
@@ -1313,10 +1313,45 @@ function dispatchTask(meNo, id, stageId, who) {
 
   const stages = parseStages(r.stages);
   const now = nowStr();
+  /* 一级阶段行直接设责任人（0.12.0）：入口在一级行，落点仍是二级节点。
+     选出的人先落到一条「同名、同起止」的二级阶段上，随后走下面同一条派发通道；
+     一级阶段自身不落 who（applyStageOwners 继续清一级），三层封顶与完成态权威不变。
+     老数据的一级阶段可能没有 id：这里补一个再建子阶段，否则子专项挂不上父阶段。 */
+  let onlyStageId = stageId;
+  if (topStageId || topIndex != null) {
+    if (r.type !== 'assign' && r.type !== 'special') {
+      return { ok: false, msg: '这类任务不拆阶段，不能把一段派出去' };
+    }
+    let idx = topStageId ? stages.findIndex(s => s && s.id === topStageId) : -1;
+    if (idx < 0 && topIndex != null) idx = topIndex;
+    const top = idx >= 0 ? stages[idx] : null;
+    if (!top) return { ok: false, msg: '找不到这一段，可能已经被删掉了' };
+    if (top.pid) return { ok: false, msg: '这个入口只给一级阶段用；二级阶段请在它自己那一行指定责任人' };
+    if (top.done) return { ok: false, msg: '这一段已经完成了，不能再交给别人；先取消完成再派' };
+    if (stages.some(s => s && s.pid === top.id) || childOfStage(id, top.id)) {
+      return { ok: false, msg: '这一段已经拆成子任务了，请直接在子任务行上指定责任人' };
+    }
+    const target = String(who || '').trim();
+    if (!target) return { ok: false, msg: '先选一个人，再把这一段交出去' };
+    const emp = db.prepare('SELECT no,name,activated FROM emp WHERE no=? AND active=1').get(target);
+    if (!emp) return { ok: false, msg: `花名册里没有工号「${target}」，不能派给他` };
+    if (!emp.activated) {
+      return { ok: false, msg: `${emp.name} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。` };
+    }
+    if (!top.id) top.id = 'sp_' + Math.random().toString(36).slice(2, 10);
+    const start = top.start || top.date || r.start_date;
+    const end = top.end || top.date || start;
+    const node = {
+      id: 'sc_' + Math.random().toString(36).slice(2, 10),
+      pid: top.id, name: top.name || '这一段', start, end, done: false, who: target
+    };
+    stages.push(node);
+    onlyStageId = node.id;
+  }
   const created = [];
   for (const s of stages) {
     if (!s || !s.pid || s.whoAt) continue;
-    if (stageId && s.id !== stageId) continue;
+    if (onlyStageId && s.id !== onlyStageId) continue;
     const target = (stageId && s.id === stageId && who) ? String(who) : s.who;
     if (!target) continue;
     if (childOfStage(id, s.id)) continue;
@@ -2208,7 +2243,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/task/dispatch' && req.method === 'POST') {
       const b = body;
-      const r = dispatchTask(me, String(b.id || ''), b.stageId ? String(b.stageId) : '', b.who ? String(b.who) : '');
+      const r = dispatchTask(
+        me, String(b.id || ''), b.stageId ? String(b.stageId) : '', b.who ? String(b.who) : '',
+        b.topStageId ? String(b.topStageId) : '', Number.isInteger(b.topIndex) ? Number(b.topIndex) : null
+      );
       if (r.ok) logOp(me, 'dispatch', b.id + ' n=' + r.n + (r.reassigned ? ' reassign' : ''), ip);
       return sendJSON(res, 200, { ...r, rev: Number(db.prepare('SELECT v FROM meta WHERE k=?').get('rev').v) });
     }

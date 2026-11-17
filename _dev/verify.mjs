@@ -430,23 +430,23 @@ async function testInstance() {
     return c;
   };
 
-  /* 没改密之前重启：应该重新生成并打印一个新的，上一个立即作废。
-     这是「密码永远不会丢到找不回来」的机器证明——上一份日志丢了，重启一次就有新的。 */
+  /* 没改密之前重启：固定初始口令 123456，不轮换——重启前后能登录的是同一个密码，
+     且仍然要求改密。2026-11-17 用户拍板，取代原来的「每次重启换一个随机密码」。 */
   let adminPwd = firstPwd;
   const again = await restart();
   if (!again) {
-    check('未改密时重启：重新打印新的初始密码', false, '重启后实例起不来');
+    check('未改密时重启：实例必须起得来', false, '重启后实例起不来');
     stopCur();
     return null;
   }
   const secondPwd = grabPwd(again.log());
   const oldLogin = firstPwd ? await postLogin(TEST_BASE, 'admin', firstPwd) : { ok: false };
   const newLogin = secondPwd ? await postLogin(TEST_BASE, 'admin', secondPwd) : { ok: false };
-  check('未改密时重启：打印新密码，旧密码作废、新密码可登录且仍要求改密',
-    !!secondPwd && secondPwd !== firstPwd && oldLogin.ok === false
+  check('未改密时重启：初始口令固定为 123456，不轮换；旧密码仍可登录且仍要求改密',
+    firstPwd === '123456' && secondPwd === '123456' && oldLogin.ok === true
       && newLogin.ok === true && newLogin.mustChange === true,
-    `新 ${newLogin.ok ? 'ok' : '不行'} / 旧 ${oldLogin.ok ? '还能用（不对）' : '已作废'} / 是否换了密码 ${secondPwd && secondPwd !== firstPwd}`);
-  if (!secondPwd) { stopCur(); return null; }
+    `首次 ${firstPwd} / 重启后 ${secondPwd} / 旧 ${oldLogin.ok ? '仍可用' : '失效（不对）'} / 新 ${newLogin.ok ? 'ok' : '不行'} / 仍要求改密 ${newLogin.mustChange === true}`);
+  if (!newLogin.ok) { stopCur(); return null; }
   adminPwd = secondPwd;
 
   return {

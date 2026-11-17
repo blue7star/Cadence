@@ -1728,12 +1728,12 @@ const LOCK_FAILS = 5;                      /* 连续失败 5 次 */
 const LOCK_MS = 5 * 60 * 1000;             /* 锁 5 分钟 */
 
 /* 管理账号：固定账号名 admin，独立于花名册（不占工号、不进 emp）。
-   不读环境变量、也没有写死的默认密码。密码由服务自己管，目标是「永远不会丢到找不回来」：
-   - 还没人改过（must_change=1）：每次启动都重新生成一个随机密码并打印，同时更新库里的哈希。
-     上一次的日志找不到了，重启一次就有新的；代价是没改密之前，重启会让上一个密码作废。
-   - 改过之后（must_change=0）：不再生成、不再打印，改了就是改了。
-   库里始终只有 scrypt 哈希，日志是唯一能拿到明文的地方。 */
+   初始口令固定为 123456（2026-11-17 用户拍板，取代原来的「每次启动随机生成」）：
+   - 还没改过（must_change=1）：每次启动把它对齐到 123456，幂等，不轮换、不换密码。
+   - 改过之后（must_change=0）：什么都不做，重启绝不重置回 123456。
+   库里始终只有 scrypt 哈希；日志打印固定初始口令，方便首次登录。 */
 const ADMIN_ACCOUNT = 'admin';
+const ADMIN_INITIAL_PWD = '123456';
 
 function setAdminPassword(pwd, mustChange) {
   const salt = newSalt();
@@ -1753,11 +1753,9 @@ const ADMIN_FIRST_PWD = (() => {
   const row = db.prepare('SELECT must_change FROM admin_auth WHERE account=?').get(ADMIN_ACCOUNT);
   /* 已经改过密码：行在、must_change=0，什么都不做——重启不能悄悄把用户的密码换掉 */
   if (row && !row.must_change) return '';
-  /* 12 位 base64url：不含易混字符，够一个人抄到浏览器里，也不是「工号」那种可猜的口令。
-     没改密之前每次启动都重来一个，保证「上一份日志丢了也还能再拿到一个」。 */
-  const pwd = crypto.randomBytes(9).toString('base64url');
-  setAdminPassword(pwd, true);
-  return pwd;
+  /* 没改密之前也固定 123456：不随机、不轮换，重启前后一致。 */
+  setAdminPassword(ADMIN_INITIAL_PWD, true);
+  return ADMIN_INITIAL_PWD;
 })();
 
 function newSalt() { return crypto.randomBytes(16).toString('hex'); }
@@ -2381,9 +2379,9 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('     不要暴露到公网、访客网络或端口映射；要出内网请先加反向代理与 TLS。');
   if (ADMIN_FIRST_PWD) {
     console.log('');
-    console.log('  ⚠ 管理账号 admin 还没改过密码，这是本次启动新生成的初始密码：');
+    console.log('  ⚠ 管理账号 admin 还没改过密码，初始密码固定为：');
     console.log(`     ${ADMIN_FIRST_PWD}`);
-    console.log('     改密之前每次重启都会换一个新的（旧密码立即作废）；改过之后不再生成、不再打印。');
+    console.log('     重启不会换密码；登录后请及时改密，改过之后重启也不会重置回初始口令。');
   }
   console.log('');
   console.log('  在浏览器打开上面「本机访问」那个地址就能用了。');

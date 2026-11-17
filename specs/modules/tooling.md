@@ -36,3 +36,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | e2e 的派发/完成态用例按新链路改写（接收、撤回、改派、单向上汇总、脱钩），新增三层封顶与父子导出断言；两处真实缺陷由断言拦下并修正（导出父子列错位、派发人可见集未去重） |
 | TASK-20261117-false-render-fix | 见 git | — | e2e 新增反例：专项工作卡片所有阶段行不得出现独立 `false`，且同一页必须有阶段行（防空集自证） |
 | TASK-20261117-stage-top-who | 见 git | — | e2e 新增 9.9b：一级阶段行「谁做」从 DOM 拨动 → 同名同起止二级节点 + pending 子专项；老阶段补 `id`；五条直调拒绝路径（已拆、二级、缺人、非承接人、花名册外）+ 临时任务拒绝；第三级 `topStageId` 也被三层封顶拒；v2 追加撤回完整性：撤回后自动段消失、一级入口恢复、再派同一人/换人成功、旧 id 被拒 |
+| TASK-20261117-admin-fixed-password | 见 git | — | verify 的 admin 重启断言从「换新密码、旧密码作废」改为「两次启动都是固定 123456、旧密码仍可用、仍要求改密」；保留「改密后重启保留新密码、不再打印」 |

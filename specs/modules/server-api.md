@@ -15,7 +15,7 @@ paths: server.js
 - **身份只来自会话**：所有接口先过 `sid` cookie 的会话门，`me` 与会话不符 403、无会话 401；不接受「按请求里的 me 当身份」。导出因此没有「导别人」的口子。
 - **停用即失效**：会话门每次都查 `emp.active`，停用（`active=0`）当场 401 并吊销该工号全部会话；不再有「停用后旧 cookie 还能用满 30 天」的窗口。
 - **初始密码名单 = 仍在用初始密码的在职员工**：`cred.initial=1`，外加从没登录过、连 `cred` 行都还没有的人（密码同样是工号）；从未登录时 `firstLoginAt` 为空。
-- **管理账号是独立身份**：`admin` 走 `/api/login` 的独立分支，会话门不查 `emp.active`，改查 `admin_auth` 是否还在；它不进花名册、不参与业务数据，改密前除 `/api/password`、`/api/logout` 外一律 403。
+- **管理账号是独立身份**：`admin` 走 `/api/login` 的独立分支，会话门不查 `emp.active`，改查 `admin_auth` 是否还在；它不进花名册、不参与业务数据，改密前除 `/api/password`、`/api/logout` 外一律 403。**初始口令固定为 `123456`（2026-11-17 起，取代随机生成）**：`must_change=1`（含行不存在）时启动幂等对齐到 `123456` 并把固定口令打印到启动日志；`must_change=0` 时启动不写库、不打印，重启保留用户改后的密码，绝不重置回 `123456`。
 - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
 - **常规规则的周期只有 `day/week/month/year`**：`upsertRule` 用白名单判定，未知周期整条拒收并进 `errors`（不再静默落进月分支）；年规则每个节点必须有 `monthNo`（1-12）与 `day`（1-31），缺了同样拒收。反例：e2e 7.4b「服务端拒收未知周期与缺月日的年规则」。
 - 接收看 `assignee_no`、派发/撤回/改派看 `owner_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。已派成子专项的段没有自己的勾选权，一律按「这一段由别人负责，只有他能勾完成」拒。
@@ -53,4 +53,5 @@ paths: server.js
 | TASK-20261116-year-routine | 见 git | — | 常规规则周期新增 `year`：`upsertRule` 加白名单（未知周期整条拒收并进 `errors`），年节点校验 `monthNo`(1-12)+`day`；实例 key=YYYY |
 | TASK-20261112-rules-dedup | 见 git | — | 删除 4 条已被代码覆盖的公开行为（登录失败计数上限、派发 activated/stage_ref 独占、已派发叶子完成态以库为准、status 由叶子推）；INV-1~INV-4 保留为规范来源 |
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 阶段派发落地为 pending 子专项，接收后成为独立专项；新增 `undispatch` 与 `dispatch{stageId,who}` 改派；可见集对子专项排除 publisher/下属/来源/阶段责任人；透视一层（`child` 摘要）；三层硬拦；完成态只读子专项；删除只脱钩；导出 27 列 |
-| TASK-20261117-stage-top-who | 见 git | — | `dispatch` 新增 `{topStageId|topIndex, who}`：一级阶段行一步生成同名同起止的二级节点并立即派发；新增 INV-5（入口只认未拆过的一级阶段、一级阶段不存 `who`）与逐条服务端拒绝点；三层封顶与完成态权威不变 |
+| TASK-20261117-stage-top-who | 见 git | — | `dispatch` 新增 `{topStageId|topIndex, who}`：一级阶段行一步生成同名同起止的二级节点并立即派发；新增 INV-5（入口只认未拆过的一级阶段、一级阶段不存 `who`）与逐条服务端拒绝点；三层封顶与完成态权威不变。v2：`auto` 自动段撤回时连同节点收掉，一级入口恢复（INV-6） |
+| TASK-20261117-admin-fixed-password | 见 git | — | 管理账号初始口令固定 `123456`：`must_change=1` 时启动幂等对齐并打印固定口令；`must_change=0` 时启动不写库、不打印，重启保留用户改后的密码 |

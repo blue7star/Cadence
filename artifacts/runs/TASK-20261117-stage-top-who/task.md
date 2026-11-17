@@ -3,7 +3,7 @@
 ## 元信息
 
 task_id: TASK-20261117-stage-top-who
-contract_version: 1
+contract_version: 2
 base_revision: 2438947
 gate_level: G2
 status: PLANNED
@@ -37,9 +37,21 @@ stop_conditions: ① 一级入口必须把 `who` 落在二级阶段之外的一�
   - **前端**（`stageTreeHTML` + change 处理）：一级阶段行在 `canEdit && !kids.length && depth<3 && (type=assign|special)` 时渲染可见的「谁做」标签 + 下拉（复用 `stageWhoOptions`）。选中人 → 调用扩展后的 dispatch；失败把下拉复位并原话提示；成功后 `refresh(true); render()`，一级行下拉消失、二级行显示「待接收 / 改派 / 撤回」。选择「承接人自己做」（空值）不发请求。已有子阶段的一级行不渲染该下拉。
   - **文案**：阶段卡片底部与任务信息里的引导改成「整段交给别人直接在这一行选『谁做』；要拆成几段分别给不同的人，再点『+ 子任务』」，让新入口可被发现。
   - **契约升版语义**：上一轮 `TASK-20261116-stage-dispatch-nesting` 的「派发入口仅开放给二级节点（`pid` 非空）」在入口层被本条扩为「一级行可直接发起派发」；但**落点仍是二级节点**，三级封顶、完成态唯一权威、导出父子列、可见集来源均不变。一级阶段仍不存 `who`（`applyStageOwners` 继续清空）。
-  - **版本**：0.12.0（新能力 → Y 位），`node version.js --write` 生成 CHANGELOG。
+  - **撤回的完整性（v2）**：一级行「谁做」生成的子段带 `auto` 标记。撤回这次派发时，服务端把它连同 pending 子专项一起收掉，一级行回到「未拆、可派」；手动「+ 子任务」建的段没有 `auto`，撤回仍按原逻辑保留该段并把 `who` 还原到它上面。撤回后再派同一人、换另一人都必须成功；拿已收掉的自动段 `id` 再派必须拒绝。
+  - **版本**：0.12.1（同一功能的完整性缺口按修复 bump Z），`node version.js --write` 生成 CHANGELOG。
 - 范围外：见元信息 `out_of_scope`。
-- 受影响的事实归属者与契约：`specs/modules/server-api.md`（dispatch 入参、拒绝点、一级入口不变量）、`specs/modules/app-ui.md`（一级行「谁做」、两个入口互斥）、`specs/modules/server-data.md`（老阶段 id 补写口径）、`specs/modules/tooling.md`（e2e 新断言）、`specs/modules/version.md`（0.12.0）、`DEVELOPMENT.md` §4（dispatch 入参）。
+- 受影响的事实归属者与契约：`specs/modules/server-api.md`（dispatch 入参、拒绝点、一级入口不变量）、`specs/modules/app-ui.md`（一级行「谁做」、两个入口互斥）、`specs/modules/server-data.md`（老阶段 id 补写口径）、`specs/modules/tooling.md`（e2e 新断言）、`specs/modules/version.md`（0.12.0 / 0.12.1）、`DEVELOPMENT.md` §4（dispatch 入参）。
+
+## 状态表（一级行「谁做」入口）
+
+| # | 一级段当前状态 | 用户动作 | 结果 | 服务端判定点（拒绝即不落库） |
+| --- | --- | --- | --- | --- |
+| S1 | 未完成、无子任务、`assign/special`、`depth < 3` | 一级行选人 | 生成一条同名同起止的自动子段（`auto=1`）+ pending 子专项；一级行收起「谁做」 | `dispatch{topStageId\|topIndex, who}`：非 owner / 深度超 3 / 找不到段 / `pid` 非空 / 已完成 / 已有子段 / `who` 空或不可用 / 类型不符 → 拒 |
+| S2 | 已有子任务（手动或自动） | 看一级行 | 一级行不出现「谁做」，责任只在子任务行分配 | 同上：`stages.some(pid=top.id)` 或已有子专项 → 「已经拆成子任务」 |
+| S3 | 已完成、无子任务 | 一级行选人 | 不渲染下拉；直调被拒，先取消完成 | `top.done` → 「这一段已经完成了，不能再交给别人」 |
+| S4 | 自动子段处于待接收 | 点「撤回」 | 自动子段与 pending 子专项一并删除；一级行「谁做」自动回来 | `undispatch`：非 owner / 没有 pending 子专项 / 已接收 → 拒 |
+| S5 | 手动子段处于待接收 | 点「撤回」 | 保留该子段，`who` 还原到子段；一级行仍不显示「谁做」 | 同 S4 |
+| S6 | 自动子段撤回后（无子段） | 再派同一人 / 换另一人 | 重新生成自动子段并进入 pending；一级行再次收起 | `dispatch{topStageId, who}`；用已收掉的自动段 `id` → 「找不到这一段」 |
 
 ## 风险与权限
 
@@ -58,12 +70,16 @@ stop_conditions: ① 一级入口必须把 `who` 落在二级阶段之外的一�
   - 同时落一条 `parent_task_id/parent_stage_id` 的 pending 子专项，`assignee_no` = 选中人，`stage_ref` 为空。
   - 父方 `state` 里该一级阶段出现 `child.intakeStatus=pending`；一级行下拉消失，二级行显示「待接收」并给「改派 / 撤回」。
   - 老数据兼容：一级阶段没有 `id` 时，派发后服务端补了 `id`，子专项的 `parent_stage_id` 指向它。
+  - 撤回完整性（v2）：点「撤回」→ 自动子段与 pending 子专项都消失，一级行「谁做」自动回来；随后再派同一人成功、换另一人成功；每次派完一级入口再次收起。
 - 反向路径（绕过界面直调 `/api/task/dispatch`）：
   - 非 owner → 拒；`who` 为空 → 拒；花名册外/未登录 → 拒。
   - 已有子阶段的一级阶段再走该入口 → 拒（「已经拆成子任务」）。
   - 传 `topStageId` 指向二级阶段 → 拒（「只给一级阶段」）。
   - 三级任务带 `topStageId` → 拒（「子专项最多三层」），且不留下半条子任务。
   - 类型为 `temp` 的任务 → 拒。
+  - 已完成的一级阶段 → 拒（「先取消完成再派」）。
+  - 撤回后拿已收掉的自动段 `id` 再派 → 拒（「找不到这一段」）。
+- 界面证据：撤回前后各一张 1600 视口截图（`walkthrough/04-*`、`05-*`）。
 - 文档同步：四份蓝图 + `DEVELOPMENT.md` §4。
 - 安全、数据、迁移与回滚证据：
   - 迁移：无表结构变更；只允许在一级阶段行派发时给缺失 `id` 的阶段补 `id`（写入 `stages` JSON）。

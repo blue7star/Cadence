@@ -33,4 +33,4 @@ paths: version.js
 | TASK-20261113-export-temp | 见 git | — | 0.9.6：导出纳入临时任务；用户可见变化按 INV-4 bump Z |
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 0.11.0：阶段派发落地为子专项（接收生效、可撤回/改派、三层封顶），完成态改为单向上汇总；新能力按 INV-4 bump Y |
 | TASK-20261117-false-render-fix | 见 git | — | 0.11.1：专项卡片阶段行的 false 渲染修复；用户可见缺陷按 INV-4 bump Z |
-| TASK-20261117-stage-top-who | 见 git | — | 0.12.0：一级阶段行直接选人、一步派成待接收子专项；新能力按 INV-4 bump Y |
+| TASK-20261117-stage-top-who | 见 git | — | 0.12.0：一级阶段行直接选人、一步派成待接收子专项；新能力按 INV-4 bump Y。0.12.1：自动子段撤回后一级入口未恢复的完整性缺口，按修复 bump Z |

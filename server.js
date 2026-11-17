@@ -1343,7 +1343,10 @@ function dispatchTask(meNo, id, stageId, who, topStageId, topIndex) {
     const end = top.end || top.date || start;
     const node = {
       id: 'sc_' + Math.random().toString(36).slice(2, 10),
-      pid: top.id, name: top.name || '这一段', start, end, done: false, who: target
+      pid: top.id, name: top.name || '这一段', start, end, done: false, who: target,
+      /* 一级行「谁做」自动生成的段。撤回派发时连同它一起收掉，让一级行恢复可派；
+         手动「+ 子任务」建的段没有这个标记，撤回到「未派发」时保留。 */
+      auto: 1
     };
     stages.push(node);
     onlyStageId = node.id;
@@ -1391,8 +1394,15 @@ function undispatchTask(meNo, id, stageId) {
   if (!c) return { ok: false, msg: '这一段没有待接收的派发' };
   if (c.intake_status !== 'pending') return { ok: false, msg: '这条子专项已经被接收，不能撤回；要调整请找它的负责人' };
   const stages = parseStages(r.stages);
-  const s = stages.find(x => x && x.id === stageId);
-  if (s) { s.who = c.assignee_no; s.whoAt = null; s.joinedAt = null; }
+  const idx = stages.findIndex(x => x && x.id === stageId);
+  const s = idx >= 0 ? stages[idx] : null;
+  if (s && s.auto) {
+    /* 一级行「谁做」生成的那一段：撤回 = 连自动段一起收掉，一级行恢复「谁做」。
+       否则会留下一条空段把一级入口挤掉，只能靠「+ 子任务」绕回来。 */
+    stages.splice(idx, 1);
+  } else if (s) {
+    s.who = c.assignee_no; s.whoAt = null; s.joinedAt = null;
+  }
   db.prepare('DELETE FROM task WHERE id=?').run(c.id);
   db.prepare('UPDATE task SET stages=?,updated_at=? WHERE id=?').run(JSON.stringify(stages), nowStr(), id);
   bumpRev();

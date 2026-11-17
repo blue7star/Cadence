@@ -24,6 +24,7 @@ paths: server.js
 - **透视一层**：父任务 `state` 的阶段上挂 `child` 摘要（`id/title/status/intakeStatus/progress/ownerNo/assigneeNo/start/end`），不含子任务的 `stages`；子任务行对派发人不可见，因此拿不到二级阶段，也拿不到三级。
 - **深度封顶**：新任务深度 = 父深度 + 1，> 3 整次拒绝（「子专项最多三层：这条已经是第三级，不能再往下派」）；判定在 `dispatchTask`，不只在界面。
 - `INV-5 一级阶段行的一步派发只允许落在「未完成、未拆过的一级阶段」上`。拒绝点：`dispatchTask` 的 `topStageId/topIndex` 分支，逐条给可读原因——非 `owner_no`（只有承接人能派）、`taskDepth+1 > 3`（三层封顶同一句）、找不到阶段、目标 `pid` 非空（「这个入口只给一级阶段用」）、该一级阶段已完成、该一级阶段已有子阶段或已有子专项（「已经拆成子任务」）、`who` 为空、目标人不在花名册或未登录、任务类型不是 `assign/special`。落点仍是二级节点，一级阶段不存 `who`。反例：e2e 9.9b 六条直调拒收 + 第三级 `topStageId` 拒收。
+- `INV-6 自动子段的撤回必须可回到「未拆、可派」`：一级行派发生成的节点带 `auto=1`；`undispatch` 删掉 pending 子专项后，若该节点 `auto` 为真则连同节点一起从 `stages` 移除，一级行恢复「谁做」；手动节点没有 `auto`，仍保留并把 `who` 还原。拒绝点：非 owner / 该段没有 pending 子专项 / 已接收；撤回后拿已移除的自动段 `id` 再派 → 「找不到这一段」。反例：e2e 9.9b「撤回后入口恢复 + 再派同一人 + 换人 + 旧 id 被拒」。
 - **接收 = 所有权转移**（`owner_no` 变承接人、`type` 变 `special`），不派生副本；`publisher_no` 永不改；父引用保留。接收前不进对方日历（pending assign 本来就被 `isMineTask` 排除）。
 - **完成态只有一条上行通道，且只有一份真相**：子专项的 `status` 是唯一真相，父阶段不存 `done`；子专项 status 变化 → `syncParentFromChild` 重算父任务 status（叶子按子专项完成态计）并写 `stage_notice(kind=stage_done)`。不做反向下写，父方整段提交里的 `done` 由 `applyChildOwnership` 清空。
 - **删除只脱钩**：删父任务或父任务里的某一段 → 清空子专项的父引用并保留它；已接收的写 `kind=detached` 提醒。不级联删。

@@ -1,7 +1,7 @@
-# 交付说明 — 一级阶段行直接设责任人（v0.12.0）
+# 交付说明 — 一级阶段行直接设责任人（v0.12.0 / v0.12.1）
 
 task_id: TASK-20261117-stage-top-who
-contract: v1（`task.md`；相对 `TASK-20261116-stage-dispatch-nesting` 的 v2 只扩展**入口位置**，不改状态机）
+contract: v2（`task.md` + `amendment-v2.md`；相对 `TASK-20261116-stage-dispatch-nesting` 的 v2 只扩展**入口位置**，不改状态机）
 
 ## 做了什么
 
@@ -11,6 +11,7 @@ contract: v1（`task.md`；相对 `TASK-20261116-stage-dispatch-nesting` 的 v2 
 4. **服务端拒绝点（INV-5）**：非 owner、`depth+1 > 3`、找不到阶段、`pid` 非空、已完成、已有子阶段/子专项、`who` 为空、花名册外/未登录、任务类型非 `assign/special`——逐条给可读原因；不依赖前端隐藏。
 5. **老数据兼容**：0.11.0 之前的一级阶段可能没有 `id`。派发时服务端补一个 `sp_...` id，再让子专项的 `parent_stage_id` 指向它；表结构不变。演示库 `1002_sp1` 实测可派。
 6. **文案**：阶段卡片与任务信息里的引导改成「整段交给别人直接选『谁做』；要拆成几段再点『+ 子任务』」。
+7. **撤回后入口恢复（v2 / 0.12.1）**：一级行派发生成的节点带 `auto=1`；`undispatch` 删 pending 子专项后，`auto` 节点连同节点一起从 `stages` 移除，一级行「谁做」自动回来，可立刻再派同一人或换人。手动「+ 子任务」的段没有 `auto`，撤回保持原行为（保留段、`who` 还原到该段）。旧 `id` 再派 → 服务端「找不到这一段」。
 
 ## 判断与取舍（请重点看这条）
 
@@ -41,6 +42,8 @@ contract: v1（`task.md`；相对 `TASK-20261116-stage-dispatch-nesting` 的 v2 
 - `walkthrough/01-detail-top-who-1600.png`：一级行「谁做」可见（已完成段不出现）。
 - `walkthrough/02-after-pick-pending-1600.png`：选人后一级行收起、二级行「待接收」。
 - `walkthrough/03-receiver-pending-1600.png`：1003 承接台出现该待接收子专项。
+- `walkthrough/04-before-undispatch-1600.png`：撤回前，一级行收起、2.1 待接收。
+- `walkthrough/05-after-undispatch-1600.png`：撤回后，自动段消失、一级行「谁做」恢复。
 - 逐条自审（含首版「已完成段也出现下拉」的修正）：`walkthrough/self-review.md`。
 
 ## 已知限制（本轮明确不做）
@@ -53,6 +56,6 @@ contract: v1（`task.md`；相对 `TASK-20261116-stage-dispatch-nesting` 的 v2 
 
 ## 验证
 
-- `node _dev/verify.mjs --full`：13/13 全绿，e2e **276 项**全过（含本任务新增 9.9b）。
-- e2e 9.9b 覆盖：一级行下拉从 DOM 拨动 → 同名同起止二级节点 + pending 子专项；老阶段补 `id`；一级阶段不存 `who`；派完一级行入口消失、二级行待接收/改派/撤回；直调拒绝 6 条（已拆、二级、缺人、非承接人、花名册外、已完成）+ 临时任务拒绝 + 第三级 `topStageId` 拒绝。
+- `node _dev/verify.mjs --full`：13/13 全绿，e2e **282 项**全过（含本任务新增 9.9b）。
+- e2e 9.9b 覆盖：一级行下拉从 DOM 拨动 → 同名同起止二级节点 + pending 子专项；老阶段补 `id`；一级阶段不存 `who`；派完一级行入口消失、二级行待接收/改派/撤回；直调拒绝 6 条（已拆、二级、缺人、非承接人、花名册外、已完成）+ 临时任务拒绝 + 第三级 `topStageId` 拒绝；v2 追加撤回后自动段消失、一级入口恢复、再派同一人/换人均成功、旧 `id` 被拒。
 - 提交后 `python .agents/gates/gate.py --ci --repo .` 的输出见本次交付报告。

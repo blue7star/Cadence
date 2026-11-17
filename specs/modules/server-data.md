@@ -12,6 +12,7 @@ paths: server.js, data/
 - 该 partial unique index 的**左前缀就是 `parent_task_id` 的查询索引**，不另建冗余单列索引——别把它当成漏建。
 - 删除父任务或父任务里的某一段只做**脱钩**（清空子任务的两列父引用），不级联删子任务；已接收的子专项会收到一条 `kind=detached` 提醒。
 - **老数据的一级阶段可能没有 `id`**（0.11.0 之前的阶段 JSON 只存名称/日期）。一级阶段行派发时由服务端补一个 `id` 再建二级节点，子专项的 `parent_stage_id` 指向它；不改表结构，旧代码仍可读。
+- **`stages[].auto`**：一级行「谁做」派发生成的二级节点带 `auto: 1`，只用于撤回时判断「这条段是自动生成的，撤回应连同节点收掉」。它是阶段 JSON 的内部标记，不是导出列，客户端原样回传（`normalizeStages` 保留未知字段）。
 
 ## 不变量
 - **实例幂等**：同一 owner + 规则 + 周期只能有一条（`INSERT OR IGNORE`）；重复跑 `maintain` 不产生新行。
@@ -36,4 +37,4 @@ paths: server.js, data/
 | TASK-20261112-rules-dedup | 见 git | — | 删除 6 条已被代码覆盖或与其他蓝图重复的公开行为（实例幂等、task 三列归属、工作日生成、op_log 上限、口令/会话/导出只读、admin 分表重复）；保留 INSERT 成对与 INV-1~INV-3 |
 | TASK-20261116-year-routine | 见 git | — | 常规实例生成窗口按周期分档（日/周/月 +80d、年 +366d）；`regenRule` 删除范围从「本月及以后」改为「本次生成窗口内」，窗口外年实例不再被删；补年周期切分与 `monthNo` 落点 |
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 新增 `parent_task_id`/`parent_stage_id` 与 partial unique index（唯一约束即查询索引）；阶段派发落地为子专项，完成态单向后汇总（INV-4）；父任务/父阶段删除只脱钩、不级联 |
-| TASK-20261117-stage-top-who | 见 git | — | 无表结构变更；一级阶段行派发时为缺 `id` 的老阶段补写 `id`（写入 `stages` JSON），使子专项的 `parent_stage_id` 可挂载；反例见 e2e 9.9b |
+| TASK-20261117-stage-top-who | 见 git | — | 无表结构变更；一级阶段行派发时为缺 `id` 的老阶段补写 `id`（写入 `stages` JSON），使子专项的 `parent_stage_id` 可挂载；v2 新增 `stages[].auto` 内部标记（撤回自动段时用，非导出列） |

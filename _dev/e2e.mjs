@@ -2324,6 +2324,68 @@ async function main() {
     check('反向：已完成的一级阶段不能再交给别人（先把完成取消）',
       reDone.ok === false && /已经完成/.test(reDone.msg || ''), JSON.stringify(reDone));
 
+    /* 撤回：一级行「谁做」生成的自动段要连同节点一起收掉，一级入口自动回来。
+       只把 who 还原、空段留在原地的话，一级行会永久收起，只能靠「+ 子任务」绕。 */
+    await js(`window.confirm=()=>true;'ok'`);
+    const undoUi = await js(`(async()=>{
+      const subRow=[...document.querySelectorAll('#view .stage.sub')].find(x=>x.textContent.includes('整段交给同事'));
+      const btn=subRow&&subRow.querySelector('[data-act="stage-undispatch"]');
+      if(!btn) return {clicked:false};
+      btn.click();
+      await new Promise(r=>setTimeout(r,1800));
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
+      const kids=((t&&t.stages)||[]).filter(s=>s.pid);
+      const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      const sel=row&&row.querySelector('[data-act="stage-who-top"]');
+      return {clicked:true,kids:kids.length,autoLeft:kids.some(k=>k.auto),topSel:!!sel,
+        opts:sel?sel.querySelectorAll('option').length:0};})()`);
+    check('撤回后：自动生成的二级段被收掉，一级行「谁做」自动回来（不卡死）',
+      undoUi.clicked === true && undoUi.kids === 0 && undoUi.autoLeft === false
+        && undoUi.topSel === true && undoUi.opts >= 2, JSON.stringify(undoUi));
+    const undoStages1 = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
+    check('撤回后服务端状态：自动段与 pending 子专项都已删除',
+      !undoStages1.some(s => s.auto) && !dbGet('SELECT id FROM task WHERE parent_task_id=?', TOPW),
+      JSON.stringify(undoStages1));
+
+    /* 撤回后再派同一人：一级入口还在，能立刻再派；派完又收起。 */
+    const againSame = await js(`(async()=>{
+      const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      const sel=row&&row.querySelector('[data-act="stage-who-top"]');
+      if(!sel) return {hasSel:false};
+      sel.value='1003';
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,1800));
+      const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
+      const kids=((t&&t.stages)||[]).filter(s=>s.pid);
+      const row2=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      return {hasSel:true,kids:kids.length,assignee:kids[0]&&kids[0].child&&kids[0].child.assigneeNo,
+        selGone:!(row2&&row2.querySelector('[data-act="stage-who-top"]'))};})()`);
+    check('撤回后再派同一人：成功，一级入口再次收起',
+      againSame.hasSel === true && againSame.kids === 1 && againSame.assignee === '1003' && againSame.selGone === true,
+      JSON.stringify(againSame));
+
+    const againStages = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
+    const againNode = againStages.find(s => s.auto) || {};
+    const undo2 = await act('/api/task/undispatch', { me: '1012', id: TOPW, stageId: againNode.id });
+    check('第二次撤回：自动段再次收掉，一个不留',
+      undo2.ok === true && !dbGet('SELECT id FROM task WHERE parent_task_id=?', TOPW)
+        && !JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]').some(s => s.pid),
+      JSON.stringify(undo2));
+
+    /* 换另一人再派：一级入口同样可用；拿已经收掉的自动段 id 再派要被拒。 */
+    const topAfter = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]')
+      .find(s => !s.pid && s.name === '整段交给同事') || {};
+    const otherWho = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: topAfter.id, who: '1004' });
+    const otherChild = dbGet('SELECT * FROM task WHERE parent_task_id=?', TOPW);
+    check('撤回后换另一人：一级入口仍可派',
+      otherWho.ok === true && otherWho.n === 1 && !!otherChild && otherChild.assignee_no === '1004'
+        && otherChild.intake_status === 'pending', JSON.stringify(otherWho));
+    const stale = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: againNode.id, who: '1003' });
+    check('反例：撤回后拿已收掉的自动段 id 再派，服务端拒（找不到这一段）',
+      stale.ok === false && /找不到这一段/.test(stale.msg || ''), JSON.stringify(stale));
+
     /* 临时任务即使有阶段也不允许走这条路（服务端拒，界面也不给入口）。 */
     await pushJ('1012', { tasks: [{
       id: TOPWT, type: 'temp', title: 'E2E临时不拆段', ownerNo: '1012', assigneeNo: '1012',
@@ -2332,7 +2394,7 @@ async function main() {
     }] });
     const reTemp = await act('/api/task/dispatch', { me: '1012', id: TOPWT, topStageId: 'tp1', who: '1003' });
     check('反向：临时任务不拆阶段，一级入口被拒', reTemp.ok === false && /不拆阶段/.test(reTemp.msg || ''), JSON.stringify(reTemp));
-    await push('1012', { del: { tasks: [dbTopChild.id, TOPWT] } });
+    await push('1012', { del: { tasks: [otherChild && otherChild.id, TOPWT].filter(Boolean) } });
     await push('1012', { del: { tasks: [TOPW] } });
 
     /* ---------- 9.10 界面上的「谁做」：真拨那个下拉，不是调接口 ----------

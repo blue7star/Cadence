@@ -119,7 +119,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | POST | `/api/sync` | 增量提交：`{me, tasks[], rules[], cats[], watch[], del:{...}}`；返回 `{ok, rows, errors[], rev}`。`errors` 非空表示**这条任务没写进去**（例如发布给从没登录过的人），前端要把第一条原话 toast 出来。只接受 `owner_no=我` 的行；请求里缺的字段沿用库里的值（半截请求不该炸在 SQL 绑定上） |
 | POST | `/api/task/accept` | `{me, id}`，承接人接收：`owner_no := me`、`type := special`、`intake_status := accepted`。只认 `assignee_no=me` 且当前是 `pending` |
 | POST | `/api/task/dispatch` | `{me, id, stageId?, who?}`，承接人把已指定责任人的段派成子专项：每个待派发的段建一条 `type=assign` + `intake_status=pending` + `parent_task_id/parent_stage_id` 的子任务，并清空父阶段的 `who/whoAt`。带 `stageId+who` 且该段已有 pending 子专项时执行**改派**（只换 `assignee_no`）。另收 `{id, topStageId|topIndex, who}`：一级阶段行的一步派发（0.12.0），为一级阶段生成同名同起止的二级节点并立即派发；该一级阶段已有子阶段、目标非一级阶段、深度 > 3、类型非 `assign/special` 一律拒。深度 > 3 整次拒绝；已接收的子专项拒绝改派 |
-| POST | `/api/task/undispatch` | `{me, id, stageId}`，**接收前**撤回：删掉 pending 子专项，父阶段 `who` 还原成它的承接人、`whoAt` 留空。已接收的拒绝 |
+| POST | `/api/task/undispatch` | `{me, id, stageId}`，**接收前**撤回：删掉 pending 子专项；若该段是一级行「谁做」自动生成的（`auto=1`），连同该段一起收掉、一级行恢复入口，否则父阶段 `who` 还原成它的承接人、`whoAt` 留空。已接收的拒绝 |
 | POST | `/api/stage/join` | 旧通道（0.11.0 起无新数据）：责任人把分给自己的一段收进待办：生成 `type=temp` + `stage_ref={taskId,stageId}` 的任务并置 `joinedAt`。幂等，重复调用返回同一个 id；只为老镜像保留 |
 | POST | `/api/stage/toggle` | `{me, id, stageId, done}`，勾选某一段。权限 = 任务 owner 或该段责任人（且已 `whoAt`）。同步镜像 temp 的完成态 |
 | POST | `/api/task/due` | `{me, id, date}`，改总截止。只认发布人（`publisher_no`，老数据回落 `owner_no`） |

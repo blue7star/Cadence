@@ -2959,6 +2959,15 @@ async function main() {
     pubCard.card && pubCard.pub === '王磊 发布' && pubCard.selfCard && pubCard.selfPub === false,
     JSON.stringify(pubCard));
 
+  /* 模板里把布尔值直接插值会渲染成字面量 false（`${r.sub && ...}` 命中一级阶段时）。
+     断言不看某一个夹具，而是整页所有阶段行：既有行必须存在，且任何一行都不许出现独立 false。 */
+  const falseRows = await js(`(function(){
+    const rows=[...document.querySelectorAll('#view .rule-card .stage')];
+    const bad=rows.filter(r=>/(^|\\s)false(\\s|$)/.test(r.innerText));
+    return {total:rows.length, bad:bad.length, sample:bad.slice(0,2).map(r=>r.innerText.replace(/\\s+/g,' ').slice(0,80))};})()`);
+  check('专项卡片阶段行不把布尔值渲染成 false',
+    falseRows.total > 0 && falseRows.bad === 0, JSON.stringify(falseRows));
+
   await push('1002', { del: { tasks: [PUBCHK] } });
   await push('1012', { del: { tasks: [PUBCHK] } });
 

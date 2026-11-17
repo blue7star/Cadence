@@ -34,3 +34,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261113-export-temp | 见 git | — | e2e 导出断言扩到临时任务：集合含 temp、类型列「临时」、整条一行且阶段列全空；仍不含 assign 与别人的 temp；DB 直查同步改类型集合 |
 | TASK-20261116-year-routine | 见 git | — | e2e 新增 7.4b：年常规页签、月/日输入、实例 key=YYYY 与 plan_date、日历可见、maintain 幂等、改规则后实例仍在、日/周/月 key 回归、未知周期与缺月日被拒、删除规则后实例一起清 |
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | e2e 的派发/完成态用例按新链路改写（接收、撤回、改派、单向上汇总、脱钩），新增三层封顶与父子导出断言；两处真实缺陷由断言拦下并修正（导出父子列错位、派发人可见集未去重） |
+| TASK-20261117-false-render-fix | 见 git | — | e2e 新增反例：专项工作卡片所有阶段行不得出现独立 `false`，且同一页必须有阶段行（防空集自证） |

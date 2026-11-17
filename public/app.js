@@ -1356,9 +1356,11 @@ function viewSpecial() {
           ${t.stages && t.stages.length ? stageRows(t.stages).map(r => `<div class="stage ${r.sub ? 'sub' : ''} ${r.s.done ? 'on' : ''}">
             <div class="n">${r.s.done ? '✓' : r.no}</div>
             <div class="t ${r.s.done ? 'done' : ''}"><span class="sn" style="text-decoration:${r.s.done ? 'line-through' : 'none'}">${esc(r.s.name)}</span><small>${r.s.start || r.s.end ? dateSpan(r.s) : ''}</small></div>
-            ${r.sub && (r.s.child
-              ? `<span class="mini who-ro">${esc(nameOf(r.s.child.ownerNo))}${r.s.child.intakeStatus === 'pending' ? ' · 待接收' : ` · ${r.s.child.progress || 0}%`}</span>`
-              : (r.s.who ? `<span class="mini who-ro">${esc(nameOf(r.s.who))}</span>` : ''))}
+            ${r.sub
+              ? (r.s.child
+                ? `<span class="mini who-ro">${esc(nameOf(r.s.child.ownerNo))}${r.s.child.intakeStatus === 'pending' ? ' · 待接收' : ` · ${r.s.child.progress || 0}%`}</span>`
+                : (r.s.who ? `<span class="mini who-ro">${esc(nameOf(r.s.who))}</span>` : ''))
+              : ''}
           </div>`).join('') : '<div class="mini">还没有阶段，进入详情可拆分阶段计划</div>'}
         </div>`;
       }).join('')}

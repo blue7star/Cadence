@@ -2136,7 +2136,7 @@ function stageTreeHTML(t, canEdit) {
       <div class="t ${pDone ? 'done' : ''}"><span class="sn" style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
       ${topWho}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
-      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下加子任务；子任务是唯一能指定责任人的层级">+ 子任务</button>` : ''}
+      ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下拆成多条子任务，分别给不同的人；整段只交给一个人，直接用这一行的「谁做」">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
     </div>`;
     /* 子行只留三类信息：编号、名称+日期、谁做（下拉与状态挨在一起，是一件事）。

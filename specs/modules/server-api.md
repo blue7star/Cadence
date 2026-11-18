@@ -9,7 +9,7 @@ paths: server.js
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
 - 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；另收 `{id, topStageId|topIndex, who}`：**一级阶段行的一步派发**（0.12.0）——为指定的一级阶段生成一条同名、同起止的二级节点并立即派成 pending 子专项，一级阶段自身不落 `who`。`undispatch` 收 `{id, stageId}`，只撤 pending。
 - 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
-- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。
+- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。第 14 列「完成日期」：有阶段任务取叶子阶段 `doneAt` 最大值；无阶段任务取 `task.done_at`（0.14.0），存量无值则留空。
 
 ## 不变量
 - **身份只来自会话**：所有接口先过 `sid` cookie 的会话门，`me` 与会话不符 403、无会话 401；不接受「按请求里的 me 当身份」。导出因此没有「导别人」的口子。
@@ -17,6 +17,7 @@ paths: server.js
 - **初始密码名单 = 仍在用初始密码的在职员工**：`cred.initial=1`，外加从没登录过、连 `cred` 行都还没有的人（密码同样是工号）；从未登录时 `firstLoginAt` 为空。
 - **管理账号是独立身份**：`admin` 走 `/api/login` 的独立分支，会话门不查 `emp.active`，改查 `admin_auth` 是否还在；它不进花名册、不参与业务数据，改密前除 `/api/password`、`/api/logout` 外一律 403。**初始口令固定为 `123456`（2026-11-17 起，取代随机生成）**：`must_change=1`（含行不存在）时启动幂等对齐到 `123456` 并把固定口令打印到启动日志；`must_change=0` 时启动不写库、不打印，重启保留用户改后的密码，绝不重置回 `123456`。
 - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
+- **无阶段任务的完成日期由服务端记录**（0.14.0）：`upsertTask` 对无阶段任务在 `status` 迁移时维护 `done_at`——`→ done` 写当天、`done → done` 保留原值、`done → 非 done` 置空；请求体里的任何完成日期一律忽略。反例：e2e「临时任务完成落库且导出同值」「取消完成清空」「存量已完成行导出留空」。
 - **常规规则的周期只有 `day/week/month/year`**：`upsertRule` 用白名单判定，未知周期整条拒收并进 `errors`（不再静默落进月分支）；年规则每个节点必须有 `monthNo`（1-12）与 `day`（1-31），缺了同样拒收。反例：e2e 7.4b「服务端拒收未知周期与缺月日的年规则」。
 - 接收看 `assignee_no`、派发/撤回/改派看 `owner_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。已派成子专项的段没有自己的勾选权，一律按「这一段由别人负责，只有他能勾完成」拒。
 - **可见性六来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
@@ -55,3 +56,4 @@ paths: server.js
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 阶段派发落地为 pending 子专项，接收后成为独立专项；新增 `undispatch` 与 `dispatch{stageId,who}` 改派；可见集对子专项排除 publisher/下属/来源/阶段责任人；透视一层（`child` 摘要）；三层硬拦；完成态只读子专项；删除只脱钩；导出 27 列 |
 | TASK-20261117-stage-top-who | 见 git | — | `dispatch` 新增 `{topStageId|topIndex, who}`：一级阶段行一步生成同名同起止的二级节点并立即派发；新增 INV-5（入口只认未拆过的一级阶段、一级阶段不存 `who`）与逐条服务端拒绝点；三层封顶与完成态权威不变。v2：`auto` 自动段撤回时连同节点收掉，一级入口恢复（INV-6） |
 | TASK-20261117-admin-fixed-password | 见 git | — | 管理账号初始口令固定 `123456`：`must_change=1` 时启动幂等对齐并打印固定口令；`must_change=0` 时启动不写库、不打印，重启保留用户改后的密码 |
+| TASK-20261118-temp-done-date | 见 git | — | `/api/sync` 对无阶段任务维护 `done_at`（完成写当天、取消完成清空、重复完成保留）；导出第 14 列无阶段任务改读 `task.done_at`，存量留空 |

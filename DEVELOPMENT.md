@@ -141,7 +141,7 @@ node --no-warnings import-emp.js --on  1005    # 重新启用
 | `sess` | 登录会话 | `sid`(PK) `no` `created_at` `last_seen` `ip` `ua`；滑动空闲 8 小时、绝对 30 天 |
 | `admin_auth` | 管理账号 | `account`(PK，只有 `admin`) `hash` `salt` `must_change` `changed_at`；**不占工号、不进 `emp`**，业务查询一律只读 `emp`，所以它不会被当成同事/下属/上级 |
 | `rule` | 常规工作规则 | `id` `owner_no` `cycle(day/week/month/year)` `policy` `steps`(JSON) `active` |
-| `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（旧临时副本反指父任务的那一段；0.11.0 起不再写） `parent_task_id`/`parent_stage_id`（0.11.0：子专项挂靠的父任务与父阶段，`UNIQUE(parent_task_id,parent_stage_id)`；唯一索引左前缀即查询索引） `detached` `intake_status` |
+| `task` | 所有任务 | `type(assign/special/temp/routine)` `owner_no`（**现在归谁管、谁能编辑**，接收时转移） `publisher_no`（发布人，永不改） `assignee_no`（派给谁） `start_date` `end_date` `due_date`（发布人定的总截止，只有他能改） `stages`(JSON) `routine_id` `plan_date` `source_id`（0.7.0 起仅兼容老派生数据） `stage_ref`（旧临时副本反指父任务的那一段；0.11.0 起不再写） `parent_task_id`/`parent_stage_id`（0.11.0：子专项挂靠的父任务与父阶段，`UNIQUE(parent_task_id,parent_stage_id)`；唯一索引左前缀即查询索引） `done_at`（0.14.0：无阶段任务即临时任务的完成日期 `YYYY-MM-DD`，服务端在状态迁移时写/清，客户端不可提交；存量已完成行留 `NULL`） `detached` `intake_status` |
 | `cat` | 分类提示项（历史兼容，不再维护树） | `lvl` `parent_id` `name` |
 | `watch` | 管理者关注的“下属+规则”或“下属+专项” | `mgr_no` `sub_no` `rule_id` `kind(routine/special)` `task_id` |
 | `task_observer` | 专项任务的知情人 | `task_id` `emp_no` `created_at`，联合主键；只记“谁知道情”，不参与任何执行流转 |

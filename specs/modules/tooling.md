@@ -37,3 +37,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261117-false-render-fix | 见 git | — | e2e 新增反例：专项工作卡片所有阶段行不得出现独立 `false`，且同一页必须有阶段行（防空集自证） |
 | TASK-20261117-stage-top-who | 见 git | — | e2e 新增 9.9b：一级阶段行「谁做」从 DOM 拨动 → 同名同起止二级节点 + pending 子专项；老阶段补 `id`；五条直调拒绝路径（已拆、二级、缺人、非承接人、花名册外）+ 临时任务拒绝；第三级 `topStageId` 也被三层封顶拒；v2 追加撤回完整性：撤回后自动段消失、一级入口恢复、再派同一人/换人成功、旧 id 被拒 |
 | TASK-20261117-admin-fixed-password | 见 git | — | verify 的 admin 重启断言从「换新密码、旧密码作废」改为「两次启动都是固定 123456、旧密码仍可用、仍要求改密」；保留「改密后重启保留新密码、不再打印」 |
+| TASK-20261118-temp-done-date | 见 git | — | e2e 新增临时任务完成日期四断言（完成落库且导出一致、取消完成清空、存量 `done_at=NULL` 导出留空、有阶段取叶子 `doneAt` 的旧断言保留） |

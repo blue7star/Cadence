@@ -14,6 +14,7 @@ paths: server.js, data/
 - **老数据的一级阶段可能没有 `id`**（0.11.0 之前的阶段 JSON 只存名称/日期）。一级阶段行派发时由服务端补一个 `id` 再建二级节点，子专项的 `parent_stage_id` 指向它；不改表结构，旧代码仍可读。
 - **`admin_auth`**：独立管理账号，只存 `account`、scrypt 哈希、`salt`、`must_change`。初始口令固定 `123456`；启动时仅在 `must_change=1`（或行不存在）时把它幂等对齐到初始口令，`must_change=0` 时一律不动。改密必须同时把 `must_change` 置 0，否则下次启动会被重置回初始口令。
 - **`stages[].auto`**：一级行「谁做」派发生成的二级节点带 `auto: 1`，只用于撤回时判断「这条段是自动生成的，撤回应连同节点收掉」。它是阶段 JSON 的内部标记，不是导出列，客户端原样回传（`normalizeStages` 保留未知字段）。
+- **`task.done_at`**（0.14.0）：无阶段任务（临时任务）的完成日期，`YYYY-MM-DD`，由 `upsertTask` 在状态迁移时写入，客户端不可提交。`todo/doing/paused → done` 写服务端当天；`done → done` 保留第一次的值；`done → 非 done` 置空。存量已完成行保持 `NULL`，不补假日期；有阶段任务不使用该列（完成日期仍取叶子阶段 `doneAt` 最大值）。
 
 ## 不变量
 - **实例幂等**：同一 owner + 规则 + 周期只能有一条（`INSERT OR IGNORE`）；重复跑 `maintain` 不产生新行。
@@ -40,3 +41,4 @@ paths: server.js, data/
 | TASK-20261116-stage-dispatch-nesting | 见 git | — | 新增 `parent_task_id`/`parent_stage_id` 与 partial unique index（唯一约束即查询索引）；阶段派发落地为子专项，完成态单向后汇总（INV-4）；父任务/父阶段删除只脱钩、不级联 |
 | TASK-20261117-stage-top-who | 见 git | — | 无表结构变更；一级阶段行派发时为缺 `id` 的老阶段补写 `id`（写入 `stages` JSON），使子专项的 `parent_stage_id` 可挂载；v2 新增 `stages[].auto` 内部标记（撤回自动段时用，非导出列） |
 | TASK-20261117-admin-fixed-password | 见 git | — | `admin_auth` 无结构变更；初始口令口径从「每次启动随机生成」改为固定 `123456`，仅 `must_change=1` 时启动幂等写入，`must_change=0` 时不动库 |
+| TASK-20261118-temp-done-date | 见 git | — | `task` 新增 `done_at TEXT`（`CREATE TABLE` + `ensureColumn` 兼容老库）：仅无阶段任务使用，状态迁移时由服务端写/清，客户端不可提交；存量已完成行不补值 |

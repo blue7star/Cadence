@@ -3306,6 +3306,51 @@ async function main() {
     doneRow[3] === '已完成' && doneSt.doneAt && doneRow[13] === doneSt.doneAt,
     `${doneRow[3]} / ${doneRow[13]} vs ${doneSt.doneAt}`);
 
+  /* --- 导出：临时任务（无阶段）的完成日期落在任务上 ---
+     这一列以前对无阶段任务永远是空。要求：完成时记服务端当天、取消完成清空、
+     存量已完成但没有日期的不补假日期。 */
+  const TMPD = 't_e2e_temp_done';
+  await push('1012', { del: { tasks: [TMPD] } });
+  await pushJ('1012', { tasks: [{ id: TMPD, type: 'temp', title: 'E2E临时完成日期',
+    ownerNo: '1012', assigneeNo: '1012', start: '2026-11-18', end: '2026-11-18', status: 'todo' }] });
+  const tmpOn = await act('/api/sync', { me: '1012', tasks: [{ id: TMPD, status: 'done' }] });
+  const tmpDb1 = dbGet('SELECT status,done_at FROM task WHERE id=?', TMPD) || {};
+  check('临时任务标记完成：服务端把完成日期落在任务上',
+    tmpOn.ok !== false && tmpDb1.status === 'done' && /^\d{4}-\d{2}-\d{2}$/.test(tmpDb1.done_at || ''),
+    JSON.stringify(tmpDb1));
+  let expT = Buffer.from(await (await fetch(BASE + '/api/export/tasks.csv',
+    { headers: { Cookie: 'sid=' + (await sidOf('1012')) } })).arrayBuffer()).toString('utf8');
+  let rowT = expT.split('\r\n').filter(l => l.length).slice(4).map(csvSplit).find(r => r[0] === TMPD) || [];
+  check('导出：临时任务完成日期输出到「完成日期」列',
+    rowT[3] === '已完成' && rowT[13] === tmpDb1.done_at,
+    JSON.stringify({ status: rowT[3], completed: rowT[13], db: tmpDb1.done_at }));
+
+  const tmpOff = await act('/api/sync', { me: '1012', tasks: [{ id: TMPD, status: 'todo' }] });
+  const tmpDb2 = dbGet('SELECT status,done_at FROM task WHERE id=?', TMPD) || {};
+  expT = Buffer.from(await (await fetch(BASE + '/api/export/tasks.csv',
+    { headers: { Cookie: 'sid=' + (await sidOf('1012')) } })).arrayBuffer()).toString('utf8');
+  rowT = expT.split('\r\n').filter(l => l.length).slice(4).map(csvSplit).find(r => r[0] === TMPD) || [];
+  check('取消完成：完成日期跟着清空，不留脏数据',
+    tmpOff.ok !== false && tmpDb2.status === 'todo' && !tmpDb2.done_at && rowT[13] === '',
+    JSON.stringify({ status: tmpDb2.status, done_at: tmpDb2.done_at, completed: rowT[13] }));
+
+  /* 存量形状：已完成、但没有 done_at。导出必须留空，不能拿今天顶。 */
+  const TMPL = 't_e2e_temp_legacy_done';
+  await push('1012', { del: { tasks: [TMPL] } });
+  execFileSync(process.execPath, ['--no-warnings', '-e',
+    `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(DB)});
+     const now=new Date().toISOString();
+     db.prepare("INSERT OR REPLACE INTO task(id,owner_no,publisher_no,assignee_no,type,title,start_date,end_date,status,stages,created_at,updated_at,done_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL)")
+       .run('${TMPL}','1012','1012','1012','temp','E2E旧临时已完成','2026-11-18','2026-11-18','done','[]',now,now);
+     db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
+    { cwd: ROOT });
+  const expL = Buffer.from(await (await fetch(BASE + '/api/export/tasks.csv',
+    { headers: { Cookie: 'sid=' + (await sidOf('1012')) } })).arrayBuffer()).toString('utf8');
+  const rowL = expL.split('\r\n').filter(l => l.length).slice(4).map(csvSplit).find(r => r[0] === TMPL) || [];
+  check('存量已完成临时任务没有完成日期：导出留空，不补假日期',
+    rowL[3] === '已完成' && rowL[13] === '', JSON.stringify({ status: rowL[3], completed: rowL[13] }));
+  await push('1012', { del: { tasks: [TMPD, TMPL] } });
+
   /* --- 导出：父子关系两列；派出去的段，负责人/完成读子专项（派生值） --- */
   const PEXP = 't_e2e_parent_export';
   const CEXP = 'nt_' + PEXP + '_z1';

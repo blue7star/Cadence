@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS task(
   std TEXT, start_date TEXT, end_date TEXT, time TEXT, status TEXT DEFAULT 'todo',
   cat1 TEXT, cat2 TEXT, imp INTEGER, urg INTEGER, stages TEXT DEFAULT '[]',
   routine_id TEXT, plan_date TEXT, source_id TEXT, detached INTEGER DEFAULT 0,
-  intake_status TEXT, created_at TEXT, updated_at TEXT
+  intake_status TEXT, created_at TEXT, updated_at TEXT, done_at TEXT
 );
 CREATE TABLE IF NOT EXISTS watch(
   id TEXT PRIMARY KEY, mgr_no TEXT, sub_no TEXT, rule_id TEXT
@@ -129,6 +129,9 @@ ensureColumn('task', 'stage_ref', 'TEXT');
    它的左前缀就是 parent_task_id 的查询索引，不另建冗余单列索引（见 specs/modules/server-data.md）。 */
 ensureColumn('task', 'parent_task_id', 'TEXT');
 ensureColumn('task', 'parent_stage_id', 'TEXT');
+/* 临时任务没有阶段，完成日期只能落在任务上（导出「完成日期」列用）。
+   存量已完成的任务没有这个值，不补假日期，导出留空。 */
+ensureColumn('task', 'done_at', 'TEXT');
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_task_parent_stage
   ON task(parent_task_id, parent_stage_id)
   WHERE parent_task_id IS NOT NULL AND parent_stage_id IS NOT NULL`);
@@ -1064,15 +1067,30 @@ function upsertTask(meNo, t, opts) {
   /* 派出去的叶子按子专项的完成态算状态，否则父任务会永远停在「未完成」 */
   if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stagesWithChild(t.id, stages), status);
 
+  /* 无阶段任务（临时任务）的完成日期：
+     - 从未完成 → 完成：记服务端当天（只在这一刻写一次，后续编辑不覆盖）；
+     - 从完成 → 未完成：清空，不留「未完成但完成日期有值」的脏数据；
+     - 一直是完成：保留第一次记下的日期。
+     存量已完成的旧任务 done_at 为空，不拿当前时间顶替历史——导出留空，等补数方案确认。 */
+  let doneAt = exist ? (exist.done_at || null) : null;
+  if (!stages.length) {
+    if (status === 'done') {
+      if (!exist || exist.status !== 'done') doneAt = todayStr();
+      else doneAt = doneAt || null;
+    } else {
+      doneAt = null;
+    }
+  }
+
   if (exist) {
     db.prepare(`UPDATE task SET title=?,std=?,start_date=?,end_date=?,time=?,status=?,cat1=?,cat2=?,
-                imp=?,urg=?,stages=?,detached=?,assignee_no=?,intake_status=?,type=?,due_date=?,updated_at=? WHERE id=?`)
+                imp=?,urg=?,stages=?,detached=?,assignee_no=?,intake_status=?,type=?,due_date=?,done_at=?,updated_at=? WHERE id=?`)
       .run(t.title, t.std || '', t.start, t.end, t.time || '', status,
         t.cat1 || null, t.cat2 || null,
         t.imp == null || t.imp === '' ? null : Number(t.imp),
         t.urg == null || t.urg === '' ? null : Number(t.urg),
         JSON.stringify(stages), t.detached ? 1 : 0,
-        assigneeNo, intake, type, dueDate, nowStr(), t.id);
+        assigneeNo, intake, type, dueDate, doneAt, nowStr(), t.id);
     if (!opts || !opts.demo) notifyStageChanges(t.id, prevStages, stages);
   } else {
     /* 新建的任务，发起人只能是本人：owner_no 一律落 meNo。
@@ -1083,8 +1101,8 @@ function upsertTask(meNo, t, opts) {
     const now = nowStr();
     db.prepare(`INSERT OR IGNORE INTO task
       (id,owner_no,publisher_no,assignee_no,type,title,std,start_date,end_date,due_date,time,status,cat1,cat2,imp,urg,stages,
-       routine_id,plan_date,source_id,stage_ref,detached,intake_status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+       routine_id,plan_date,source_id,stage_ref,detached,intake_status,done_at,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       t.id, meNo, meNo, assigneeNo, type, t.title, t.std || '',
       t.start, t.end, dueDate, t.time || '', status, t.cat1 || null, t.cat2 || null,
       t.imp == null || t.imp === '' ? null : Number(t.imp),
@@ -1093,7 +1111,7 @@ function upsertTask(meNo, t, opts) {
       /* 派生副本只能由 /api/stage/join 建（服务端写 stage_ref）；客户端提交的
          stageRef 一律丢弃，否则任何人都能伪造一份副本去点亮别人的段。 */
       t.sourceId || null, null,
-      t.detached ? 1 : 0, intake, now, now
+      t.detached ? 1 : 0, intake, doneAt, now, now
     );
   }
 
@@ -1930,11 +1948,15 @@ function exportTasksCsv(meNo) {
       if (c) return c.status === 'done' ? childDoneAt(c) : '';
       return s.done ? (s.doneAt || '') : '';
     };
-    /* 完成日期只到日期：取叶子阶段 doneAt 的最大值；无阶段任务这一列永远是空（现状，C3） */
+    /* 完成日期只到日期：有阶段取叶子阶段 doneAt 的最大值；无阶段任务（临时任务）
+       读任务级的 done_at。存量已完成任务没有 done_at，输出空——不编日期。 */
     let completed = '';
     if (r.status === 'done') {
-      const dates = stages.filter(s => !parents.has(s.id) && stageDoneAt(s)).map(stageDoneAt).sort();
-      if (dates.length) completed = dates[dates.length - 1];
+      if (!stages.length) completed = r.done_at || '';
+      else {
+        const dates = stages.filter(s => !parents.has(s.id) && stageDoneAt(s)).map(stageDoneAt).sort();
+        if (dates.length) completed = dates[dates.length - 1];
+      }
     }
     const taskCells = [
       r.id, r.title, TYPE_OUT[r.type] || '', STATUS_OUT[r.status] || '', r.owner_no, r.assignee_no || '',

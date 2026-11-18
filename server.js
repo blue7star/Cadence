@@ -514,7 +514,8 @@ function syncParentFromChild(childId) {  const c = db.prepare('SELECT * FROM tas
   const done = c.status === 'done';
   const changed = !!s.done !== done;
   const derived = raw.map(x => (x && x.id === c.parent_stage_id) ? Object.assign({}, x, { done }) : x);
-  const status = derived.some(x => x && x.pid) ? stageStatusFromLeaves(derived, p.status) : p.status;
+  /* 一级段可以直接挂子专项：叶子不再要求 pid，状态仍按全部叶子重算。 */
+  const status = stageStatusFromLeaves(stagesWithChild(p.id, derived), p.status);
   db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?').run(status, nowStr(), p.id);
   if (changed) {
     const emp = getEmp(c.owner_no);
@@ -539,9 +540,88 @@ function detachChild(c, msg) {
    父任务 status 得跟着回退——否则会留下「叶子都没了、整条还显示已完成」。 */
 function recomputeParentStatus(p) {
   const derived = stagesWithChild(p.id, parseStages(p.stages));
-  if (!derived.some(x => x && x.pid)) return;
   db.prepare('UPDATE task SET status=?,updated_at=? WHERE id=?')
     .run(stageStatusFromLeaves(derived, p.status), nowStr(), p.id);
+}
+
+/* ============ 迁移：一级段与同名 auto 子段合并（0.16.1） ============
+   0.12~0.16 的一级行派发会在阶段 JSON 里补一条同名、同起止、带 `auto:1` 的二级节点，
+   只为了让子专项有个挂载点；详情页因此出现两行完全相同的阶段。
+   0.16.1 起子专项直接挂一级段。这里把老数据改成新形状：
+     ① 把挂在 auto 子段上的子专项改挂到它的一级段；
+     ② 删掉 auto 子段（仍有子专项挂着的不删，宁可留着也不制造孤儿）。
+   幂等：没有 auto 节点时什么也不写，可重复执行。
+   不改任何子专项的 owner/status/日期，也不碰任务 status。 */
+function dbStats() {
+  const rows = db.prepare('SELECT status,stages,parent_task_id FROM task').all();
+  const statuses = {};
+  let stages = 0, top = 0, sub = 0, auto = 0, pairs = 0;
+  for (const r of rows) {
+    statuses[r.status || ''] = (statuses[r.status || ''] || 0) + 1;
+    const list = parseStages(r.stages);
+    stages += list.length;
+    top += list.filter(s => s && !s.pid).length;
+    sub += list.filter(s => s && s.pid).length;
+    auto += list.filter(s => s && s.auto).length;
+    for (const a of list.filter(s => s && s.auto && s.pid)) {
+      const t = list.find(x => x && !x.pid && x.id === a.pid);
+      if (t && t.name === a.name
+        && (t.start || t.date || '') === (a.start || a.date || '')
+        && (t.end || t.date || '') === (a.end || a.date || '')) pairs++;
+    }
+  }
+  return {
+    tasks: rows.length,
+    stages: { total: stages, top, sub, auto },
+    children: rows.filter(r => r.parent_task_id).length,
+    duplicatePairs: pairs,
+    statuses
+  };
+}
+
+function backupDb() {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  let dest = path.join(path.dirname(DB_FILE), `workbench.backup-${stamp}.db`);
+  for (let i = 2; fs.existsSync(dest); i++) {
+    dest = path.join(path.dirname(DB_FILE), `workbench.backup-${stamp}-${i}.db`);
+  }
+  db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+  return dest;
+}
+
+function migrateFlattenDispatch() {
+  const before = dbStats();
+  let backup = null;
+  /* 真实库有活要干才备份：没东西可迁时不制造一堆空备份。 */
+  if (before.stages.auto > 0) backup = backupDb();
+  let moved = 0, removed = 0, parents = 0;
+  for (const p of db.prepare('SELECT id,stages FROM task').all()) {
+    const stages = parseStages(p.stages);
+    const autos = stages.filter(s => s && s.auto && s.pid);
+    if (!autos.length) continue;
+    parents++;
+    for (const a of autos) {
+      const parentNode = stages.find(x => x && !x.pid && x.id === a.pid);
+      if (!parentNode) continue;
+      moved += db.prepare(`UPDATE task SET parent_stage_id=?,updated_at=?
+        WHERE parent_task_id=? AND parent_stage_id=?`)
+        .run(parentNode.id, nowStr(), p.id, a.id).changes;
+    }
+    const keep = stages.filter(s => {
+      if (!(s && s.auto && s.pid)) return true;
+      /* 还有子专项挂着（结构不认识/改挂失败）就不删，避免制造孤儿。 */
+      if (childOfStage(p.id, s.id)) return true;
+      removed++;
+      return false;
+    });
+    if (keep.length !== stages.length) {
+      db.prepare('UPDATE task SET stages=?,updated_at=? WHERE id=?')
+        .run(JSON.stringify(keep), nowStr(), p.id);
+    }
+  }
+  const after = dbStats();
+  return { backup, parents, moved, removed, before, after };
 }
 
 function stateFor(meNo) {
@@ -858,11 +938,16 @@ function dropStaleMirrors(taskId, prev, stages) {
    「暂缓」是执行人自己的节奏，「进行中」同理——只把不该成立的状态掰回来，
    不替人把「已开始但还没勾完」改回「未开始」。 */
 function stageStatusFromLeaves(stages, prevStatus) {
-  const leaves = stages.filter(x => x && x.pid);
+  /* 一级段自己也可以就是叶子（整段派给一个人时不再生成同名二级段）。
+     叶子必须按「没有更细的段」算，不能按「pid 非空」算。 */
+  const leaves = stageLeaves(stages);
   if (!leaves.length) return prevStatus;
   if (leaves.every(x => x.done)) return 'done';
   if (prevStatus === 'paused') return 'paused';
-  if (leaves.some(x => x.done)) return 'doing';
+  /* 派出去的那一段：子专项已经开动（进行中或有进度）也算这一机动起来了，
+     否则父任务会一直停在「待开展」，直到子专项整条完成才跳。 */
+  const started = leaves.some(x => x.done || (x.child && (x.child.status === 'doing' || x.child.progress > 0)));
+  if (started) return 'doing';
   return prevStatus === 'done' ? 'todo' : (prevStatus || 'todo');
 }
 
@@ -897,7 +982,7 @@ function pullStageFromMirror(taskId) {
   s.done = on;
   s.doneBy = on ? mirror.owner_no : null;
   s.doneAt = on ? todayStr() : null;
-  const status = stageStatusFromLeaves(stages, parent.status);
+  const status = stageStatusFromLeaves(stagesWithChild(parent.id, stages), parent.status);
   db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
     .run(JSON.stringify(stages), status, nowStr(), parent.id);
   notifyStageDone(parent, s, on, mirror.owner_no);
@@ -1055,8 +1140,10 @@ function upsertTask(meNo, t, opts) {
   }
   dropStaleMirrors(t.id, prevStages, stages);
   let status = t.status || 'todo';
-  /* 派出去的叶子按子专项的完成态算状态，否则父任务会永远停在「未完成」 */
-  if (stages.some(x => x && x.pid)) status = stageStatusFromLeaves(stagesWithChild(t.id, stages), status);
+  /* 派出去的叶子按子专项的完成态算状态，否则父任务会永远停在「未完成」。
+     一级段自己也可以是叶子（整段派给一个人），所以判定不能只看有没有二级段。 */
+  const derivedStages = stagesWithChild(t.id, stages);
+  if (derivedStages.some(x => x && (x.pid || x.child))) status = stageStatusFromLeaves(derivedStages, status);
 
   /* 无阶段任务（临时任务）的完成日期：
      - 从未完成 → 完成：记服务端当天（只在这一刻写一次，后续编辑不覆盖）；
@@ -1322,11 +1409,12 @@ function dispatchTask(meNo, id, stageId, who, topStageId, topIndex) {
 
   const stages = parseStages(r.stages);
   const now = nowStr();
-  /* 一级阶段行直接设责任人（0.12.0）：入口在一级行，落点仍是二级节点。
-     选出的人先落到一条「同名、同起止」的二级阶段上，随后走下面同一条派发通道；
-     一级阶段自身不落 who（applyStageOwners 继续清一级），三层封顶与完成态权威不变。
-     老数据的一级阶段可能没有 id：这里补一个再建子阶段，否则子专项挂不上父阶段。 */
+  /* 一级阶段行直接设责任人（0.12.0）：入口在一级行，落点也在一级行（0.16.1）。
+     以前这里会补一条同名、同起止的二级节点当挂载点，详情页于是出现两行完全相同的阶段；
+     现在子专项直接挂在一级段上，进度与完成都来自子专项，一级段自己没有 who/done。
+     老数据的一级阶段可能没有 id：这里补一个，否则子专项挂不上父阶段。 */
   let onlyStageId = stageId;
+  let onlyWho = who;
   if (topStageId || topIndex != null) {
     if (r.type !== 'assign' && r.type !== 'special') {
       return { ok: false, msg: '这类任务不拆阶段，不能把一段派出去' };
@@ -1348,23 +1436,17 @@ function dispatchTask(meNo, id, stageId, who, topStageId, topIndex) {
       return { ok: false, msg: `${emp.name} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。` };
     }
     if (!top.id) top.id = 'sp_' + Math.random().toString(36).slice(2, 10);
-    const start = top.start || top.date || r.start_date;
-    const end = top.end || top.date || start;
-    const node = {
-      id: 'sc_' + Math.random().toString(36).slice(2, 10),
-      pid: top.id, name: top.name || '这一段', start, end, done: false, who: target,
-      /* 一级行「谁做」自动生成的段。撤回派发时连同它一起收掉，让一级行恢复可派；
-         手动「+ 子任务」建的段没有这个标记，撤回到「未派发」时保留。 */
-      auto: 1
-    };
-    stages.push(node);
-    onlyStageId = node.id;
+    onlyStageId = top.id;
+    onlyWho = target;
   }
   const created = [];
   for (const s of stages) {
-    if (!s || !s.pid || s.whoAt) continue;
-    if (onlyStageId && s.id !== onlyStageId) continue;
-    const target = (stageId && s.id === stageId && who) ? String(who) : s.who;
+    if (!s || s.whoAt) continue;
+    /* 指定了某一段就只处理它；否则沿用老路径：只派「已经指定了人」的二级段。
+       一级段不参与批量派发——它的入口只有 topStageId/topIndex 这一条。 */
+    if (onlyStageId) { if (s.id !== onlyStageId) continue; }
+    else if (!s.pid) continue;
+    const target = (onlyStageId && s.id === onlyStageId && onlyWho) ? String(onlyWho) : s.who;
     if (!target) continue;
     if (childOfStage(id, s.id)) continue;
     const emp = db.prepare('SELECT no,name,activated FROM emp WHERE no=? AND active=1').get(target);
@@ -1406,14 +1488,16 @@ function undispatchTask(meNo, id, stageId) {
   const idx = stages.findIndex(x => x && x.id === stageId);
   const s = idx >= 0 ? stages[idx] : null;
   if (s && s.auto) {
-    /* 一级行「谁做」生成的那一段：撤回 = 连自动段一起收掉，一级行恢复「谁做」。
-       否则会留下一条空段把一级入口挤掉，只能靠「+ 子任务」绕回来。 */
+    /* 老数据：一级行「谁做」曾经生成过同名子段，撤回时连同它一起收掉。 */
     stages.splice(idx, 1);
-  } else if (s) {
+  } else if (s && s.pid) {
     s.who = c.assignee_no; s.whoAt = null; s.joinedAt = null;
   }
+  /* 一级段直接挂子专项：撤掉子专项即可，阶段本身不动，也不再落 who。 */
   db.prepare('DELETE FROM task WHERE id=?').run(c.id);
-  db.prepare('UPDATE task SET stages=?,updated_at=? WHERE id=?').run(JSON.stringify(stages), nowStr(), id);
+  const status = stageStatusFromLeaves(stagesWithChild(id, stages), r.status);
+  db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
+    .run(JSON.stringify(stages), status, nowStr(), id);
   bumpRev();
   return { ok: true, id: c.id, who: c.assignee_no };
 }
@@ -1462,8 +1546,10 @@ function toggleStage(meNo, id, stageId, done) {
   const r = db.prepare('SELECT * FROM task WHERE id=?').get(id);
   if (!r) return { ok: false, msg: '这条任务已经不在你手上了' };
   const stages = parseStages(r.stages);
-  const s = stages.find(x => x && x.id === stageId && x.pid);
+  const s = stages.find(x => x && x.id === stageId);
   if (!s) return { ok: false, msg: '这一段已经从任务里移除了' };
+  /* 一级段也可能是「父」：整段拆了子任务时不能勾它，完成由子任务推。 */
+  if (stages.some(x => x && x.pid === s.id)) return { ok: false, msg: '这个阶段下面有子任务，勾子任务就行' };
   /* 派出去的段没有自己的勾选态：完成只由子专项的负责人勾。文案与「别人负责」同口径。 */
   if (childOfStage(id, stageId)) return { ok: false, msg: '这一段由别人负责，只有他能勾完成' };
   const isOwner = r.owner_no === meNo;
@@ -1479,8 +1565,9 @@ function toggleStage(meNo, id, stageId, done) {
   s.done = on;
   s.doneBy = on ? meNo : null;
   s.doneAt = on ? todayStr() : null;
-  /* 状态跟着叶子走，别让「3/3 已完成」还挂在「进行中」上 */
-  const status = stageStatusFromLeaves(stages, r.status);
+  /* 状态跟着叶子走，别让「3/3 已完成」还挂在「进行中」上。
+     叶子要连派出去的子专项一起算——一级段直接挂子专项时，它的完成态在库里。 */
+  const status = stageStatusFromLeaves(stagesWithChild(id, stages), r.status);
   db.prepare('UPDATE task SET stages=?,status=?,updated_at=? WHERE id=?')
     .run(JSON.stringify(stages), status, nowStr(), id);
   /* 他自己在父任务里勾的，副本那份也对齐；不做反向下写。 */
@@ -2410,6 +2497,23 @@ server.on('error', (e) => {
   }
   process.exit(1);
 });
+
+/* 老数据形状合并：正常启动跑一次（幂等，没活不写库）；`--migrate` 只跑迁移并打印统计后退出。 */
+if (process.argv.includes('--migrate')) {
+  const stat = migrateFlattenDispatch();
+  console.log(JSON.stringify(stat, null, 2));
+  process.exit(0);
+} else {
+  try {
+    const stat = migrateFlattenDispatch();
+    if (stat.removed || stat.moved) {
+      console.log(`[migrate] 合并同名 auto 子段：删除 ${stat.removed} 段、改挂 ${stat.moved} 条子专项`
+        + (stat.backup ? `；备份 ${stat.backup}` : ''));
+    }
+  } catch (e) {
+    console.log('[migrate] 合并同名 auto 子段失败：' + (e && e.message ? e.message : e));
+  }
+}
 
 /* 浏览器会复用 TCP 连接，而 Node 默认 5 秒就把它收掉。
    工作台里两次点击之间经常隔好几秒，一旦复用了一条「服务端已经半关」的连接，

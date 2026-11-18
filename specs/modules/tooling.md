@@ -41,3 +41,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261118-stage-overlap-and-create-who | 见 git | — | e2e 6.9 改为「重叠放行」并补两段完全重叠、一父两子重叠、倒序拒绝、父窗越界拒绝；7 的拖拽重叠改为放行且无黄色提示；新增 9.42（发布弹窗每行「谁做」+ 保存即派 + 倒序拒绝）与 9.9c（添加阶段、+ 子任务选人即派） |
 | TASK-20261118-narrow-stage-row | 见 git | — | e2e 新增 `setViewport()`（CDP Emulation）与三处窄屏断言：发布弹窗 1024/1280 无横向溢出、控件全在可视区、下拉 `max-width:132px`、入口内不出现字面量 `false`；详情页「+ 添加阶段」与「+ 子任务」1024 下同样断言 |
 | TASK-20261118-perspective-export-range | 见 git | — | e2e 9.9d：以父任务 owner 打开详情，断言看到下属姓名/阶段名/状态、块内无可编辑入口、第三层不出现；9.9e：导出 `from/to/preview` 的相交、按段过滤、不重复、400；导出弹窗的「全部/预览」 |
+| TASK-20261118-flatten-dispatch-mirror | 见 git | — | e2e 9.9b/9.9c/9.9d 夹具与断言改为「子专项直接挂一级段」：派发前后阶段数不变、页面无同名重复行、一级行显示待接收/承接与进度、撤回后阶段仍三行且入口恢复；9.9d 反向断言 `.stage.sub` 与重名阶段行为 0；迁移用 `_dev/make-copy.mjs` + `server.js --migrate` 在副本验证幂等并对比前后统计 |

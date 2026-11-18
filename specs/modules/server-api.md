@@ -7,7 +7,7 @@ paths: server.js
 
 ## 公开行为
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
-- 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；另收 `{id, topStageId|topIndex, who}`：**一级阶段行的一步派发**（0.12.0）——为指定的一级阶段生成一条同名、同起止的二级节点并立即派成 pending 子专项，一级阶段自身不落 `who`。`undispatch` 收 `{id, stageId}`，只撤 pending。
+- 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；另收 `{id, topStageId|topIndex, who}`：**一级阶段行的整段派发**（0.12.0，0.16.1 收口）——校验后直接把 pending 子专项挂到该一级阶段（`parent_stage_id=一级段 id`），**不再生成同名、同起止的二级节点**，一级阶段自身不落 `who`。`undispatch` 收 `{id, stageId}`，只撤 pending；撤一级段时只删子专项，阶段本身不动。
 - 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
 - 导出：`GET /api/export/tasks.csv[?from=YYYY-MM-DD&to=YYYY-MM-DD][&preview=1]`，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。第 14 列「完成日期」：有阶段任务取叶子阶段 `doneAt` 最大值；无阶段任务取 `task.done_at`（0.14.0），存量无值则留空。
   - 时间范围（0.16.0）：`from`/`to` 可单独或同时给，空 = 全部；无阶段任务按任务起止、有阶段任务按每段起止判断**相交**，相交即整段导出（日期不裁剪）；有阶段任务只导出相交的段，任务级列只在第一条输出行（R2）——不重复、不丢行；一段都不相交整条不导；无日期任务在设了范围时不导。`from > to` 或日期格式非法返回 400。`preview=1` 返回 `{ok, rows, tasks, from, to}`，不下发 CSV。
@@ -21,13 +21,14 @@ paths: server.js
 - **sync 只接受 `owner_no=我` 的行**；请求缺的字段沿用库值；`errors` 非空前端必须原话告诉人。
 - **无阶段任务的完成日期由服务端记录**（0.14.0）：`upsertTask` 对无阶段任务在 `status` 迁移时维护 `done_at`——`→ done` 写当天、`done → done` 保留原值、`done → 非 done` 置空；请求体里的任何完成日期一律忽略。反例：e2e「临时任务完成落库且导出同值」「取消完成清空」「存量已完成行导出留空」。
 - **常规规则的周期只有 `day/week/month/year`**：`upsertRule` 用白名单判定，未知周期整条拒收并进 `errors`（不再静默落进月分支）；年规则每个节点必须有 `monthNo`（1-12）与 `day`（1-31），缺了同样拒收。反例：e2e 7.4b「服务端拒收未知周期与缺月日的年规则」。
-- 接收看 `assignee_no`、派发/撤回/改派看 `owner_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。已派成子专项的段没有自己的勾选权，一律按「这一段由别人负责，只有他能勾完成」拒。
+- 接收看 `assignee_no`、派发/撤回/改派看 `owner_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。已派成子专项的段（含一级段直接挂的）没有自己的勾选权，一律按「这一段由别人负责，只有他能勾完成」拒。叶子 = **没有更细阶段的那一段**（`stageLeaves`），不再要求 `pid` 非空——整段派一人时一级段自己就是叶子。
 - **可见性六来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
 - **带父引用的子专项只从「我是负责人 / 我承接」进入**：publisher、下属专项、`source_id`、阶段责任人四条来源对它一律不成立；派发时父阶段的 `who/whoAt` 清空，所以原责任人不会从「我负责某段」再看到父任务一次。反例：e2e「派发人自己的列表里没有这条子专项」「责任人那边只多出这一条子专项」。
 - **透视一层**（0.16.0 修订）：父任务 `state` 的阶段上挂 `child` 摘要（`id/title/status/intakeStatus/progress/ownerNo/assigneeNo/start/end/stages`）。`stages` 是子专项自己的阶段节点（只读），**这些节点不再带 `child`**——所以上级能看到「下属把这件事拆成了几步」，看不到下属又派给了谁；子任务行对派发人不可见，也拿不到三级。
 - **深度封顶**：新任务深度 = 父深度 + 1，> 3 整次拒绝（「子专项最多三层：这条已经是第三级，不能再往下派」）；判定在 `dispatchTask`，不只在界面。
-- `INV-5 一级阶段行的一步派发只允许落在「未完成、未拆过的一级阶段」上`。拒绝点：`dispatchTask` 的 `topStageId/topIndex` 分支，逐条给可读原因——非 `owner_no`（只有承接人能派）、`taskDepth+1 > 3`（三层封顶同一句）、找不到阶段、目标 `pid` 非空（「这个入口只给一级阶段用」）、该一级阶段已完成、该一级阶段已有子阶段或已有子专项（「已经拆成子任务」）、`who` 为空、目标人不在花名册或未登录、任务类型不是 `assign/special`。落点仍是二级节点，一级阶段不存 `who`。反例：e2e 9.9b 六条直调拒收 + 第三级 `topStageId` 拒收。
-- `INV-6 自动子段的撤回必须可回到「未拆、可派」`：一级行派发生成的节点带 `auto=1`；`undispatch` 删掉 pending 子专项后，若该节点 `auto` 为真则连同节点一起从 `stages` 移除，一级行恢复「谁做」；手动节点没有 `auto`，仍保留并把 `who` 还原。拒绝点：非 owner / 该段没有 pending 子专项 / 已接收；撤回后拿已移除的自动段 `id` 再派 → 「找不到这一段」。反例：e2e 9.9b「撤回后入口恢复 + 再派同一人 + 换人 + 旧 id 被拒」。
+- `INV-5 一级阶段行的整段派发只允许落在「未完成、未拆过的一级阶段」上，且落点就是这一级段`。拒绝点：`dispatchTask` 的 `topStageId/topIndex` 分支，逐条给可读原因——非 `owner_no`（只有承接人能派）、`taskDepth+1 > 3`（三层封顶同一句）、找不到阶段、目标 `pid` 非空（「这个入口只给一级阶段用」）、该一级阶段已完成、该一级阶段已有子阶段或已有子专项（「已经拆成子任务」）、`who` 为空、目标人不在花名册或未登录、任务类型不是 `assign/special`。子专项的 `parent_stage_id` 直接写一级段 id，阶段 JSON 不新增节点，一级阶段不存 `who`。反例：e2e 9.9b 六条直调拒收 + 第三级 `topStageId` 拒收。
+- `INV-6 整段派一人的撤回必须可回到「谁做」`：`undispatch` 删掉 pending 子专项后，一级段本身原样保留（不删阶段、不写 `who`），一级行重新出现「谁做」；没有子专项后该段也回到可勾选状态。拒绝点：非 owner / 该段没有 pending 子专项 / 已接收。反例：e2e 9.9b「撤回后阶段仍是三行、再派同一人/换人、旧 id 被拒」。
+- `INV-7 一级段不生成同名替身段`：`dispatch{topStageId}` 不得往 `stages` 里补同名、同起止的二级节点；老数据里 0.12~0.16 留下的 `auto` 节点由启动迁移 `migrateFlattenDispatch()` 改挂并删除，迁移幂等。反例：e2e 9.9d 页面反向断言「没有同名重复阶段行」+ 9.9b「阶段数派发前后不变」。
 - **接收 = 所有权转移**（`owner_no` 变承接人、`type` 变 `special`），不派生副本；`publisher_no` 永不改；父引用保留。接收前不进对方日历（pending assign 本来就被 `isMineTask` 排除）。
 - **完成态只有一条上行通道，且只有一份真相**：子专项的 `status` 是唯一真相，父阶段不存 `done`；子专项 status 变化 → `syncParentFromChild` 重算父任务 status（叶子按子专项完成态计）并写 `stage_notice(kind=stage_done)`。不做反向下写，父方整段提交里的 `done` 由 `applyChildOwnership` 清空。
 - **删除只脱钩**：删父任务或父任务里的某一段 → 清空子专项的父引用并保留它；已接收的写 `kind=detached` 提醒。不级联删。
@@ -62,3 +63,4 @@ paths: server.js
 | TASK-20261118-temp-done-date | 见 git | — | `/api/sync` 对无阶段任务维护 `done_at`（完成写当天、取消完成清空、重复完成保留）；导出第 14 列无阶段任务改读 `task.done_at`，存量留空 |
 | TASK-20261118-stage-overlap-and-create-who | 见 git | — | 0.15.0：按用户口径删除「同层阶段不得相交」（INV-1）——并行任务允许同时段各干一段，前后端都不再拒绝/提示；新增「单段结束早于开始」服务端拒绝点；INV-2/INV-3 保持（子段落父窗口、周期=包络 min→max）；发布弹窗/添加阶段/加子任务三处选人后复用既有 dispatch 通道派成待接收 |
 | TASK-20261118-perspective-export-range | 见 git | — | 0.16.0：`stages[].child` 增加子专项阶段计划（一层，只读，不带下一层 child）；导出支持 `from/to/preview`，相交即整段、按段过滤、不重复、`from>to` 400 |
+| TASK-20261118-flatten-dispatch-mirror | 见 git | — | 0.16.1：`dispatch{topStageId\|topIndex}` 落点改为一阶阶段本身，不再补同名同起止的二级节点（INV-7）；`undispatch` 撤一级段只删子专项（INV-6 重写）；叶子定义改为 `stageLeaves`（无更细阶段即叶子），状态汇总、勾选与撤回都按新叶子算；`migrateFlattenDispatch` 幂等迁移老 `auto` 段 |

@@ -14,6 +14,10 @@ _dev/t-*.csv
 _dev/.test-db/
 _dev/.e2e-db/
 _dev/.api-db/
+# 迁移验证与截图用的真实库副本（VACUUM INTO 出来的，永不进库）
+_dev/.migrate-db/
+_dev/.shot-db/
+_dev/.probe-db/
 _dev/.*.err
 
 node_modules/

@@ -2031,9 +2031,16 @@ function taskDetailHTML(t) {
    默认项故意不带人名：带上「（张三）」会把下拉撑到一百多像素，窄屏下把后面的按钮挤出去；
    承接人是谁，弹窗上方和详情页右侧本来就写着。 */
 function whoOptionsHTML(ownNo, cur) {
-  return [`<option value="" ${cur ? '' : 'selected'}>承接人自己做</option>`]
-    .concat((S.roster || [])
-      .filter(e => e.no !== ownNo && e.activated)
+  const list = (S.roster || []).filter(e => e.no !== ownNo && e.activated);
+  /* 当前负责人必须留在选项里并选中：他要是没激活/已停用，被过滤掉的话浏览器会
+     自动选中别人，看起来像「改派」已经发生了。 */
+  if (cur && cur !== ownNo && !list.some(e => e.no === cur)) {
+    const e = (S.roster || []).find(x => x.no === cur);
+    if (e) list.unshift(e);
+  }
+  /* 自己的时候用「承接人自己做」表示，不让下拉空着。 */
+  return [`<option value="" ${!cur || cur === ownNo ? 'selected' : ''}>承接人自己做</option>`]
+    .concat(list
       .map(e => `<option value="${e.no}" ${cur === e.no ? 'selected' : ''}>${esc(e.name)}${S.subs.some(x => x.no === e.no) ? '' : ' · 非下属'}</option>`))
     .join('');
 }
@@ -2106,85 +2113,105 @@ function stageTreeHTML(t, canEdit) {
   const myTick = s => s.child ? false : (s.who ? (s.who === S.me.no && s.whoAt) : canEdit);
   const whoSel = (s, idx) => `<select class="who-sel" data-act="stage-who" data-id="${t.id}" data-idx="${idx}"
     title="这一段由谁来做">${stageWhoOptions(t, s.who || '')}</select>`;
+  /* 下属阶段计划（只读）：挂在哪一行就在哪一行下面展开，块内没有任何编辑控件。
+     透视到此为止——只渲染子专项自己的 stages，不再给它们挂下一层 child。 */
+  const childPlan = (c, planId, no) => {
+    if (!(c && c.stages && c.stages.length)) return { btn: '', html: '' };
+    return {
+      btn: `<button class="btn sm ghost" data-act="child-plan" data-target="${esc(planId)}" title="展开看下属自己把这段拆成了几步（只读）">展开下属计划</button>`,
+      html: `<div class="child-plan" id="${esc(planId)}" hidden>
+            <div class="cp-h">${esc(nameOf(c.ownerNo))} 的阶段计划 · 只读（完成态由他维护）</div>
+            ${c.stages.map((ps, pi) => `<div class="cp-row ${ps.done ? 'on' : ''}">
+              <span class="cp-no">${ps.pid ? '·' : `${no}.${pi + 1}`}</span>
+              <span class="cp-nm">${esc(ps.name)}</span>
+              <small>${ps.start || ps.end ? `${fmt(ps.start)} → ${fmt(ps.end)}` : ''}</small>
+              <span class="cp-st">${ps.done ? '已完成' : ((c.status === 'doing' || c.progress) ? '进行中' : '待开展')}</span>
+            </div>`).join('')}
+          </div>`
+    };
+  };
   let n = 0;
   return tops.map(p => {
     n++;
     const pi = stages.indexOf(p);
     const kids = kidsOf(stages, p.id);
-    const pDone = kids.length ? kids.every(k => k.done) : p.done;
+    /* 完成态：有子任务看子任务；整段派出去看子专项；否则看自己。 */
+    const pDone = kids.length ? kids.every(k => k.done) : (p.child ? p.child.status === 'done' : p.done);
     const canTickP = canEdit && !kids.length && !p.child;
     /* 一级阶段行直接设责任人（0.12.0）：选人 = 把这一整段交出去。
-       一旦这段已经有子任务/子专项（不论是这次交出去的，还是手动拆的），入口就收回到二级行，
-       否则同一段会在两行各有一个「谁做」，改哪边都不算数。 */
+       一旦这段已经有子任务/子专项（不论是这次交出去的，还是手动拆的），入口就收起来：
+       不可编辑，只读展示交给谁、做到哪了。 */
     const topWho = canEdit && !kids.length && !p.child && !pDone && canDispatch && assignable
       ? `<span class="mini" style="flex:0 0 auto">谁做</span><select class="who-sel" data-act="stage-who-top"
            data-id="${t.id}" data-idx="${pi}" data-sid="${esc(p.id || '')}"
-           title="选一个人，立刻把这一整段交给他：会生成一条同名、同起止的二级子阶段，等对方接收才生效">${stageWhoOptions(t, '')}</select>`
+           title="选一个人，立刻把这一整段交给他，等对方接收后才生效">${stageWhoOptions(t, '')}</select>`
       : '';
     /* 有子任务时，可编辑的「谁做」入口收起（避免两个入口改同一段），
-       但只读聚合必须留下：上级得一眼看出这一段交给了谁。
-       两种形态都要认：整段直接派成子专项（p.child），或派在它下面的某一子段上（kids[].child）。 */
+       但只读聚合必须留下：上级得一眼看出这一段交给了谁。 */
     const childOwnerOf = c => c.intakeStatus === 'pending'
       ? `${nameOf(c.assigneeNo)} 待接收` : `${nameOf(c.ownerNo)} 承接`;
     const kidOwners = [...new Set([
-      ...(p.child ? [childOwnerOf(p.child)] : []),
       ...kids.map(k => k.child ? childOwnerOf(k.child) : (k.who ? `${nameOf(k.who)} 承接` : ''))
     ].filter(Boolean))];
     const kidOwnerRo = kidOwners.length
       ? `<span class="mini who-ro" title="这一段已经拆给下属，负责人只读；改派请在下面的子任务行操作">${kidOwners.join('、')}</span>`
       : '';
+    /* 整段派给一个人（0.16.1）：子专项直接挂在这个一级段上，不再有同名替身行。
+       待接收给「改派 / 撤回」；接收后只读显示承接人与进度，完成由他维护。 */
+    const topPlan = p.child ? childPlan(p.child, `cp-${t.id}-${p.id || pi}`, n) : { btn: '', html: '' };
+    let topRight = topWho;
+    if (p.child) {
+      const c = p.child;
+      if (c.intakeStatus === 'pending') {
+        topRight = canEdit
+          ? `<span class="mini who-ro" title="已经交给 ${esc(nameOf(c.assigneeNo))}，等对方接收">${esc(nameOf(c.assigneeNo))} 待接收</span>
+          <select class="who-sel" data-act="stage-redispatch" data-id="${t.id}" data-sid="${esc(p.id)}" title="改派给另一个人">${stageWhoOptions(t, c.assigneeNo || '')}</select>
+          <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(p.id)}" title="撤回这次派发，这一段回到「谁做」">撤回</button>${topPlan.btn}`
+          : `<span class="mini who-ro">${esc(nameOf(c.assigneeNo))} 待接收</span>${topPlan.btn}`;
+      } else {
+        const st = ST[c.status] || ST.todo;
+        topRight = `<span class="mini who-ro" title="完成态由 ${esc(nameOf(c.ownerNo))} 维护">${esc(nameOf(c.ownerNo))} 承接 · ${st.name} ${c.progress || 0}%</span>${topPlan.btn}`;
+      }
+    } else if (kids.length) {
+      topRight = kidOwnerRo;
+    }
     const head = `<div class="stage ${pDone ? 'on' : ''}">
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
       <div class="t ${pDone ? 'done' : ''}"><span class="sn" style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
-      ${(kids.length || p.child) ? kidOwnerRo : topWho}
+      ${topRight}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下拆成多条子任务，分别给不同的人；整段只交给一个人，直接用这一行的「谁做」">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
-    </div>`;
+    </div>${topPlan.html}`;
     /* 子行只留三类信息：编号、名称+日期、谁做（下拉与状态挨在一起，是一件事）。
-       派成子专项之后，右边换成子专项的状态；待接收时给「撤回 / 改派」。 */
+       派成子专项之后，右边换成子专项的状态；待接收时给「撤回 / 改派」。
+       这是「一个阶段拆多人」的唯一形态——一级行整段派一人时不会产生子行。 */
     const sub = kids.map((k, order) => {
       const ki = stages.indexOf(k);
       const tick = myTick(k);
       const tag = `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>`;
-      const plan = k.child && k.child.stages && k.child.stages.length;
-      const planId = `cp-${t.id}-${k.id}`;
-      const planBtn = plan
-        ? `<button class="btn sm ghost" data-act="child-plan" data-target="${esc(planId)}" title="展开看下属自己把这段拆成了几步（只读）">展开下属计划</button>`
-        : '';
+      const plan = childPlan(k.child, `cp-${t.id}-${k.id}`, `${n}.${order + 1}`);
       let right = '';
       if (canEdit && k.child) {
         right = k.child.intakeStatus === 'pending'
           ? `${tag}<select class="who-sel" data-act="stage-redispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="改派给另一个人">${stageWhoOptions(t, k.child.assigneeNo || '')}</select>
-             <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="撤回这次派发，这一段回到未派发">撤回</button>${planBtn}`
-          : `${tag}<span class="mini who-ro" title="子专项已被接收，换人/撤回本轮不支持">由 ${esc(nameOf(k.child.ownerNo))} 负责</span>${planBtn}`;
+             <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="撤回这次派发，这一段回到未派发">撤回</button>${plan.btn}`
+          : `${tag}<span class="mini who-ro" title="子专项已被接收，换人/撤回本轮不支持">由 ${esc(nameOf(k.child.ownerNo))} 负责</span>${plan.btn}`;
       } else if (canEdit && canDispatch) {
         right = `${tag}${whoSel(k, ki)}`;
       } else if (canEdit) {
         right = `${tag}<span class="mini" title="子专项最多三层，这一级不能再派">第三级不能再派</span>`;
       } else {
         const own = k.child ? `${nameOf(k.child.ownerNo)} 承接` : (k.who ? nameOf(k.who) : '');
-        right = `${tag}${own ? `<span class="mini who-ro">${esc(own)}</span>` : ''}${planBtn}`;
+        right = `${tag}${own ? `<span class="mini who-ro">${esc(own)}</span>` : ''}${plan.btn}`;
       }
-      /* 透视只到这一层：只渲染子专项自己的 stages，不再给它们挂 child 摘要。 */
-      const planHtml = plan
-        ? `<div class="child-plan" id="${esc(planId)}" hidden>
-            <div class="cp-h">${esc(nameOf(k.child.ownerNo))} 的阶段计划 · 只读（完成态由他维护）</div>
-            ${k.child.stages.map((ps, pi) => `<div class="cp-row ${ps.done ? 'on' : ''}">
-              <span class="cp-no">${ps.pid ? '·' : `${n}.${order + 1}.${pi + 1}`}</span>
-              <span class="cp-nm">${esc(ps.name)}</span>
-              <small>${ps.start || ps.end ? `${fmt(ps.start)} → ${fmt(ps.end)}` : ''}</small>
-              <span class="cp-st">${ps.done ? '已完成' : ((k.child.status === 'doing' || k.child.progress) ? '进行中' : '待开展')}</span>
-            </div>`).join('')}
-          </div>`
-        : '';
       return `<div class="stage sub ${k.done ? 'on' : ''}">
         <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.child ? '这一段已经派成子专项，完成由它自己勾' : (k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责')}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
         <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
         ${right}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="${k.child ? '改名称和日期' : '改这一段的名称、日期和谁做'}">改</button>` : ''}
         ${canEdit && !k.child ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
-      </div>${planHtml}`;
+      </div>${plan.html}`;
     }).join('');
     return head + sub;
   }).join('');
@@ -2766,12 +2793,12 @@ async function dispatchTask(id) {
 }
 /* 撤回：仅接收前。pending 子专项收走，这一段回到「未派发」。 */
 async function undoDispatch(taskId, stageId) {
-  if (!window.confirm('撤回这次派发？对方那边这条会消失，这一段回到「未派发」。')) return;
+  if (!window.confirm('撤回这次派发？对方那边这条会消失，这一段回到「谁做」。')) return;
   try {
     const r = await api('/api/task/undispatch', { method: 'POST', body: JSON.stringify({ me: S.me.no, id: taskId, stageId }) });
     if (!r.ok) { toast(r.msg || '撤回没成功'); return; }
     await refresh(true); render();
-    toast('已撤回，这一段回到未派发');
+    toast('已撤回，这一段可以重新安排');
   } catch (e) { toast('撤回失败：' + e.message); }
 }
 /* 改派：只换待接收子专项的承接人，不产生第二条。 */
@@ -2784,9 +2811,9 @@ async function redispatchStage(taskId, stageId, who) {
     toast(`已改派给 ${nameOf(who)}，等他接收`);
   } catch (e) { toast('改派失败：' + e.message); }
 }
-/* 一级阶段行「谁做」：选人 = 把这一整段交出去。服务端会先生成一条同名、同起止的
-   二级子阶段，再走同一条派发通道落成「待接收」子专项——把原来「+ 子任务 → 填名 →
-   选人 → 派发」四步并成一步。失败就把下拉复位，不让人以为已经派出去了。 */
+/* 一级阶段行「谁做」：选人 = 把这一整段交出去。0.16.1 起子专项直接挂在一级段上，
+   不再生成同名、同起止的二级段——详情页只有一行，进度与完成都来自子专项。
+   失败就把下拉复位，不让人以为已经派出去了。 */
 async function dispatchTopStage(taskId, idx, stageId, who, sel) {
   if (!who) { if (sel) sel.value = ''; return; }
   const t = S.tasks.find(x => x.id === taskId);

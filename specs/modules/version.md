@@ -39,3 +39,4 @@ paths: version.js
 | TASK-20261118-stage-overlap-and-create-who | 见 git | — | 0.15.0：阶段行选人入口扩到发布弹窗/添加阶段/加子任务；同层阶段允许重叠；新能力按 INV-4 bump Y |
 | TASK-20261118-narrow-stage-row | 见 git | — | 0.15.1：窄屏阶段行折行与下拉限宽（用户可见缺陷修复，bump Z） |
 | TASK-20261118-perspective-export-range | 见 git | — | 0.16.0：上级一层透视（负责人 + 下属阶段计划）与导出时间范围；新能力 bump Y |
+| TASK-20261118-flatten-dispatch-mirror | 见 git | — | 0.16.1：整段派一人不再生成同名子段（用户可见的重复信息修复，行为不变更能力边界，bump Z）；老数据幂等迁移 |

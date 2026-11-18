@@ -1762,18 +1762,18 @@ async function main() {
   let mdStages = [];
   try { mdStages = JSON.parse((mdTask || {}).stages || '[]'); } catch { mdStages = []; }
   const mdKid = mdTask ? dbGet('SELECT id,title,assignee_no,intake_status,parent_stage_id FROM task WHERE parent_task_id=?', mdTask.id) : null;
-  /* 派发会在同一次提交里补一条同名二级节点，任务行以派发后的读数为准（重新取一次） */
+  /* 派发会直接挂到一级段上，任务行以派发后的读数为准（重新取一次） */
   const mdTask2 = mdTask ? dbGet('SELECT id,start_date,end_date,stages FROM task WHERE id=?', mdTask.id) : null;
   if (mdTask2) mdStages = JSON.parse(mdTask2.stages || '[]');
   check('发布弹窗两段同日期可保存，任务周期取包络（11-18 → 11-20）',
     !!mdTask2 && mdStages.filter(s => !s.pid).length === 2
       && mdTask2.start_date === '2026-11-18' && mdTask2.end_date === '2026-11-20',
     JSON.stringify({ task: mdTask2 && { id: mdTask2.id, start: mdTask2.start_date, end: mdTask2.end_date }, tops: mdStages.filter(s => !s.pid).length }));
-  const mdAuto = mdKid ? mdStages.find(s => s.id === mdKid.parent_stage_id) : null;
-  check('阶段行选人 = 保存即派：生成同名二级节点 + 待接收子专项',
+  const mdTop = mdStages.find(s => !s.pid && s.name === '并行段一') || {};
+  check('阶段行选人 = 保存即派：子专项直接挂一级段，不再补同名二级节点',
     !!mdKid && mdKid.intake_status === 'pending' && mdKid.assignee_no === mdWho.firstWho
-      && !!mdAuto && mdAuto.name === '并行段一' && mdAuto.pid === mdStages.find(s => !s.pid && s.name === '并行段一').id,
-    JSON.stringify({ kid: mdKid, auto: mdAuto, stages: mdStages.map(s => ({ id: s.id, pid: s.pid, name: s.name })), picked: mdWho.firstWho }));
+      && !!mdTop.id && mdKid.parent_stage_id === mdTop.id && !mdStages.some(s => s.pid),
+    JSON.stringify({ kid: mdKid, top: mdTop.id, stages: mdStages.map(s => ({ id: s.id, pid: s.pid, name: s.name })), picked: mdWho.firstWho }));
   if (mdTask) {
     await push('1012', { del: { tasks: [mdTask.id, mdKid && mdKid.id].filter(Boolean) } });
     await push('1003', { del: { tasks: [mdTask.id, mdKid && mdKid.id].filter(Boolean) } });
@@ -2376,11 +2376,12 @@ async function main() {
     await push('1012', { del: { tasks: [FLOW] } });
     for (const no of [SUBW, OTHERW, LATER, '1002']) await act('/api/notice/seen', { me: no });
 
-    /* ---------- 9.9b 一级阶段行直接设责任人（0.12.0）----------
+    /* ---------- 9.9b 一级阶段行直接设责任人（0.12.0 / 0.16.1 收口）----------
        验收反馈：只有一级阶段的专项没有任何派发入口，必须先「+ 子任务 → 填名 → 选人 →
-       派发」四步；入口本身也看不见。这里从 DOM 拨那个下拉，验证「一步生成同名同窗
-       二级子阶段 + 立刻派成待接收」；再绕过界面直调，验服务端拒绝点。
-       夹具故意让一级阶段没有 id：演示数据里就有 5 条这种任务，补 id 的逻辑必须真的跑。 */
+       派发」四步；入口本身也看不见。这里从 DOM 拨那个下拉，验证「一步把整段交给一个人」；
+       0.16.1 起子专项直接挂一级段，不再补同名同起止的二级替身行。再绕过界面直调，
+       验服务端拒绝点。夹具故意让一级阶段没有 id：演示数据里就有 5 条这种任务，
+       补 id 的逻辑必须真的跑。 */
     const TOPW = 't_e2e_topwho';
     const TOPWT = 't_e2e_topwho_temp';
     await push('1012', { del: { tasks: [TOPW, TOPWT] } });
@@ -2416,49 +2417,48 @@ async function main() {
       const j=await (await fetch('/api/state?me=1012')).json();
       const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
       const top=(t&&t.stages||[]).find(s=>!s.pid && s.name==='整段交给同事');
-      const kid=(t&&t.stages||[]).find(s=>s.pid && top && s.pid===top.id);
+      const tops=(t&&t.stages||[]).filter(s=>!s.pid);
+      const dup=[...document.querySelectorAll('#view .stage.sub')].filter(x=>x.textContent.includes('整段交给同事'));
       const rowNow=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
-      const subRow=[...document.querySelectorAll('#view .stage.sub')].find(x=>x.textContent.includes('整段交给同事'));
-      return {topId:top&&top.id, topWho:top&&top.who, topStart:top&&top.start, topEnd:top&&top.end,
-        kid:kid&&{id:kid.id,pid:kid.pid,name:kid.name,start:kid.start,end:kid.end,who:kid.who,
-          intake:kid.child&&kid.child.intakeStatus,assignee:kid.child&&kid.child.assigneeNo},
+      return {topId:top&&top.id, topWho:top&&top.who,
+        child:top&&top.child&&{id:top.child.id,intake:top.child.intakeStatus,assignee:top.child.assigneeNo},
+        stages:(t&&t.stages||[]).length, tops:tops.length,
         topSelNow:!!(rowNow&&rowNow.querySelector('[data-act="stage-who-top"]')),
-        subTag:subRow?((subRow.querySelector('.subtag')||{}).innerText||''):'',
-        subUndo:!!(subRow&&subRow.querySelector('[data-act="stage-undispatch"]')),
-        subReassign:!!(subRow&&subRow.querySelector('[data-act="stage-redispatch"]'))};})()`);
-    check('一级阶段行选人 = 一步生成同名、同起止的二级子阶段并派成待接收',
-      !!topPick.kid && topPick.kid.pid === topPick.topId && topPick.kid.name === '整段交给同事'
-        && topPick.kid.start === topPick.topStart && topPick.kid.end === topPick.topEnd
-        && topPick.kid.intake === 'pending' && topPick.kid.assignee === '1003',
-      JSON.stringify(topPick).slice(0, 320));
-    check('一级阶段本身不存 who：责任在派出去的二级节点/子专项上',
+        topText:rowNow?rowNow.innerText:'',
+        topUndo:!!(rowNow&&rowNow.querySelector('[data-act="stage-undispatch"]')),
+        topReassign:!!(rowNow&&rowNow.querySelector('[data-act="stage-redispatch"]')),
+        dupRows:dup.length};})()`);
+    check('一级阶段行选人 = 子专项直接挂一级段（不再生成同名同起止的二级段）',
+      !!topPick.topId && !!topPick.child && topPick.child.intake === 'pending'
+        && topPick.child.assignee === '1003' && topPick.tops === 3 && topPick.stages === 3,
+      JSON.stringify(topPick).slice(0, 360));
+    check('一级阶段本身不存 who：责任在子专项上',
       topPick.topWho === null || topPick.topWho === undefined, 'topWho=' + topPick.topWho);
-    check('派完一级行收起「谁做」，二级行显示待接收并给撤回/改派（两个入口不并存）',
-      topPick.topSelNow === false && topPick.subTag.includes('待接收')
-        && topPick.subUndo === true && topPick.subReassign === true,
-      JSON.stringify({ sel: topPick.topSelNow, tag: topPick.subTag, undo: topPick.subUndo, re: topPick.subReassign }));
+    check('一级行显示「陈静 待接收」并给撤回/改派；页面上没有同名重复阶段行',
+      topPick.topSelNow === false && topPick.topText.includes('陈静')
+        && topPick.topText.includes('待接收') && topPick.topUndo === true
+        && topPick.topReassign === true && topPick.dupRows === 0,
+      JSON.stringify({ sel: topPick.topSelNow, text: topPick.topText.slice(0, 80), undo: topPick.topUndo, re: topPick.topReassign, dup: topPick.dupRows }));
 
     const dbTopStages = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
     const dbTopNode = dbTopStages.find(s => !s.pid && s.name === '整段交给同事') || {};
-    const dbKidNode = dbTopStages.find(s => s.pid && s.pid === dbTopNode.id) || {};
-    const dbTopChild = dbGet('SELECT * FROM task WHERE parent_task_id=? AND parent_stage_id=?', TOPW, dbKidNode.id);
-    check('老数据一级阶段缺 id：派发时补上，并让子专项的父阶段引用指向它',
-      !!dbTopNode.id && !!dbKidNode.id && dbKidNode.pid === dbTopNode.id && !!dbTopChild,
-      JSON.stringify({ topId: dbTopNode.id, kidPid: dbKidNode.pid, child: dbTopChild && dbTopChild.id }));
-    check('服务端落地：pending 子专项带父引用、不写 stage_ref，节点的 who 已清空',
+    const dbAnySub = dbTopStages.find(s => s.pid) || {};
+    const dbTopChild = dbGet('SELECT * FROM task WHERE parent_task_id=?', TOPW);
+    check('老数据一级阶段缺 id：派发时补上，子专项直接挂在这个一级段上',
+      !!dbTopNode.id && !dbAnySub.id && !!dbTopChild && dbTopChild.parent_stage_id === dbTopNode.id,
+      JSON.stringify({ topId: dbTopNode.id, anySub: dbAnySub.id, child: dbTopChild && dbTopChild.parent_stage_id }));
+    check('服务端落地：pending 子专项带父引用、不写 stage_ref，一级段没有 who/done',
       !!dbTopChild && dbTopChild.type === 'assign' && dbTopChild.intake_status === 'pending'
         && dbTopChild.assignee_no === '1003' && !dbTopChild.stage_ref
-        && dbKidNode.who === null && dbKidNode.whoAt === null,
-      JSON.stringify(dbTopChild && [dbTopChild.type, dbTopChild.intake_status, dbTopChild.assignee_no, dbTopChild.stage_ref, dbKidNode.who]));
+        && !dbTopNode.who && !dbTopNode.done,
+      JSON.stringify(dbTopChild && [dbTopChild.type, dbTopChild.intake_status, dbTopChild.assignee_no, dbTopChild.stage_ref, dbTopNode.who, dbTopNode.done]));
 
     /* 直调接口的反向路径：入口只在一级行，服务端也要逐条拒。 */
     const reKids = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: dbTopNode.id, who: '1004' });
-    check('反向：一级阶段已经拆过，再走一级入口被拒（不产生第二条）',
+    check('反向：一级阶段已经派出去，再走一级入口被拒（不产生第二条）',
       reKids.ok === false && /子任务/.test(reKids.msg || '')
-        && dbGet('SELECT COUNT(*) c FROM task WHERE parent_task_id=? AND parent_stage_id=?', TOPW, dbKidNode.id).c === 1,
+        && dbGet('SELECT COUNT(*) c FROM task WHERE parent_task_id=?', TOPW).c === 1,
       JSON.stringify(reKids));
-    const reChild = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: dbKidNode.id, who: '1004' });
-    check('反向：入口只给一级阶段，指到二级阶段被拒', reChild.ok === false && /一级阶段/.test(reChild.msg || ''), JSON.stringify(reChild));
     const reNoWho = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: 'tw2', who: '' });
     check('反向：一级入口不选人直接调用被拒', reNoWho.ok === false && /选一个人/.test(reNoWho.msg || ''), JSON.stringify(reNoWho));
     const reNotOwner = await act('/api/task/dispatch', { me: '1003', id: TOPW, topStageId: 'tw2', who: '1004' });
@@ -2469,27 +2469,27 @@ async function main() {
     check('反向：已完成的一级阶段不能再交给别人（先把完成取消）',
       reDone.ok === false && /已经完成/.test(reDone.msg || ''), JSON.stringify(reDone));
 
-    /* 撤回：一级行「谁做」生成的自动段要连同节点一起收掉，一级入口自动回来。
-       只把 who 还原、空段留在原地的话，一级行会永久收起，只能靠「+ 子任务」绕。 */
+    /* 撤回：子专项直接挂在一级段上，收掉子专项即可，一级行「谁做」自动回来。 */
     await js(`window.confirm=()=>true;'ok'`);
     const undoUi = await js(`(async()=>{
-      const subRow=[...document.querySelectorAll('#view .stage.sub')].find(x=>x.textContent.includes('整段交给同事'));
-      const btn=subRow&&subRow.querySelector('[data-act="stage-undispatch"]');
+      const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      const btn=row&&row.querySelector('[data-act="stage-undispatch"]');
       if(!btn) return {clicked:false};
       btn.click();
       await new Promise(r=>setTimeout(r,1800));
       const j=await (await fetch('/api/state?me=1012')).json();
       const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
-      const kids=((t&&t.stages)||[]).filter(s=>s.pid);
-      const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
-      const sel=row&&row.querySelector('[data-act="stage-who-top"]');
-      return {clicked:true,kids:kids.length,autoLeft:kids.some(k=>k.auto),topSel:!!sel,
+      const list=(t&&t.stages)||[];
+      const row2=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
+      const sel=row2&&row2.querySelector('[data-act="stage-who-top"]');
+      return {clicked:true, subCount:list.filter(s=>s.pid).length, total:list.length,
+        autoLeft:list.some(s=>s.auto), topSel:!!sel,
         opts:sel?sel.querySelectorAll('option').length:0};})()`);
-    check('撤回后：自动生成的二级段被收掉，一级行「谁做」自动回来（不卡死）',
-      undoUi.clicked === true && undoUi.kids === 0 && undoUi.autoLeft === false
+    check('撤回后：子专项删除、阶段一行不少，一级行「谁做」自动回来（不卡死）',
+      undoUi.clicked === true && undoUi.subCount === 0 && undoUi.total === 3 && undoUi.autoLeft === false
         && undoUi.topSel === true && undoUi.opts >= 2, JSON.stringify(undoUi));
     const undoStages1 = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
-    check('撤回后服务端状态：自动段与 pending 子专项都已删除',
+    check('撤回后服务端状态：pending 子专项已删除，阶段 JSON 没留下任何 auto 节点',
       !undoStages1.some(s => s.auto) && !dbGet('SELECT id FROM task WHERE parent_task_id=?', TOPW),
       JSON.stringify(undoStages1));
 
@@ -2503,32 +2503,32 @@ async function main() {
       await new Promise(r=>setTimeout(r,1800));
       const j=await (await fetch('/api/state?me=1012')).json();
       const t=(j.tasks||[]).find(x=>x.id==='${TOPW}');
-      const kids=((t&&t.stages)||[]).filter(s=>s.pid);
+      const list=(t&&t.stages)||[];
+      const top=list.find(s=>!s.pid && s.name==='整段交给同事');
       const row2=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('整段交给同事'));
-      return {hasSel:true,kids:kids.length,assignee:kids[0]&&kids[0].child&&kids[0].child.assigneeNo,
+      return {hasSel:true, assignee:top&&top.child&&top.child.assigneeNo,
+        subCount:list.filter(s=>s.pid).length,
         selGone:!(row2&&row2.querySelector('[data-act="stage-who-top"]'))};})()`);
     check('撤回后再派同一人：成功，一级入口再次收起',
-      againSame.hasSel === true && againSame.kids === 1 && againSame.assignee === '1003' && againSame.selGone === true,
-      JSON.stringify(againSame));
+      againSame.hasSel === true && againSame.assignee === '1003' && againSame.subCount === 0
+        && againSame.selGone === true, JSON.stringify(againSame));
 
-    const againStages = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]');
-    const againNode = againStages.find(s => s.auto) || {};
-    const undo2 = await act('/api/task/undispatch', { me: '1012', id: TOPW, stageId: againNode.id });
-    check('第二次撤回：自动段再次收掉，一个不留',
+    const undo2 = await act('/api/task/undispatch', { me: '1012', id: TOPW, stageId: dbTopNode.id });
+    check('第二次撤回：子专项收掉，阶段仍是三行、没有 auto 节点',
       undo2.ok === true && !dbGet('SELECT id FROM task WHERE parent_task_id=?', TOPW)
-        && !JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]').some(s => s.pid),
+        && JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]').filter(s => !s.pid).length === 3,
       JSON.stringify(undo2));
 
-    /* 换另一人再派：一级入口同样可用；拿已经收掉的自动段 id 再派要被拒。 */
+    /* 换另一人再派：一级入口同样可用；拿不存在的阶段 id 再派要被拒。 */
     const topAfter = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', TOPW) || {}).stages || '[]')
       .find(s => !s.pid && s.name === '整段交给同事') || {};
     const otherWho = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: topAfter.id, who: '1004' });
     const otherChild = dbGet('SELECT * FROM task WHERE parent_task_id=?', TOPW);
-    check('撤回后换另一人：一级入口仍可派',
+    check('撤回后换另一人：一级入口仍可派，子专项直接挂一级段',
       otherWho.ok === true && otherWho.n === 1 && !!otherChild && otherChild.assignee_no === '1004'
-        && otherChild.intake_status === 'pending', JSON.stringify(otherWho));
-    const stale = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: againNode.id, who: '1003' });
-    check('反例：撤回后拿已收掉的自动段 id 再派，服务端拒（找不到这一段）',
+        && otherChild.intake_status === 'pending' && otherChild.parent_stage_id === topAfter.id, JSON.stringify(otherWho));
+    const stale = await act('/api/task/dispatch', { me: '1012', id: TOPW, topStageId: 'ps_gone', who: '1003' });
+    check('反例：拿不存在的阶段 id 再派，服务端拒（找不到这一段）',
       stale.ok === false && /找不到这一段/.test(stale.msg || ''), JSON.stringify(stale));
 
     /* 临时任务即使有阶段也不允许走这条路（服务端拒，界面也不给入口）。 */
@@ -2541,6 +2541,46 @@ async function main() {
     check('反向：临时任务不拆阶段，一级入口被拒', reTemp.ok === false && /不拆阶段/.test(reTemp.msg || ''), JSON.stringify(reTemp));
     await push('1012', { del: { tasks: [otherChild && otherChild.id, TOPWT].filter(Boolean) } });
     await push('1012', { del: { tasks: [TOPW] } });
+
+    /* 整段派一人的全链路：派发 → 待接收 → 接收 → 完成 →（已接收不可撤回）。
+       完成态只由子专项往上汇总，上级不代勾；撤回只发生在接收前（9.9b）。 */
+    const CHAIN = 't_e2e_chain';
+    await push('1012', { del: { tasks: [CHAIN] } });
+    await push('1003', { del: { tasks: [CHAIN] } });
+    await pushJ('1012', { tasks: [{
+      id: CHAIN, type: 'special', title: 'E2E整段链路', ownerNo: '1012', assigneeNo: '1012',
+      start: d(0), end: d(3), dueDate: d(3), status: 'todo',
+      stages: [{ id: 'ch1', pid: null, name: '一条龙', start: d(0), end: d(3), done: false },
+               { id: 'ch2', pid: null, name: '留着', start: d(0), end: d(3), done: false }]
+    }] });
+    const chainDisp = await act('/api/task/dispatch', { me: '1012', id: CHAIN, topStageId: 'ch1', who: '1003' });
+    const chainChild = dbGet('SELECT * FROM task WHERE parent_task_id=?', CHAIN);
+    const chainPending = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${CHAIN}');
+      const top=(t.stages||[]).find(s=>s.id==='ch1');
+      return {intake:top.child&&top.child.intakeStatus, assignee:top.child&&top.child.assigneeNo};})()`);
+    check('全链路①：整段派发后子专项挂在 ch1 上，状态待接收',
+      chainDisp.ok === true && !!chainChild && chainChild.parent_stage_id === 'ch1'
+        && chainPending.intake === 'pending' && chainPending.assignee === '1003',
+      JSON.stringify({ disp: chainDisp, child: chainChild && chainChild.parent_stage_id, ui: chainPending }));
+    const chainAccept = await act('/api/task/accept', { me: '1003', id: chainChild ? chainChild.id : '' });
+    const chainDone = await act('/api/sync', { me: '1003', tasks: [{ id: chainChild ? chainChild.id : '', status: 'done' }] });
+    const chainAfter = await js(`(async()=>{const j=await (await fetch('/api/state?me=1012')).json();
+      const t=(j.tasks||[]).find(x=>x.id==='${CHAIN}');
+      const top=(t.stages||[]).find(s=>s.id==='ch1');
+      return {childStatus:top.child&&top.child.status, progress:top.child&&top.child.progress,
+        topDone:!!top.done, taskStatus:t.status};})()`);
+    check('全链路②：接收后由下属完成，一级行与子专项都显示完成（上级不代勾）',
+      chainAccept.ok === true && chainDone.ok === true && chainAfter.childStatus === 'done'
+        && chainAfter.progress === 100 && chainAfter.topDone === true,
+      JSON.stringify({ accept: chainAccept, done: chainDone, after: chainAfter }));
+    check('全链路③：父任务还有一段没完成，不会被下属的完成顶成「已完成」',
+      chainAfter.taskStatus !== 'done', 'status=' + chainAfter.taskStatus);
+    const chainUndo = await act('/api/task/undispatch', { me: '1012', id: CHAIN, stageId: 'ch1' });
+    check('全链路④：已接收的子专项不能撤回（撤回只发生在接收前）',
+      chainUndo.ok === false && /接收/.test(chainUndo.msg || ''), JSON.stringify(chainUndo));
+    await push('1012', { del: { tasks: [CHAIN, chainChild && chainChild.id].filter(Boolean) } });
+    await push('1003', { del: { tasks: [CHAIN, chainChild && chainChild.id].filter(Boolean) } });
 
     /* ---------- 9.9c 另外两个建段入口：添加阶段、+ 子任务，也能当场选人并直接派发 ----------
        用户口径（2026-11-18）：三处能产生阶段的入口要一样，不能只有发布弹窗有。 */
@@ -2583,12 +2623,12 @@ async function main() {
     const addStageRow = dbGet("SELECT id,intake_status,assignee_no,parent_stage_id FROM task WHERE parent_task_id=? AND title LIKE '%新段带人%'", ADDS);
     const addStagesNow = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', ADDS) || {}).stages || '[]');
     const addStageTop = addStagesNow.find(s => s.name === '新段带人' && !s.pid) || {};
-    const addStageAuto = addStagesNow.find(s => s.pid === addStageTop.id && s.name === '新段带人') || {};
-    check('详情页「添加阶段」：表单里能选「谁做」，添加后立刻派成待接收',
-      !addStageWho.err && addStageWho.val === '1004' && !!addStageTop.id && !!addStageAuto.id
+    check('详情页「添加阶段」：表单里能选「谁做」，添加后子专项直接挂一级段',
+      !addStageWho.err && addStageWho.val === '1004' && !!addStageTop.id
+        && !addStagesNow.some(s => s.name === '新段带人' && s.pid)
         && !!addStageRow && addStageRow.assignee_no === '1004' && addStageRow.intake_status === 'pending'
-        && addStageRow.parent_stage_id === addStageAuto.id,
-      JSON.stringify({ form: addStageWho, top: addStageTop.id, auto: addStageAuto.id, child: addStageRow }));
+        && addStageRow.parent_stage_id === addStageTop.id,
+      JSON.stringify({ form: addStageWho, top: addStageTop.id, child: addStageRow }));
 
     await setViewport(1024, 900);
     const subWho = await js(`(async()=>{
@@ -2630,28 +2670,36 @@ async function main() {
     await push('1002', { del: { tasks: [PERS_C, PERS_G] } });
     await push('1003', { del: { tasks: [PERS_G] } });
     /* 父子关系与 intake 只能由服务端建，夹具直接落库（仍跑在 _dev/.test-db 副本上）。
-       形状照真实链路来：一级段下面有一条同名自动子段，子专项挂在子段上（不是直接挂一级段），
-       用户看到的就是「一级段 · 含 1 个子任务」，责任人写在子段那一行。 */
+       形状照 0.16.1 的真实链路：子专项直接挂在一级段上，没有同名同起止的中间子段。 */
     execFileSync(process.execPath, ['--no-warnings', '-e',
       `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(DB)});
        const now=new Date().toISOString();
        const ins=db.prepare("INSERT OR REPLACE INTO task(id,owner_no,publisher_no,assignee_no,type,title,start_date,end_date,due_date,status,stages,intake_status,parent_task_id,parent_stage_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-       ins.run(${JSON.stringify(PERS)},'1012','1012','1012','special','E2E透视：父任务',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'ps1', pid: null, name: '一、指标口径', start: d(0), end: d(6), done: false }, { id: 'ps1a', pid: 'ps1', name: '一、指标口径', start: d(0), end: d(6), done: false }]))},null,null,null,now,now);
-       ins.run(${JSON.stringify(PERS_C)},'1002','1012','1002','special','E2E透视：子专项',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'cs1', pid: null, name: '下属阶段一：对齐口径', start: d(0), end: d(2), done: true }, { id: 'cs2', pid: null, name: '下属阶段二：出数', start: d(3), end: d(6), done: false }]))},'accepted',${JSON.stringify(PERS)},'ps1a',now,now);
-       ins.run(${JSON.stringify(PERS_G)},'1003','1002','1003','special','三层隐藏专项',${JSON.stringify(d(0))},${JSON.stringify(d(1))},${JSON.stringify(d(1))},'todo',${JSON.stringify(JSON.stringify([{ id: 'gs1', pid: null, name: '三层秘密阶段', start: d(0), end: d(1), done: false }]))},'accepted',${JSON.stringify(PERS_C)},'cs1',now,now);
+       ins.run(${JSON.stringify(PERS)},'1012','1012','1012','special','E2E透视：父任务',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'ps1', pid: null, name: '一、指标口径', start: d(0), end: d(6), done: false }]))},null,null,null,now,now);
+       ins.run(${JSON.stringify(PERS_C)},'1002','1012','1002','special','E2E透视：子专项',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'cs1', pid: null, name: '下属阶段一：对齐口径', start: d(0), end: d(2), done: true }, { id: 'cs2', pid: null, name: '下属阶段二：出数', start: d(3), end: d(6), done: false }]))},'accepted',${JSON.stringify(PERS)},'ps1',now,now);
+       ins.run(${JSON.stringify(PERS_G)},'1003','1002','1003','special','三层隐藏专项',${JSON.stringify(d(0))},${JSON.stringify(d(1))},${JSON.stringify(d(1))},'done',${JSON.stringify(JSON.stringify([{ id: 'gs1', pid: null, name: '三层秘密阶段', start: d(0), end: d(1), done: true }]))},'accepted',${JSON.stringify(PERS_C)},'cs1',now,now);
        db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
       { cwd: ROOT_DIR });
     await whoAmI('1012');
-    await js(`openTaskPage('${PERS}');'ok'`); await sleep(900);
+    await js(`openTaskPage('${PERS}');'ok'`); await sleep(1500);
     const persBefore = await js(`(function(){
       const v=document.querySelector('#view');
+      const rows=[...v.querySelectorAll('.stage')];
+      const tops=rows.filter(x=>!x.classList.contains('sub'));
+      const names=tops.map(x=>((x.querySelector('.sn')||{}).textContent||'').trim());
       return { text:v.innerText, whoRo:v.querySelectorAll('.who-ro').length,
+        topRows:tops.length, subRows:rows.length-tops.length,
+        dupNames:names.filter((n,i)=>n && names.indexOf(n)!==i),
         editEntry:v.querySelectorAll('#view [data-act="stage-who-top"]').length };
     })()`);
-    check('上级详情：一级段只读显示下属负责人，且没有可编辑的「谁做」入口',
-      persBefore.text.includes('李明') && persBefore.text.includes('承接') && persBefore.whoRo >= 1
-        && persBefore.editEntry === 0,
-      JSON.stringify({ whoRo: persBefore.whoRo, edit: persBefore.editEntry }));
+    check('上级详情：一级行只读显示承接人与状态，且没有可编辑的「谁做」入口',
+      persBefore.text.includes('李明') && persBefore.text.includes('承接')
+        && persBefore.text.includes('进行中') && persBefore.text.includes('50%')
+        && persBefore.whoRo >= 1 && persBefore.editEntry === 0,
+      JSON.stringify({ whoRo: persBefore.whoRo, edit: persBefore.editEntry, text: persBefore.text.slice(0, 160) }));
+    check('反向：页面上不再出现同名重复阶段行（整段派一人只占一行）',
+      persBefore.topRows === 1 && persBefore.subRows === 0 && persBefore.dupNames.length === 0,
+      JSON.stringify({ top: persBefore.topRows, sub: persBefore.subRows, dup: persBefore.dupNames }));
     const persOpen = await js(`(async()=>{
       const b=document.querySelector('[data-act="child-plan"]');
       if(!b) return {err:'没有展开下属计划的入口'};

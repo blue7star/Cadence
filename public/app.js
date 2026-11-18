@@ -1892,9 +1892,9 @@ function taskDetailHTML(t) {
         ${canPlan ? `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
           <div class="sec-title" style="margin:0 0 7px">再加一段 <span class="mini">名称写清这一段交付什么</span></div>
           <input id="sName" placeholder="例如：数据口径确认与取数" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit;margin-bottom:6px"/>
-          <div class="row">
-            <input type="date" id="sStart" value="${t.start}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
-            <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
+          <div class="row addstage-row">
+            <input type="date" id="sStart" value="${t.start}"/>
+            <input type="date" id="sEnd" value="${t.end}"/>
             <span class="lbl2">谁做</span>
             <select id="sWho" class="who-sel" title="选人即派：添加后会生成一条同名同起止的二级子阶段，等对方接收后生效；不选就是承接人自己做">${stageWhoOptions(t, '')}</select>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加</button>
@@ -1986,10 +1986,11 @@ function taskDetailHTML(t) {
 }
 /* 「谁做」的选项。新建弹窗、详情页行内、「改」表单三处共用这一份——
    上次就是三处各写各的：弹窗写「承接人自己做」、详情页写「承接人自己做（张三）」、
-   「改」表单里压根没有，结果同一个词在三个地方三种说法。 */
+   「改」表单里压根没有，结果同一个词在三个地方三种说法。
+   默认项故意不带人名：带上「（张三）」会把下拉撑到一百多像素，窄屏下把后面的按钮挤出去；
+   承接人是谁，弹窗上方和详情页右侧本来就写着。 */
 function whoOptionsHTML(ownNo, cur) {
-  const own = ownNo ? nameOf(ownNo) : '';
-  return [`<option value="" ${cur ? '' : 'selected'}>${own ? `承接人自己做（${esc(own)}）` : '承接人自己做'}</option>`]
+  return [`<option value="" ${cur ? '' : 'selected'}>承接人自己做</option>`]
     .concat((S.roster || [])
       .filter(e => e.no !== ownNo && e.activated)
       .map(e => `<option value="${e.no}" ${cur === e.no ? 'selected' : ''}>${esc(e.name)}${S.subs.some(x => x.no === e.no) ? '' : ' · 非下属'}</option>`))
@@ -2377,12 +2378,16 @@ function stageRowHTML(s, e, pid) {
       <input class="sname" placeholder="${isSub ? '这段具体做什么，例如：取数并核对口径' : '这一段做什么，例如：数据口径确认与取数'}"/>
     </div>
     <div class="row2">
-      <input type="date" class="sst" value="${s}"/>
-      <input type="date" class="sen" value="${e}"/>
-      <span class="lbl2">谁做</span>
-      <select class="swho" title="${isSub ? '这段由谁做；不选就是承接人自己做' : '选人即派：保存后生成一条同名同起止的二级子阶段，等对方接收后生效；不选就是承接人自己做'}">${whoOptionsHTML(draftAssignee(), '')}</select>
-      ${isSub ? '' : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
-      <button class="del" data-act="mstage-del" title="删除">✕</button>
+      <div class="r2a">
+        <input type="date" class="sst" value="${s}"/>
+        <input type="date" class="sen" value="${e}"/>
+      </div>
+      <div class="r2b">
+        <span class="lbl2">谁做</span>
+        <select class="swho" title="${isSub ? '这段由谁做；不选就是承接人自己做' : '选人即派：保存后生成一条同名同起止的二级子阶段，等对方接收后生效；不选就是承接人自己做'}">${whoOptionsHTML(draftAssignee(), '')}</select>
+        ${isSub ? '' : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
+        <button class="del" data-act="mstage-del" title="删除">✕</button>
+      </div>
     </div>
   </div>`;
 }
@@ -3268,14 +3273,18 @@ document.addEventListener('click', e => {
         <div class="subadd-h">在第 <b>${no}</b> 段「${esc(p.name)}」下面加一个子任务</div>
         <input class="sname" placeholder="这段具体做什么，例如：取数并核对口径" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit"/>
         <div class="row">
-          <input type="date" class="sst" value="${slot.start}"/>
-          <input type="date" class="sen" value="${slot.end}"/>
-          <span class="lbl2">谁做</span>
-          <select class="swho" title="这段由谁做；选人即派，等对方接收后生效；不选就是承接人自己做">
-            ${stageWhoOptions(t, '')}
-          </select>
-          <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
-          <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
+          <div class="r2a">
+            <input type="date" class="sst" value="${slot.start}"/>
+            <input type="date" class="sen" value="${slot.end}"/>
+          </div>
+          <div class="r2b">
+            <span class="lbl2">谁做</span>
+            <select class="swho" title="这段由谁做；选人即派，等对方接收后生效；不选就是承接人自己做">
+              ${stageWhoOptions(t, '')}
+            </select>
+            <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
+            <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
+          </div>
         </div>
         <div class="mini" style="margin-top:6px;line-height:1.5">${slotTip}<br/>选上别人并点「加」，会立刻派给他，等对方接收后生效。</div>
       </div>`);
@@ -3693,16 +3702,6 @@ document.addEventListener('change', e => {
     const pw = $('#r_policy_wrap'), dn = $('#r_day_note');
     if (pw) pw.style.display = e.target.value === 'day' ? 'none' : '';
     if (dn) dn.style.display = e.target.value === 'day' ? 'block' : 'none';
-    return;
-  }
-  /* 弹窗里换了承接人：所有「谁做」下拉的「承接人自己做（谁）」都要跟着变，
-     否则人已经换成李四了，下拉还在说「王磊自己做」 */
-  if (modal && e.target.id === 'f_assignee') {
-    const own = e.target.value || S.me.no;
-    document.querySelectorAll('#stageRows .mrow .swho').forEach(s => {
-      const o = s.querySelector('option[value=""]');
-      if (o) o.textContent = `承接人自己做（${nameOf(own)}）`;
-    });
     return;
   }
   /* 只剩承接台那个弹窗有 #f_type 了：新建任务的类型由入口钉死，弹窗里不给换。

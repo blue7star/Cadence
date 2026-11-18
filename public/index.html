@@ -302,7 +302,12 @@ tbody tr:hover{background:#fafbfd}
 .stage.sub.on .n{background:var(--ok);border-color:var(--ok);color:#fff}
 .stage.sub .t{font-size:12px}
 /* 下拉和它的状态标签挨着摆，中间不留按钮——它们说的是同一件事 */
-.who-sel{font-size:11px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink2);max-width:150px}
+.who-sel{font-size:11px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink2);max-width:132px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 详情页「再加一段」：同样按「日期一组 / 谁做+按钮一组」折行 */
+.addstage-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.addstage-row input[type=date]{flex:1 1 120px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:inherit}
+.addstage-row .lbl2{flex:0 0 auto;font-size:11px;color:var(--ink3)}
+.addstage-row .who-sel{flex:0 1 132px;width:132px;max-width:132px}
 .subtag{display:inline-flex;align-items:center;flex:0 0 auto}
 .subtag:empty{display:none}
 .stage.sub .t .tag{margin-left:6px;font-size:10px}
@@ -313,15 +318,17 @@ tbody tr:hover{background:#fafbfd}
 .subadd-h{font-size:12px;color:var(--ink2);margin-bottom:7px;line-height:1.45}
 .subadd-h b,.sedit-h b{color:#3b6ef0;font-weight:600}
 .sedit-h{font-size:12px;color:var(--ink2);margin-bottom:7px;line-height:1.45}
-.subadd .row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.subadd .row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+.subadd .row .r2a{display:flex;gap:6px;flex:1 1 180px;min-width:0}
+.subadd .row .r2b{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .subadd .row .lbl2{flex:0 0 auto;font-size:11px;color:var(--ink3)}
-.subadd select.swho{flex:0 0 116px;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
-.subadd input[type=date]{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
+.subadd select.swho{flex:0 1 132px;width:132px;max-width:132px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
+.subadd input[type=date]{flex:1 1 0;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
 /* 阶段就地编辑：和「+子」的展开框长一个样，用户不用学两套 */
 .sedit{margin:6px 0 8px;padding:9px;border:1px solid #9dbcff;border-radius:9px;background:#f7faff}
 .sedit .sname{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit}
-.sedit .row{display:flex;gap:6px;margin-top:6px}
-.sedit input[type=date]{border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
+.sedit .row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.sedit input[type=date]{flex:1 1 120px;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit}
 .sedit input:disabled{background:#eef1f6;color:var(--ink3)}
 /* 子任务不做第二层卡片，否则和父行一样重：缩进 + 一道竖线，父子关系更直接 */
 .mrow.sub{margin-left:20px;padding:7px 0 7px 11px;background:transparent;border:0;border-left:3px solid #d3e0f2;border-radius:0}
@@ -335,11 +342,15 @@ tbody tr:hover{background:#fafbfd}
 .mrow.sub .sno{background:#eef1f6;color:#64748b;border-radius:5px 0 0 5px}
 .mrow .sname{flex:1;min-width:0;width:auto;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;font-family:inherit;outline:none}
 .mrow .sname:focus{border-color:#9dbcff;box-shadow:0 0 0 3px #eef4ff}
-.mrow .row2{display:flex;gap:6px;align-items:center}
+.mrow .row2{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+/* 日期一组、操作一组：宽度不够时整组折到下一行，不会把「+ 子任务」或删除挤出可视区 */
+.mrow .row2 .r2a{display:flex;gap:6px;flex:1 1 200px;min-width:0}
+.mrow .row2 .r2b{display:flex;flex-wrap:wrap;gap:6px;align-items:center;flex:0 1 auto;min-width:0;margin-left:auto}
 .mrow .row2 .lbl2{flex:0 0 auto;font-size:11px;color:var(--ink3);margin-left:2px}
 .mrow .row2 .del{flex:0 0 20px}
-.mrow .row2 input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit;outline:none}
-.mrow .row2 select.swho{flex:0 0 118px;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
+.mrow .row2 input{flex:1 1 0;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12px;font-family:inherit;outline:none}
+/* 下拉给定最大宽度，长名字省略号；展开的原生下拉仍按内容完整显示选项 */
+.mrow .row2 select.swho{flex:0 1 132px;width:132px;max-width:132px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--line);border-radius:7px;padding:5px 4px;font-size:12px;font-family:inherit;color:var(--ink2);background:#fff}
 .mrow .del{border:0;background:none;color:#b6bcc8;cursor:pointer;font-size:14px;padding:0 2px;line-height:1}
 .mrow .del:hover{color:#dc2626}
 .stage.done .t s{color:var(--ink3)}

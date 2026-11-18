@@ -167,6 +167,12 @@ async function main() {
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
+  /* 窄屏回归用：真实改视口，不是只缩窗口——只看 CSS 的话，溢出可能被外层 overflow 藏掉 */
+  const setViewport = async (w, h, scale = 1) => {
+    await S('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: scale, mobile: false });
+    await sleep(500);
+  };
+  const clearViewport = async () => { await S('Emulation.clearDeviceMetricsOverride'); await sleep(300); };
 
   await S('Page.enable'); await S('Runtime.enable'); await S('Log.enable'); await S('Network.enable');
 
@@ -1710,6 +1716,27 @@ async function main() {
   })()`);
   check('发布弹窗：每个一级阶段行都有「谁做」下拉，且能选人',
     mdWho.rows === 2 && mdWho.whoSel === 2 && !!mdWho.firstWho && mdWho.whoOpts >= 2, JSON.stringify(mdWho));
+  /* 窄屏：日期一组、操作一组，任何控件都不许被推出弹窗；也不许出现页面横向滚动条 */
+  for (const w of [1024, 1280]) {
+    await setViewport(w, 900);
+    const lay = await js(`(function(){
+      const m=document.querySelector('#modal'), mb=m.getBoundingClientRect();
+      const ctrls=[...m.querySelectorAll('#stageRows .row2 .r2b > *')];
+      const inside=el=>{const b=el.getBoundingClientRect();return b.left>=mb.left-0.5&&b.right<=mb.right+0.5&&b.right<=innerWidth+0.5;};
+      return {
+        pageScroll: document.documentElement.scrollWidth<=innerWidth+1,
+        modalScroll: m.scrollWidth<=m.clientWidth+1,
+        allInside: ctrls.length>=6 && ctrls.every(inside),
+        swhoMax: getComputedStyle(m.querySelector('#stageRows .swho')).maxWidth,
+        falseText: m.innerText.includes('false'),
+        rowH: m.querySelector('#stageRows .mrow').getBoundingClientRect().height
+      };
+    })()`);
+    check(`窄屏 ${w}：发布弹窗阶段行不横向溢出，操作按钮都在可视区`,
+      lay.pageScroll && lay.modalScroll && lay.allInside && lay.swhoMax === '132px' && !lay.falseText,
+      JSON.stringify(lay));
+  }
+  await setViewport(1600, 1000);
   await shot('13b-assign-modal-who');
   await js(`document.querySelector('#modal [data-act="modal-ok"]').click();'ok'`);
   await sleep(3500);
@@ -2503,6 +2530,24 @@ async function main() {
       stages: [{ id: 'as1', pid: null, name: '已有段', start: d(0), end: d(4), done: false }] }] });
     await whoAmI('1012');
     await js(`openTaskPage('${ADDS}');'ok'`); await sleep(800);
+    /* 「+ 添加阶段」在 1024 下也不能溢出：日期一组、谁做+添加一组，按钮必须在卡片内 */
+    await setViewport(1024, 900);
+    const addLay = await js(`(function(){
+      const row=document.querySelector('#view .addstage-row');
+      if(!row) return {err:'没有添加阶段表单'};
+      const card=row.closest('.card')||row.parentElement;
+      const cb=card.getBoundingClientRect();
+      const kids=[...row.children];
+      const inside=el=>{const b=el.getBoundingClientRect();return b.left>=cb.left-0.5&&b.right<=cb.right+0.5&&b.right<=innerWidth+0.5;};
+      return { pageScroll:document.documentElement.scrollWidth<=innerWidth+1,
+        allInside:kids.every(inside), kids:kids.length,
+        whoMax:getComputedStyle(document.querySelector('#sWho')).maxWidth,
+        falseText:document.querySelector('#view').innerText.includes('false') };
+    })()`);
+    check('窄屏 1024：详情页「+ 添加阶段」不溢出，日期/谁做/添加按钮都在卡片内',
+      !addLay.err && addLay.pageScroll && addLay.allInside && addLay.whoMax === '132px' && !addLay.falseText,
+      JSON.stringify(addLay));
+    await setViewport(1600, 1000);
     const addStageWho = await js(`(async()=>{
       document.querySelector('#sName').value='新段带人';
       document.querySelector('#sStart').value='${d(1)}';
@@ -2524,6 +2569,7 @@ async function main() {
         && addStageRow.parent_stage_id === addStageAuto.id,
       JSON.stringify({ form: addStageWho, top: addStageTop.id, auto: addStageAuto.id, child: addStageRow }));
 
+    await setViewport(1024, 900);
     const subWho = await js(`(async()=>{
       const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('新段带人'));
       if(!row) return {err:'没有新段'};
@@ -2531,6 +2577,9 @@ async function main() {
       await new Promise(r=>setTimeout(r,300));
       const box=document.querySelector('.subadd');
       if(!box) return {err:'没有加子任务表单'};
+      const groups=[...box.querySelector('.row').children];
+      const inside=el=>{const b=el.getBoundingClientRect();return b.left>=-0.5&&b.right<=innerWidth+0.5;};
+      const lay={pageScroll:document.documentElement.scrollWidth<=innerWidth+1, allInside:groups.length>=2&&groups.every(inside)};
       box.querySelector('.sname').value='子段带人';
       /* 表单默认日期从全任务算，这里显式落到父段窗口内 */
       box.querySelector('.sst').value='${d(1)}';
@@ -2538,15 +2587,17 @@ async function main() {
       box.querySelector('.swho').value='1003';
       box.querySelector('[data-act="stage-add-sub"]').click();
       await new Promise(r=>setTimeout(r,4000));
-      return {ok:true, who:box.querySelector('.swho').value, toast:(document.querySelector('#toast')||{}).textContent||''};
+      return {ok:true, who:'1003', lay, toast:(document.querySelector('#toast')||{}).textContent||''};
     })()`);
     const subRow = dbGet("SELECT id,intake_status,assignee_no,parent_stage_id FROM task WHERE parent_task_id=? AND title LIKE '%子段带人%'", ADDS);
     const subNode = (JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', ADDS) || {}).stages || '[]'))
       .find(s => s.name === '子段带人') || {};
-    check('阶段行「+ 子任务」：选人后加完即派，落成待接收子专项',
-      !subWho.err && !!subNode.id && !!subRow && subRow.assignee_no === '1003'
+    check('阶段行「+ 子任务」：选人后加完即派，落成待接收子专项（1024 下不溢出）',
+      !subWho.err && !!subWho.lay && subWho.lay.pageScroll && subWho.lay.allInside
+        && !!subNode.id && !!subRow && subRow.assignee_no === '1003'
         && subRow.intake_status === 'pending' && subRow.parent_stage_id === subNode.id,
       JSON.stringify({ ui: subWho, node: subNode, child: subRow }));
+    await setViewport(1600, 1000);
     await push('1012', { del: { tasks: [ADDS, addStageRow && addStageRow.id, subRow && subRow.id].filter(Boolean) } });
     await push('1003', { del: { tasks: [subRow && subRow.id].filter(Boolean) } });
     await push('1004', { del: { tasks: [addStageRow && addStageRow.id].filter(Boolean) } });

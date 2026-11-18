@@ -37,3 +37,4 @@ paths: version.js
 | TASK-20261117-admin-fixed-password | 见 git | — | 0.13.0：管理账号初始口令固定 123456、重启不轮换；口令策略变更按 INV-4 bump Y |
 | TASK-20261118-temp-done-date | 见 git | — | 0.14.0：临时任务新增完成日期（落库 + 导出第 14 列）；新能力按 INV-4 bump Y |
 | TASK-20261118-stage-overlap-and-create-who | 见 git | — | 0.15.0：阶段行选人入口扩到发布弹窗/添加阶段/加子任务；同层阶段允许重叠；新能力按 INV-4 bump Y |
+| TASK-20261118-narrow-stage-row | 见 git | — | 0.15.1：窄屏阶段行折行与下拉限宽（用户可见缺陷修复，bump Z） |

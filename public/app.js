@@ -1761,15 +1761,39 @@ function goPassword() {
 }
 
 /* 导出：走 fetch 才拿得到状态码——直接 location.href 的话，会话过期会整页跳成一坨 JSON。
-   点下去先禁用并写「正在导出…」，成功/失败都回到按钮原样，用户知道点上了。 */
-async function exportTasks() {
+   点下去先禁用并写「正在导出…」，成功/失败都回到按钮原样，用户知道点上了。
+   0.16.0：可选时间范围；空 = 全部。范围口径见 server-api.md（无阶段按任务起止、
+   有阶段按每段起止，相交即整段导出）。 */
+function exportRange() {
+  const f = $('#expFrom'), t = $('#expTo');
+  return { from: f ? (f.value || '') : '', to: t ? (t.value || '') : '' };
+}
+async function exportPreview() {
+  const el = $('#expPreview');
+  if (!el) return;
+  const { from, to } = exportRange();
+  el.textContent = '正在统计…';
+  try {
+    const q = `?preview=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const res = await fetch('/api/export/tasks.csv' + q);
+    if (res.status === 401) { onAuthLost(); return; }
+    const d = await res.json().catch(() => ({}));
+    if (!d.ok) { el.textContent = d.msg || '统计失败'; return; }
+    el.textContent = `将导出 ${d.rows} 行 · ${d.tasks} 条任务${from || to ? `（${from || '不限'} → ${to || '不限'}）` : '（全部）'}`;
+  } catch (e) { el.textContent = '统计失败：' + (e.message || '网络异常'); }
+}
+async function exportTasks(from, to) {
   const btn = $('#exportBtn');
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '正在导出…'; }
   try {
-    const res = await fetch('/api/export/tasks.csv');
+    const q = (from || to) ? `?from=${encodeURIComponent(from || '')}&to=${encodeURIComponent(to || '')}` : '';
+    const res = await fetch('/api/export/tasks.csv' + q);
     if (res.status === 401) { onAuthLost(); return; }
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.msg || ('HTTP ' + res.status));
+    }
     const blob = await res.blob();
     const cd = res.headers.get('content-disposition') || '';
     const fn = (cd.match(/filename="?([^";]+)"?/) || [])[1] || 'cadence-tasks.csv';
@@ -1784,6 +1808,23 @@ async function exportTasks() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = label; }
   }
+}
+/* 导出前的选择框：两个日期 + 「全部」复位 + 行数预览 */
+function openExport() {
+  openModal('导出任务 CSV', `
+    <div class="mini" style="margin-bottom:10px;line-height:1.55">按时间范围只导这段时间里的活：没有阶段的按任务起止判断，有阶段的按每一段判断；和区间有交集就整段导出，日期不裁剪。</div>
+    <div class="row addstage-row">
+      <input type="date" id="expFrom"/>
+      <input type="date" id="expTo"/>
+      <button class="btn sm ghost" data-act="exp-all">全部</button>
+    </div>
+    <div class="mini" id="expPreview" style="margin-top:8px">正在统计…</div>`,
+  async () => {
+    const { from, to } = exportRange();
+    if (from && to && from > to) { toast('开始日不能晚于结束日'); return false; }
+    await exportTasks(from, to);
+  }, '导出');
+  exportPreview();
 }
 /* ============ 任务详情（整页，不用抽屉） ============ */
 /* 左抽屉只有 460px 宽，一列控件往下堆；管理者点开一条任务想看的是「到哪了、卡在哪」，
@@ -2071,19 +2112,31 @@ function stageTreeHTML(t, canEdit) {
     const pi = stages.indexOf(p);
     const kids = kidsOf(stages, p.id);
     const pDone = kids.length ? kids.every(k => k.done) : p.done;
-    const canTickP = canEdit && !kids.length;
+    const canTickP = canEdit && !kids.length && !p.child;
     /* 一级阶段行直接设责任人（0.12.0）：选人 = 把这一整段交出去。
-       一旦这段已经有子任务（不论是这次交出去的，还是手动拆的），入口就收回到二级行，
+       一旦这段已经有子任务/子专项（不论是这次交出去的，还是手动拆的），入口就收回到二级行，
        否则同一段会在两行各有一个「谁做」，改哪边都不算数。 */
-    const topWho = canEdit && !kids.length && !pDone && canDispatch && assignable
+    const topWho = canEdit && !kids.length && !p.child && !pDone && canDispatch && assignable
       ? `<span class="mini" style="flex:0 0 auto">谁做</span><select class="who-sel" data-act="stage-who-top"
            data-id="${t.id}" data-idx="${pi}" data-sid="${esc(p.id || '')}"
            title="选一个人，立刻把这一整段交给他：会生成一条同名、同起止的二级子阶段，等对方接收才生效">${stageWhoOptions(t, '')}</select>`
       : '';
+    /* 有子任务时，可编辑的「谁做」入口收起（避免两个入口改同一段），
+       但只读聚合必须留下：上级得一眼看出这一段交给了谁。
+       两种形态都要认：整段直接派成子专项（p.child），或派在它下面的某一子段上（kids[].child）。 */
+    const childOwnerOf = c => c.intakeStatus === 'pending'
+      ? `${nameOf(c.assigneeNo)} 待接收` : `${nameOf(c.ownerNo)} 承接`;
+    const kidOwners = [...new Set([
+      ...(p.child ? [childOwnerOf(p.child)] : []),
+      ...kids.map(k => k.child ? childOwnerOf(k.child) : (k.who ? `${nameOf(k.who)} 承接` : ''))
+    ].filter(Boolean))];
+    const kidOwnerRo = kidOwners.length
+      ? `<span class="mini who-ro" title="这一段已经拆给下属，负责人只读；改派请在下面的子任务行操作">${kidOwners.join('、')}</span>`
+      : '';
     const head = `<div class="stage ${pDone ? 'on' : ''}">
       <div class="n" ${canTickP ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${pi}" style="cursor:pointer"` : ''}>${pDone ? '✓' : n}</div>
       <div class="t ${pDone ? 'done' : ''}"><span class="sn" style="text-decoration:${pDone ? 'line-through' : 'none'}">${esc(p.name)}</span>${p.start || p.end ? `<small>${fmt(p.start)} → ${fmt(p.end)}${kids.length ? ` · 含 ${kids.length} 个子任务` : ''}</small>` : ''}</div>
-      ${topWho}
+      ${(kids.length || p.child) ? kidOwnerRo : topWho}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${pi}" title="改这一段的名称和日期">改</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-sub" data-id="${t.id}" data-idx="${pi}" title="在这个阶段下拆成多条子任务，分别给不同的人；整段只交给一个人，直接用这一行的「谁做」">+ 子任务</button>` : ''}
       ${canEdit ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${pi}">删</button>` : ''}
@@ -2094,26 +2147,44 @@ function stageTreeHTML(t, canEdit) {
       const ki = stages.indexOf(k);
       const tick = myTick(k);
       const tag = `<span class="subtag" data-tag="${ki}">${stageTagHTML(k)}</span>`;
+      const plan = k.child && k.child.stages && k.child.stages.length;
+      const planId = `cp-${t.id}-${k.id}`;
+      const planBtn = plan
+        ? `<button class="btn sm ghost" data-act="child-plan" data-target="${esc(planId)}" title="展开看下属自己把这段拆成了几步（只读）">展开下属计划</button>`
+        : '';
       let right = '';
       if (canEdit && k.child) {
         right = k.child.intakeStatus === 'pending'
           ? `${tag}<select class="who-sel" data-act="stage-redispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="改派给另一个人">${stageWhoOptions(t, k.child.assigneeNo || '')}</select>
-             <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="撤回这次派发，这一段回到未派发">撤回</button>`
-          : `${tag}<span class="mini who-ro" title="子专项已被接收，换人/撤回本轮不支持">由 ${esc(nameOf(k.child.ownerNo))} 负责</span>`;
+             <button class="btn sm ghost" data-act="stage-undispatch" data-id="${t.id}" data-sid="${esc(k.id)}" title="撤回这次派发，这一段回到未派发">撤回</button>${planBtn}`
+          : `${tag}<span class="mini who-ro" title="子专项已被接收，换人/撤回本轮不支持">由 ${esc(nameOf(k.child.ownerNo))} 负责</span>${planBtn}`;
       } else if (canEdit && canDispatch) {
         right = `${tag}${whoSel(k, ki)}`;
       } else if (canEdit) {
         right = `${tag}<span class="mini" title="子专项最多三层，这一级不能再派">第三级不能再派</span>`;
       } else {
-        right = `${tag}${k.who ? `<span class="mini who-ro">${esc(nameOf(k.who))}</span>` : ''}`;
+        const own = k.child ? `${nameOf(k.child.ownerNo)} 承接` : (k.who ? nameOf(k.who) : '');
+        right = `${tag}${own ? `<span class="mini who-ro">${esc(own)}</span>` : ''}${planBtn}`;
       }
+      /* 透视只到这一层：只渲染子专项自己的 stages，不再给它们挂 child 摘要。 */
+      const planHtml = plan
+        ? `<div class="child-plan" id="${esc(planId)}" hidden>
+            <div class="cp-h">${esc(nameOf(k.child.ownerNo))} 的阶段计划 · 只读（完成态由他维护）</div>
+            ${k.child.stages.map((ps, pi) => `<div class="cp-row ${ps.done ? 'on' : ''}">
+              <span class="cp-no">${ps.pid ? '·' : `${n}.${order + 1}.${pi + 1}`}</span>
+              <span class="cp-nm">${esc(ps.name)}</span>
+              <small>${ps.start || ps.end ? `${fmt(ps.start)} → ${fmt(ps.end)}` : ''}</small>
+              <span class="cp-st">${ps.done ? '已完成' : ((k.child.status === 'doing' || k.child.progress) ? '进行中' : '待开展')}</span>
+            </div>`).join('')}
+          </div>`
+        : '';
       return `<div class="stage sub ${k.done ? 'on' : ''}">
         <div class="n" ${tick ? `data-act="stage-toggle" data-id="${t.id}" data-idx="${ki}" style="cursor:pointer"` : `title="${k.child ? '这一段已经派成子专项，完成由它自己勾' : (k.who ? `由 ${esc(nameOf(k.who))} 负责，完成由他勾` : '这段由别人负责')}"`} >${k.done ? '✓' : `${n}.${order + 1}`}</div>
         <div class="t ${k.done ? 'done' : ''}"><span class="sn" style="text-decoration:${k.done ? 'line-through' : 'none'}">${esc(k.name)}</span>${k.start || k.end ? `<small>${fmt(k.start)} → ${fmt(k.end)}</small>` : ''}</div>
         ${right}
         ${canEdit ? `<button class="btn sm ghost" data-act="stage-edit" data-id="${t.id}" data-idx="${ki}" title="${k.child ? '改名称和日期' : '改这一段的名称、日期和谁做'}">改</button>` : ''}
         ${canEdit && !k.child ? `<button class="btn sm ghost" data-act="stage-del" data-id="${t.id}" data-idx="${ki}">删</button>` : ''}
-      </div>`;
+      </div>${planHtml}`;
     }).join('');
     return head + sub;
   }).join('');
@@ -3029,9 +3100,16 @@ document.addEventListener('click', e => {
       }
       break;
     case 'export-tasks':
-      /* 走 fetch 再触发下载：要拿到状态码才能区分「会话过期」和「导出成功」 */
-      exportTasks();
+      /* 先开范围选择框；真正下载仍走 fetch，才能区分「会话过期」和「导出成功」 */
+      openExport();
       break;
+    case 'exp-all': {
+      const f = $('#expFrom'), t = $('#expTo');
+      if (f) f.value = '';
+      if (t) t.value = '';
+      exportPreview();
+      break;
+    }
     case 'acct-toggle': {
       const menu = $('#acctMenu');
       const btn = document.querySelector('[data-act="acct-toggle"]');
@@ -3250,6 +3328,13 @@ document.addEventListener('click', e => {
         if (who) await dispatchTopStage(t.id, t.stages.indexOf(node), node.id, who, null);
         else toast('阶段已添加');
       })();
+      break;
+    }
+    case 'child-plan': {
+      const box = document.getElementById(el.dataset.target);
+      if (!box) break;
+      box.hidden = !box.hidden;
+      el.textContent = box.hidden ? '展开下属计划' : '收起下属计划';
       break;
     }
     case 'stage-sub': {
@@ -3666,6 +3751,10 @@ document.addEventListener('change', e => {
   /* 快速录入条：选完日期/时间立刻把 chip 与提示同步，别等到提交 */
   if (e.target.id === 'qDate') { syncQuickDate(); return; }
   if (e.target.id === 'qTime') { syncQuickTime(); return; }
+  /* 导出弹窗：日期一动就重新统计行数，别让人点下去才发现筛出 0 行。
+     这里不能引用下面那个 `modal`——它在函数后面才声明，提前用会抛 TDZ 错，
+     把整条 change 链（改状态、年节点日期…）全带崩。 */
+  if (e.target.id === 'expFrom' || e.target.id === 'expTo') { exportPreview(); return; }
   /* 知情人多选：勾上就加进名单，取消就去掉；改完重画列表，把「已选 N 人」同步上 */
   if (e.target.closest('#f_obs_list') && e.target.matches('input[type=checkbox]')) {
     const no = e.target.dataset.no;

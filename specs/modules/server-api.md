@@ -9,7 +9,9 @@ paths: server.js
 - `/api/sync`：`{me, tasks[], rules[], cats[], watch[], del}` → `{ok, rows, errors[], rev}`。
 - 七个动作接口见 `DEVELOPMENT.md` §4，各自判权（走不了 sync 的归属校验）。`dispatch` 收 `{id, stageId?, who?}`：不带 stageId 派发所有待派发段；带已有 pending 子专项的 stageId 且给 who 时执行改派；另收 `{id, topStageId|topIndex, who}`：**一级阶段行的一步派发**（0.12.0）——为指定的一级阶段生成一条同名、同起止的二级节点并立即派成 pending 子专项，一级阶段自身不落 `who`。`undispatch` 收 `{id, stageId}`，只撤 pending。
 - 认证：`/api/login`（工号+密码，失败文案统一「工号或密码不正确」，同「工号+IP」5 次锁 5 分钟；管理账号 `admin` 走同入口的独立分支）、`/api/logout`、`/api/password`（改密后吊销本人其它会话）、`/api/admin/initial-passwords`、`/api/admin/reset-password`、`/api/admin/sessions`（后三个仅管理账号）。
-- 导出：`GET /api/export/tasks.csv`，无参数，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。第 14 列「完成日期」：有阶段任务取叶子阶段 `doneAt` 最大值；无阶段任务取 `task.done_at`（0.14.0），存量无值则留空。
+- 导出：`GET /api/export/tasks.csv[?from=YYYY-MM-DD&to=YYYY-MM-DD][&preview=1]`，只导会话本人直接负责/已承接的常规、专项与临时任务；一行一阶段（临时任务无阶段，整条占一行、阶段列留空），UTF-8 BOM + `\r\n`。27 列，末尾两列 `父任务编号` / `父任务阶段编号`（0.11.0）：子专项行填、顶层行空、续行留空；被派发阶段的「阶段负责人/阶段完成/阶段完成日」读子专项（派生）。第 14 列「完成日期」：有阶段任务取叶子阶段 `doneAt` 最大值；无阶段任务取 `task.done_at`（0.14.0），存量无值则留空。
+  - 时间范围（0.16.0）：`from`/`to` 可单独或同时给，空 = 全部；无阶段任务按任务起止、有阶段任务按每段起止判断**相交**，相交即整段导出（日期不裁剪）；有阶段任务只导出相交的段，任务级列只在第一条输出行（R2）——不重复、不丢行；一段都不相交整条不导；无日期任务在设了范围时不导。`from > to` 或日期格式非法返回 400。`preview=1` 返回 `{ok, rows, tasks, from, to}`，不下发 CSV。
+- `GET /api/state` 的 `stages[].child`（0.16.0）额外带 `stages`：子专项自己的阶段节点（id/pid/name/start/end/done），**不带**这些节点的 `child`，即上级最多透视一层。反例：e2e 9.9d。
 
 ## 不变量
 - **身份只来自会话**：所有接口先过 `sid` cookie 的会话门，`me` 与会话不符 403、无会话 401；不接受「按请求里的 me 当身份」。导出因此没有「导别人」的口子。
@@ -22,7 +24,7 @@ paths: server.js
 - 接收看 `assignee_no`、派发/撤回/改派看 `owner_no`、加入待办与勾选看 `stages[].who`（须已派发）。**勾选只认这一段的责任人**；承接人对别人负责的段只读，`who` 为空（承接人自己做）时才由承接人勾。已派成子专项的段没有自己的勾选权，一律按「这一段由别人负责，只有他能勾完成」拒。
 - **可见性六来源**缺一即「派完就断线」：我名下 ∪ 指派给我 ∪ 我发布 ∪ 下属常规/专项 ∪ 我负责某段（须 `whoAt` 非空）∪ 我作为知情人（只读）。子任务责任人挂在 `stages` JSON，SQL 过滤不到，整表取回再筛。
 - **带父引用的子专项只从「我是负责人 / 我承接」进入**：publisher、下属专项、`source_id`、阶段责任人四条来源对它一律不成立；派发时父阶段的 `who/whoAt` 清空，所以原责任人不会从「我负责某段」再看到父任务一次。反例：e2e「派发人自己的列表里没有这条子专项」「责任人那边只多出这一条子专项」。
-- **透视一层**：父任务 `state` 的阶段上挂 `child` 摘要（`id/title/status/intakeStatus/progress/ownerNo/assigneeNo/start/end`），不含子任务的 `stages`；子任务行对派发人不可见，因此拿不到二级阶段，也拿不到三级。
+- **透视一层**（0.16.0 修订）：父任务 `state` 的阶段上挂 `child` 摘要（`id/title/status/intakeStatus/progress/ownerNo/assigneeNo/start/end/stages`）。`stages` 是子专项自己的阶段节点（只读），**这些节点不再带 `child`**——所以上级能看到「下属把这件事拆成了几步」，看不到下属又派给了谁；子任务行对派发人不可见，也拿不到三级。
 - **深度封顶**：新任务深度 = 父深度 + 1，> 3 整次拒绝（「子专项最多三层：这条已经是第三级，不能再往下派」）；判定在 `dispatchTask`，不只在界面。
 - `INV-5 一级阶段行的一步派发只允许落在「未完成、未拆过的一级阶段」上`。拒绝点：`dispatchTask` 的 `topStageId/topIndex` 分支，逐条给可读原因——非 `owner_no`（只有承接人能派）、`taskDepth+1 > 3`（三层封顶同一句）、找不到阶段、目标 `pid` 非空（「这个入口只给一级阶段用」）、该一级阶段已完成、该一级阶段已有子阶段或已有子专项（「已经拆成子任务」）、`who` 为空、目标人不在花名册或未登录、任务类型不是 `assign/special`。落点仍是二级节点，一级阶段不存 `who`。反例：e2e 9.9b 六条直调拒收 + 第三级 `topStageId` 拒收。
 - `INV-6 自动子段的撤回必须可回到「未拆、可派」`：一级行派发生成的节点带 `auto=1`；`undispatch` 删掉 pending 子专项后，若该节点 `auto` 为真则连同节点一起从 `stages` 移除，一级行恢复「谁做」；手动节点没有 `auto`，仍保留并把 `who` 还原。拒绝点：非 owner / 该段没有 pending 子专项 / 已接收；撤回后拿已移除的自动段 `id` 再派 → 「找不到这一段」。反例：e2e 9.9b「撤回后入口恢复 + 再派同一人 + 换人 + 旧 id 被拒」。
@@ -59,3 +61,4 @@ paths: server.js
 | TASK-20261117-admin-fixed-password | 见 git | — | 管理账号初始口令固定 `123456`：`must_change=1` 时启动幂等对齐并打印固定口令；`must_change=0` 时启动不写库、不打印，重启保留用户改后的密码 |
 | TASK-20261118-temp-done-date | 见 git | — | `/api/sync` 对无阶段任务维护 `done_at`（完成写当天、取消完成清空、重复完成保留）；导出第 14 列无阶段任务改读 `task.done_at`，存量留空 |
 | TASK-20261118-stage-overlap-and-create-who | 见 git | — | 0.15.0：按用户口径删除「同层阶段不得相交」（INV-1）——并行任务允许同时段各干一段，前后端都不再拒绝/提示；新增「单段结束早于开始」服务端拒绝点；INV-2/INV-3 保持（子段落父窗口、周期=包络 min→max）；发布弹窗/添加阶段/加子任务三处选人后复用既有 dispatch 通道派成待接收 |
+| TASK-20261118-perspective-export-range | 见 git | — | 0.16.0：`stages[].child` 增加子专项阶段计划（一层，只读，不带下一层 child）；导出支持 `from/to/preview`，相交即整段、按段过滤、不重复、`from>to` 400 |

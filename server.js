@@ -469,15 +469,22 @@ function taskProgressOf(row, guard, childMap) {
   }
   return row.status === 'done' ? 100 : row.status === 'doing' ? 50 : 0;
 }
-/* 挂给父阶段的摘要：只有下一层的状态与进度，不带子任务的 stages。
-   「上级最多透视一层」就落在这里——想多看一层也没有字段可看。 */
+/* 挂给父阶段的摘要：带上下属自己的阶段计划（只读）。
+   「上级最多透视一层」就落在这里：给的是子专项的 stages 原始节点，不再给它们的 child，
+   所以上级能看到「李明把这件事拆成了哪几步」，但看不到李明再往下派给了谁。 */
 function childSummaryOf(c, childMap) {
+  const plan = parseStages(c.stages).filter(Boolean).map(s => ({
+    id: s.id || '', pid: s.pid || null, name: s.name || '',
+    start: s.start || s.date || '', end: s.end || s.date || s.date || '',
+    done: !!s.done
+  }));
   return {
     id: c.id, title: c.title, status: c.status || 'todo',
     intakeStatus: c.intake_status || null,
     progress: taskProgressOf(c, false, childMap),
     ownerNo: c.owner_no, assigneeNo: c.assignee_no,
-    start: c.start_date || '', end: c.end_date || ''
+    start: c.start_date || '', end: c.end_date || '',
+    stages: plan
   };
 }
 /* 父阶段读侧视图：派出去的段，完成态直接取子专项，绝不读 JSON 里那份。
@@ -1898,8 +1905,22 @@ function localIso(d) {
 /* 范围（定义域）严格按 Spec §4.1：只要我直接负责或已承接的常规/专项/临时。
    临时任务 owner 就是我（stage_ref 派生的副本也是），无阶段，整条占一行、阶段列留空。
    不含 type='assign'（我发布、别人还没接）、我只作为知情人的、我负责某一段但任务不在我名下的。 */
-function exportTasksCsv(meNo) {
+function exportTasksCsv(meNo, from, to) {
   const me = getEmp(meNo);
+  const hasRange = !!(from || to);
+  /* 时间段口径（0.16.0）：
+     - 空区间 = 全部，不加任何过滤；
+     - 无阶段任务按任务起止判断，有阶段任务按每段的起止判断；
+     - 相交就整段导出，不裁剪日期——裁剪会让人以为阶段真的改短了；
+     - 有阶段的任务只导出相交的段，否则「筛完丢行」；任务级列只在第一条输出行上（R2），
+       所以不会重复行；没有任何段相交就整条不导出；
+     - 没填日期的任务在设了范围时无法证明相交，不导出（在规格里写死）。 */
+  const lo = from || '0000-01-01', hi = to || '9999-12-31';
+  const hit = (a, b) => {
+    const s = a || b, e = b || a;
+    if (!s) return !hasRange;
+    return !(e < lo || s > hi);
+  };
   const catName = {};
   for (const c of db.prepare('SELECT id,name FROM cat WHERE owner_no=?').all(meNo)) catName[c.id] = c.name;
   const rows = db.prepare(`SELECT * FROM task
@@ -1907,12 +1928,16 @@ function exportTasksCsv(meNo) {
         AND (assignee_no IS NULL OR assignee_no='' OR assignee_no=?)
       ORDER BY start_date, id`).all(meNo, meNo);
 
+  /* 文件头固定 3 行注释 + 表头在第 4 行（既有导入方与 e2e 都按这个行号读）。
+     时间范围并到「导出时间」这一行，不再新增注释行——加一行会让第 4 行变成注释，
+     按行号读表头的消费者会拿到 1 列。 */
   const lines = [
     '# cadence-tasks v1',
     `# 导出人：${meNo} ${me ? me.name : ''}`,
-    `# 导出时间：${localIso(new Date())}`,
+    `# 导出时间：${localIso(new Date())}${hasRange ? ` · 时间范围：${from || '不限'} → ${to || '不限'}` : ''}`,
     csvRow(EXPORT_COLUMNS)
   ];
+  let outTasks = 0, outRows = 0;
 
   for (const r of rows) {
     /* 规则实例的步骤没有 id（ensureInstances 只给 name/plan/date/done）。
@@ -1953,10 +1978,18 @@ function exportTasksCsv(meNo) {
        混进 taskCells 会整体前移两列，按列名/列号读都会错位。 */
     const parentCells = [r.parent_task_id || '', r.parent_stage_id || ''];
     if (!stages.length) {
+      if (hasRange && !hit(r.start_date, r.end_date)) continue;
+      outTasks++; outRows++;
       lines.push(csvRow([...taskCells, '', '', '', '', '', '', '', '', ...parentCells]));
       continue;
     }
-    stages.forEach((s, i) => {
+    /* 只导出与被选区间相交的段：整段保留原日期，不裁剪；一段都不相交就整条跳过 */
+    const use = hasRange
+      ? stages.filter(s => hit(s.start || s.date, s.end || s.date))
+      : stages;
+    if (!use.length) continue;
+    outTasks++;
+    use.forEach((s, i) => {
       /* 规则实例的步骤只有 date（当天完成），没有起止区间——前端也是这么兜底的
          （app.js 里 dayOf = s[k] || s.date），导出沿用同一口径，免得出现有名字没日期的空行。 */
       const c = s.id ? children[s.id] : null;
@@ -1966,12 +1999,13 @@ function exportTasksCsv(meNo) {
         stageDone(s) ? '1' : '0', stageDoneAt(s), s.pid || ''
       ];
       /* 续行规则 R2：任务级列只在首行有值，后续行必须留空 */
+      outRows++;
       lines.push(csvRow(i === 0
         ? [...taskCells, ...stageCells, ...parentCells]
         : [...Array(taskCells.length).fill(''), ...stageCells, '', '']));
     });
   }
-  return '\uFEFF' + lines.join('\r\n') + '\r\n';
+  return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', rows: outRows, tasks: outTasks };
 }
 
 /* ============ HTTP ============ */
@@ -2203,10 +2237,24 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true, msg: `已把 ${target} 的密码重置为工号` });
     }
 
-    /* 导出：只导当前会话这个人的任务，接口不带参数，也就没有「导别人」的口子 */
+    /* 导出：只导当前会话这个人的任务；可选 from/to 时间范围（0.16.0），
+       preview=1 只回行数/任务数，供导出弹窗在真正下载前预览 */
     if (p === '/api/export/tasks.csv' && req.method === 'GET') {
-      const csv = exportTasksCsv(me);
-      const buf = Buffer.from(csv, 'utf8');
+      const q = new URL(req.url, 'http://localhost').searchParams;
+      const isoDate = v => {
+        const s = String(v || '').trim();
+        if (!s) return '';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(parse(s).getTime())) return null;
+        return s;
+      };
+      const from = isoDate(q.get('from')), to = isoDate(q.get('to'));
+      if (from === null || to === null) return sendJSON(res, 400, { ok: false, msg: '时间范围要用 YYYY-MM-DD' });
+      if (from && to && from > to) return sendJSON(res, 400, { ok: false, msg: '开始日不能晚于结束日' });
+      const out = exportTasksCsv(me, from, to);
+      if (q.get('preview')) {
+        return sendJSON(res, 200, { ok: true, rows: out.rows, tasks: out.tasks, from, to });
+      }
+      const buf = Buffer.from(out.csv, 'utf8');
       const day = todayStr().replace(/-/g, '');
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
@@ -2214,7 +2262,7 @@ const server = http.createServer(async (req, res) => {
         'Content-Disposition': `attachment; filename="cadence-tasks-${me}-${day}.csv"`,
         'Cache-Control': 'no-store'
       });
-      logOp(me, 'export', 'tasks.csv', ip);
+      logOp(me, 'export', `tasks.csv${from || to ? ` ${from || ''}~${to || ''}` : ''}`, ip);
       return res.end(buf);
     }
 

@@ -42,6 +42,23 @@ const dbAll = (sql, ...p) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* 日期加减：统一走 UTC，避免本地时区把日期推前一天 */
 const addDaysStr = (d, n) => new Date(new Date(d + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
+/* CSV 行切分：带引号时逗号不拆、两个引号还原成一个。放在顶层是因为导出断言在 9.9e 就要用，
+   而定义在后面的 const 在那一刻还处于 TDZ，运行到那里只会抛 ReferenceError。 */
+const csvSplit = (line) => {
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+};
 
 const results = [];
 function check(name, ok, info = '') {
@@ -2239,8 +2256,12 @@ async function main() {
     const pF2 = (pFlow.stages || []).find(s => s.id === 'f2') || {};
     check('派发人自己的列表里没有这条子专项：同一条活不会出现两次',
       !(dis.tasks || []).some(t => t.id === childId('f2')), '可见任务 ' + (dis.tasks || []).length);
-    check('父阶段挂的是摘要：待接收 + 进度 0，且不含子任务的 stages',
-      !!pF2.child && pF2.child.intakeStatus === 'pending' && pF2.child.progress === 0 && !('stages' in pF2.child),
+    /* 0.16.0：摘要带上「下属自己的阶段计划」（上级可见一层），但只到这一层，
+       计划节点上不能再挂 child；待接收时他还没拆，stages 是空的。 */
+    check('父阶段挂的是摘要：待接收 + 进度 0；带下属阶段计划（只一层，节点不再挂 child）',
+      !!pF2.child && pF2.child.intakeStatus === 'pending' && pF2.child.progress === 0
+        && Array.isArray(pF2.child.stages) && pF2.child.stages.length === 0
+        && pF2.child.stages.every(s => !('child' in s)),
       JSON.stringify(pF2.child));
 
     const rec = await stateAs(SUBW);
@@ -2601,6 +2622,135 @@ async function main() {
     await push('1012', { del: { tasks: [ADDS, addStageRow && addStageRow.id, subRow && subRow.id].filter(Boolean) } });
     await push('1003', { del: { tasks: [subRow && subRow.id].filter(Boolean) } });
     await push('1004', { del: { tasks: [addStageRow && addStageRow.id].filter(Boolean) } });
+
+    /* ---------- 9.9d 上级透视：看得到下属的负责人与阶段计划，但只读、只一层 ----------
+       用户口径：上级最多透视一层。以前只有「由 李明 负责 · 50%」，等于没透视。 */
+    const PERS = 't_e2e_persp', PERS_C = 't_e2e_persp_child', PERS_G = 't_e2e_persp_grand';
+    await push('1012', { del: { tasks: [PERS, PERS_C, PERS_G] } });
+    await push('1002', { del: { tasks: [PERS_C, PERS_G] } });
+    await push('1003', { del: { tasks: [PERS_G] } });
+    /* 父子关系与 intake 只能由服务端建，夹具直接落库（仍跑在 _dev/.test-db 副本上）。
+       形状照真实链路来：一级段下面有一条同名自动子段，子专项挂在子段上（不是直接挂一级段），
+       用户看到的就是「一级段 · 含 1 个子任务」，责任人写在子段那一行。 */
+    execFileSync(process.execPath, ['--no-warnings', '-e',
+      `const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(DB)});
+       const now=new Date().toISOString();
+       const ins=db.prepare("INSERT OR REPLACE INTO task(id,owner_no,publisher_no,assignee_no,type,title,start_date,end_date,due_date,status,stages,intake_status,parent_task_id,parent_stage_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+       ins.run(${JSON.stringify(PERS)},'1012','1012','1012','special','E2E透视：父任务',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'ps1', pid: null, name: '一、指标口径', start: d(0), end: d(6), done: false }, { id: 'ps1a', pid: 'ps1', name: '一、指标口径', start: d(0), end: d(6), done: false }]))},null,null,null,now,now);
+       ins.run(${JSON.stringify(PERS_C)},'1002','1012','1002','special','E2E透视：子专项',${JSON.stringify(d(0))},${JSON.stringify(d(6))},${JSON.stringify(d(6))},'doing',${JSON.stringify(JSON.stringify([{ id: 'cs1', pid: null, name: '下属阶段一：对齐口径', start: d(0), end: d(2), done: true }, { id: 'cs2', pid: null, name: '下属阶段二：出数', start: d(3), end: d(6), done: false }]))},'accepted',${JSON.stringify(PERS)},'ps1a',now,now);
+       ins.run(${JSON.stringify(PERS_G)},'1003','1002','1003','special','三层隐藏专项',${JSON.stringify(d(0))},${JSON.stringify(d(1))},${JSON.stringify(d(1))},'todo',${JSON.stringify(JSON.stringify([{ id: 'gs1', pid: null, name: '三层秘密阶段', start: d(0), end: d(1), done: false }]))},'accepted',${JSON.stringify(PERS_C)},'cs1',now,now);
+       db.prepare('UPDATE meta SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT) WHERE k=?').run('rev');`],
+      { cwd: ROOT_DIR });
+    await whoAmI('1012');
+    await js(`openTaskPage('${PERS}');'ok'`); await sleep(900);
+    const persBefore = await js(`(function(){
+      const v=document.querySelector('#view');
+      return { text:v.innerText, whoRo:v.querySelectorAll('.who-ro').length,
+        editEntry:v.querySelectorAll('#view [data-act="stage-who-top"]').length };
+    })()`);
+    check('上级详情：一级段只读显示下属负责人，且没有可编辑的「谁做」入口',
+      persBefore.text.includes('李明') && persBefore.text.includes('承接') && persBefore.whoRo >= 1
+        && persBefore.editEntry === 0,
+      JSON.stringify({ whoRo: persBefore.whoRo, edit: persBefore.editEntry }));
+    const persOpen = await js(`(async()=>{
+      const b=document.querySelector('[data-act="child-plan"]');
+      if(!b) return {err:'没有展开下属计划的入口'};
+      b.click(); await new Promise(r=>setTimeout(r,300));
+      const box=document.querySelector('.child-plan');
+      if(!box) return {err:'没有下属计划块'};
+      return { text:box.innerText, hidden:box.hidden,
+        edits:box.querySelectorAll('[data-act="stage-edit"],[data-act="stage-del"],[data-act="stage-sub"],[data-act="stage-who"],[data-act="stage-whotop"],[data-act="stage-who-top"]').length,
+        selects:box.querySelectorAll('select').length };
+    })()`);
+    check('展开后能看到下属自己的阶段名称与状态（只读，块内无改/删/派发/谁做）',
+      !persOpen.err && !persOpen.hidden && persOpen.text.includes('下属阶段一：对齐口径')
+        && persOpen.text.includes('已完成') && persOpen.text.includes('下属阶段二：出数')
+        && persOpen.text.includes('进行中') && persOpen.edits === 0 && persOpen.selects === 0,
+      JSON.stringify(persOpen));
+    check('透视只到一层：第三层专项的名称与阶段都不出现',
+      !persBefore.text.includes('三层隐藏专项') && !persBefore.text.includes('三层秘密阶段')
+        && !(persOpen.text || '').includes('三层秘密阶段'),
+      JSON.stringify({ leaf: persBefore.text.includes('三层秘密阶段') }));
+    await push('1012', { del: { tasks: [PERS, PERS_C, PERS_G] } });
+    await push('1002', { del: { tasks: [PERS_C, PERS_G] } });
+    await push('1003', { del: { tasks: [PERS_G] } });
+
+    /* ---------- 9.9e 导出时间范围 ----------
+       口径：无阶段按任务起止、有阶段按每段起止；相交即整段导出（不裁剪）；
+       有阶段任务只导相交的段；任务级列只在首行（R2），所以不会重复。 */
+    const EXP_SPAN = 't_e2e_exp_span', EXP_STG = 't_e2e_exp_stages';
+    await push('1012', { del: { tasks: [EXP_SPAN, EXP_STG] } });
+    await pushJ('1012', { tasks: [
+      { id: EXP_SPAN, type: 'temp', title: 'E2E导出：跨界临时', ownerNo: '1012', assigneeNo: '1012',
+        start: '2026-11-20', end: '2026-11-22', status: 'todo' },
+      { id: EXP_STG, type: 'special', title: 'E2E导出：两段专项', ownerNo: '1012', assigneeNo: '1012',
+        start: '2026-11-01', end: '2026-11-12', dueDate: '2026-11-12', status: 'todo',
+        stages: [
+          { id: 'exs1', pid: null, name: 'A段', start: '2026-11-01', end: '2026-11-05', done: false },
+          { id: 'exs2', pid: null, name: 'B段', start: '2026-11-10', end: '2026-11-12', done: false }
+        ] }
+    ] });
+    const csvOf = async (qs) => {
+      const r = await fetch(BASE + '/api/export/tasks.csv' + qs, { headers: { Cookie: 'sid=' + (await sidOf('1012')) } });
+      return { status: r.status, text: await r.text() };
+    };
+    /* 文件头是 BOM + 几行 # 注释 + 表头：先剥 BOM，再丢注释行，最后丢表头 */
+    const dataRows = t => t.replace(/^\uFEFF/, '').split('\r\n')
+      .filter(l => l && !l.startsWith('#')).slice(1).map(csvSplit);
+    const e1 = await csvOf('?from=2026-11-21&to=2026-11-21');
+    const r1 = dataRows(e1.text);
+    check('导出范围：无阶段任务按任务起止判断，跨在区间里能导出',
+      e1.status === 200 && r1.some(r => r[0] === EXP_SPAN) && !r1.some(r => r[0] === EXP_STG),
+      JSON.stringify({ span: r1.filter(r => r[0] === EXP_SPAN).length, stg: r1.filter(r => r[0] === EXP_STG).length }));
+    const e2 = await csvOf('?from=2026-11-06&to=2026-11-09');
+    check('导出范围：整条落在区间外时不出现（有阶段任务按段判断）',
+      !dataRows(e2.text).some(r => r[0] === EXP_STG || r[0] === EXP_SPAN),
+      JSON.stringify({ rows: dataRows(e2.text).length }));
+    const e3 = await csvOf('?from=2026-11-11&to=2026-11-11');
+    /* 列序冻结：17 阶段编号 / 18 阶段名称 / 19 阶段开始 / 20 阶段结束 */
+    const r3 = dataRows(e3.text).filter(r => r[18] === 'A段' || r[18] === 'B段');
+    check('导出范围：跨界的段整段导出，日期不裁剪（11-10 → 11-12 原样）',
+      r3.length === 1 && r3[0][18] === 'B段' && r3[0][19] === '2026-11-10' && r3[0][20] === '2026-11-12',
+      JSON.stringify(r3.map(r => [r[17], r[18], r[19], r[20]])));
+    const e4 = await csvOf('?from=2026-11-04&to=2026-11-10');
+    const r4 = dataRows(e4.text);
+    const seg4 = r4.filter(r => r[18] === 'A段' || r[18] === 'B段');
+    check('导出范围：两段都相交时各导一行，任务级列只出现一次（无重复行）',
+      seg4.length === 2 && r4.filter(r => r[0] === EXP_STG).length === 1 && r4.filter(r => r[0] === EXP_SPAN).length === 0,
+      JSON.stringify({ segs: seg4.map(r => r[18]), taskIdRows: r4.filter(r => r[0] === EXP_STG).length }));
+    const pv = await apiAs('1012', '/api/export/tasks.csv?preview=1&from=2026-11-04&to=2026-11-10');
+    check('导出预览：返回同一口径的行数与任务数',
+      !!pv.json && pv.json.ok && pv.json.rows === r4.length && pv.json.tasks === new Set(r4.filter(r => r[0]).map(r => r[0])).size,
+      JSON.stringify(pv.json));
+    const e5 = await csvOf('?from=2026-11-12&to=2026-11-01');
+    check('导出范围：开始日晚于结束日被拒（400），不返回半截 CSV', e5.status === 400, 'status=' + e5.status);
+    await push('1012', { del: { tasks: [EXP_SPAN, EXP_STG] } });
+
+    /* 导出弹窗：起止日期 + 「全部」复位 + 行数预览 */
+    await whoAmI('1012');
+    await js(`(function(){view='assign';render();return 1})()`); await sleep(400);
+    await js(`document.querySelector('#exportBtn').click()`); await sleep(700);
+    const expUi = await js(`(function(){
+      const w=document.querySelector('#modalWrap');
+      return { open:w.classList.contains('show'), from:!!document.querySelector('#expFrom'),
+        to:!!document.querySelector('#expTo'), all:!!document.querySelector('[data-act="exp-all"]'),
+        preview:(document.querySelector('#expPreview')||{}).textContent||'' };
+    })()`);
+    check('导出弹窗：默认「全部」，有起止日期、复位按钮和行数预览',
+      expUi.open && expUi.from && expUi.to && expUi.all && expUi.preview.includes('（全部）'),
+      JSON.stringify(expUi));
+    await js(`(function(){
+      const f=document.querySelector('#expFrom'), t=document.querySelector('#expTo');
+      f.value='2026-11-01'; t.value='2026-11-12';
+      f.dispatchEvent(new Event('change',{bubbles:true})); return 1;
+    })()`);
+    await sleep(800);
+    const expPv = await js(`(document.querySelector('#expPreview')||{}).textContent||''`);
+    check('导出弹窗：改日期后预览跟着更新为区间口径', /将导出 \d+ 行 · \d+ 条任务/.test(expPv) && expPv.includes('2026-11-01'), expPv);
+    await js(`document.querySelector('[data-act="exp-all"]').click()`); await sleep(700);
+    const expAll = await js(`(document.querySelector('#expPreview')||{}).textContent||''`);
+    check('导出弹窗：「全部」复位清空日期并回到全量统计', expAll.includes('（全部）'), expAll);
+    await js(`document.querySelector('#modal [data-act="modal-cancel"]').click()`); await sleep(300);
 
     /* ---------- 9.10 界面上的「谁做」：真拨那个下拉，不是调接口 ----------
        教训：上一版 127 条断言全绿，而下拉拨完什么都不发生——
@@ -3351,20 +3501,6 @@ async function main() {
   /* 这一节全部走 Node 侧带 cookie 调用：
      ① 浏览器里的 fetch 没法换身份（HttpOnly 的 sid 读不到也改不了）；
      ② 故意的 401/403 会污染「无失败请求」那条断言。 */
-  const csvSplit = (line) => {
-    const out = []; let cur = ''; let q = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (q) {
-        if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
-        else cur += c;
-      } else if (c === '"') q = true;
-      else if (c === ',') { out.push(cur); cur = ''; }
-      else cur += c;
-    }
-    out.push(cur);
-    return out;
-  };
 
   const anon = await fetch(BASE + '/api/state');
   check('不带会话调 /api/state → 401', anon.status === 401, String(anon.status));

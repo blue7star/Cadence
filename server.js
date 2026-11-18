@@ -708,9 +708,9 @@ function normalizeStages(raw, type) {
 
 /* 阶段区间的服务端判定。前端那套提示是「提前说」，这里才是判定者：
    绕过界面直接调 /api/sync 一样拒收（那是这次事故补上的位置）。
-   口径：闭区间，首尾相接（前一段到 11-06、后一段 11-07 起）合法；
-   同层不允许相交；子阶段必须落在父阶段窗口里；任务周期必须等于一级阶段的包络。
-   只判「这次写入改变了阶段区间」的情况：存量里的历史重叠不该挡住改标题这类无关编辑。
+   口径：闭区间；同层允许重叠（并行任务就是两个人同一时段各干一段，不是错误）；
+   单段结束不得早于开始；子阶段必须落在父阶段窗口里；任务周期必须等于一级阶段的包络。
+   只判「这次写入改变了阶段区间」的情况：存量里的历史数据不该挡住改标题这类无关编辑。
    返回一句可读原因；没问题就把任务周期收敛到包络上（顺带修掉「加段不改周期」的老毛病）。 */
 function stageIv(s) {
   const a = s.start || s.date || '';
@@ -737,27 +737,11 @@ function checkStageIntervals(stages, prev, type, t) {
   const nm = s => `「${s.name || '未命名'}」`;
   const ivs = stages.map(stageIv);
 
-  /* ① 同层区间不相交（含首尾同日；差一天算合法） */
-  const layers = new Map();
-  stages.forEach((s, i) => {
-    const k = s.pid || '';
-    if (!layers.has(k)) layers.set(k, []);
-    layers.get(k).push(i);
-  });
-  for (const idxs of layers.values()) {
-    for (let x = 0; x < idxs.length; x++) {
-      for (let y = x + 1; y < idxs.length; y++) {
-        const i = idxs[x], j = idxs[y];
-        if (!ivs[i] || !ivs[j]) continue;
-        if (ivs[i].a <= ivs[j].b && ivs[j].a <= ivs[i].b) {
-          const p = ivs[i].a <= ivs[j].a ? i : j;
-          const q = p === i ? j : i;
-          const s1 = ivs[p].a > ivs[q].a ? ivs[p].a : ivs[q].a;
-          const s2 = ivs[p].b < ivs[q].b ? ivs[p].b : ivs[q].b;
-          return `${nm(stages[p])}（${ivs[p].a} → ${ivs[p].b}）和${nm(stages[q])}（${ivs[q].a} → ${ivs[q].b}）`
-            + `时间重叠（${s1 === s2 ? s1 : `${s1} 到 ${s2}`}）：同一层两段不能占同一天，把其中一段挪开再存`;
-        }
-      }
+  /* ① 单段结束不得早于开始。同层重叠是允许的（并行），只有「倒着写」才是真错误。 */
+  for (let i = 0; i < stages.length; i++) {
+    const iv = ivs[i];
+    if (iv && iv.b < iv.a) {
+      return `${nm(stages[i])}（${iv.a} → ${iv.b}）结束早于开始：把结束日改到开始日之后`;
     }
   }
 

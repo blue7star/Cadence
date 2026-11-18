@@ -203,12 +203,14 @@ function signatures() {
   return out;
 }
 
-/* 保存：算增量 → 推服务端 → 拉回最新状态 */
+/* 保存：算增量 → 推服务端 → 拉回最新状态。
+   返回 Promise：需要「存完再接着做下一步」的入口（例如建完阶段立刻派发）可以 await。 */
 function save() {
-  persist().catch(e => {
+  return persist().catch(e => {
     console.error(e);
     setSync('err', '保存失败');
     toast('保存失败：' + e.message);
+    throw e;
   });
 }
 
@@ -516,14 +518,6 @@ function windowMsg(stages, kid, p) {
     return `「${kid.name || '这个子任务'}」从 ${fmt(ks)} 起，可第 ${no} 段「${p.name || ''}」是 ${dateSpan(p)}；把这一段提前到 ${fmt(ks)}，或者把它挪到 ${fmt(ps)} 之后`;
   return `「${kid.name || '这个子任务'}」排到 ${fmt(ke)}，可第 ${no} 段「${p.name || ''}」只到 ${fmt(pe)}；把这一段延长到 ${fmt(ke)}，或者把它收到 ${fmt(pe)} 之前`;
 }
-/* 同层相邻：子任务只和同一父下的兄弟比顺序，顶层阶段只和顶层比。
-   按数组下标直接取上一条会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。 */
-function siblingsOf(stages, si) {
-  const s = stages[si];
-  if (!s) return [];
-  const pid = s.pid || null;
-  return stages.map((x, i) => ({ x, i })).filter(o => (o.x.pid || null) === pid);
-}
 const dayOf = (s, k) => (s && (s[k] || s.date)) || '';
 const topNo = (stages, p) => stages.filter(x => !x.pid).indexOf(p) + 1;
 /* 阶段树的展示顺序：每个一级阶段后面紧跟它自己的子任务，编号 1 / 1.1 / 2 / 2.1。
@@ -563,35 +557,15 @@ const dateSpan = s => {
   return a ? (a === b ? fmt(a) : `${fmt(a)}–${fmt(b)}`) : '';
 };
 
-/* 同层重叠时的说法：两段都点名、日期带年、给出重叠区间，最后一句告诉人怎么改。
-   以前这里只报「前一段占到某天」，年份被短格式抹掉，跨年时看着像同一年撞上了。 */
-function overlapMsg(stages, a, b, pid) {
-  const as = dayOf(a, 'start') || dayOf(a, 'end');
-  const ae = dayOf(a, 'end') || dayOf(a, 'start');
-  const bs = dayOf(b, 'start') || dayOf(b, 'end');
-  const be = dayOf(b, 'end') || dayOf(b, 'start');
-  const no = s => (s.pid ? '子任务' : `第 ${topNo(stages, s)} 段`);
-  const who = s => (s.who ? `（${nameOf(s.who)} 做）` : '');
-  const os = as > bs ? as : bs, oe = ae < be ? ae : be;
-  const span = !os ? '' : (os === oe ? fmtY(os) : `${fmtY(os)} 到 ${fmtY(oe)}`);
-  let tail = '';
-  if (pid) {
-    const p = stages.find(x => x.id === pid);
-    if (p) tail = `；第 ${topNo(stages, p)} 段「${p.name || ''}」的窗口是 ${fmtY(dayOf(p, 'start'))} → ${fmtY(dayOf(p, 'end'))}`;
-  }
-  return `${no(a)}「${a.name || '未命名'}」${who(a)}（${fmtY(as)} → ${fmtY(ae)}）`
-    + `和${no(b)}「${b.name || '未命名'}」${who(b)}（${fmtY(bs)} → ${fmtY(be)}）压上了`
-    + `${span ? `：${span} 同时算在两段里` : ''}。把其中一段挪开再存${tail}`;
-}
-
-/* ============ 阶段校验：唯一入口 ============
+/* 阶段校验：唯一入口 ============
    这套规则以前散在 dragCheck 和 stage-save 里，五个写入口（拖拽改期 / 阶段表单 /
    加子任务 / 加顶层阶段 / 删节点）各自只记住了一部分。后果是「没校验的入口能造脏数据，
    有校验的入口改不动」——同一个阶段下两条同名同期的子任务就是这么进来的。
    现在所有入口一律：先把改完之后的完整 stages 算出来（父阶段回算过），交到这里，
    通过了才写回 t.stages。返回 {ok, code, msg}，msg 直接给人看。
    软约束（不排过去、不排周末）留在 dragCheck：那是拖拽的手势才有的问题，
-   在表单里填过去的日期是正常操作，不该报错。 */
+   在表单里填过去的日期是正常操作，不该报错。
+   同层时间重叠是允许的：并行任务就是两个人同一时段各干一段，不是错误，也不弹提示。 */
 function validateStages(t, next, ctx) {
   ctx = ctx || {};
   const prev = (t && t.stages) || [];
@@ -599,10 +573,10 @@ function validateStages(t, next, ctx) {
   for (const s of prev) if (s && s.id) was[s.id] = s;
   const bad = (code, msg) => ({ ok: false, code, msg });
 
-  /* 只拦「这次改动新造成的问题」。库里可能早就躺着违规数据（比如某次老版本写进去的两段重叠），
+  /* 只拦「这次改动新造成的问题」。库里可能早就躺着历史数据（比如某次老版本写进去的两段重叠），
      拿它去拦一个与之无关的改名/改期，人看到的是「我什么都没动，你说我错了」，而且怎么改都过不去。
-     所以先算清楚这次到底动了谁：新增的、起止变了的、换了父的。判断重叠等约束时，只有涉及到
-     这些节点的配对才算数——存量问题留给「数据体检」，不在这儿当路障。 */
+     所以先算清楚这次到底动了谁：新增的、起止变了的、换了父的。子段越界等约束只判涉及到
+     这些节点的配对——存量问题留给「数据体检」，不在这儿当路障。 */
   const changed = new Set();
   for (const s of next) {
     const o = s.id && was[s.id];
@@ -651,36 +625,8 @@ function validateStages(t, next, ctx) {
     if (dup) return bad('dup', `这个${pid ? '阶段' : '任务'}下面已经有「${ctx.newName}」了；是想改那一条，还是换个不同的名字？`);
   }
 
-  /* 5. 同层区间不许相交。跟数组顺序无关——新增的一段可能落在中间，也可能比第一段还早；
-        按「数组相邻两项」判会拿最后一段当邻居，跨年时必然误报。
-        闭区间 [start, end]，缺 end 用 start；首尾相接（前一段到 11-06、后一段 11-07 起）合法。
-        同一段自身不参与配对（按 id 各算一次）。
-        依然只算涉及到「这次动过的节点」的配对：存量里的历史重叠不挡住无关编辑。 */
-  const ivOf = s => {
-    const a = dayOf(s, 'start') || dayOf(s, 'end');
-    const b = dayOf(s, 'end') || dayOf(s, 'start');
-    return (a && b) ? { a, b } : null;
-  };
-  const groups = new Map();
-  for (const s of next) {
-    const k = s.pid || '';
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(s);
-  }
-  for (const [pid, list] of groups) {
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const A = list[i], B = list[j];
-        if (!isChanged(A) && !isChanged(B)) continue;
-        const x = ivOf(A), y = ivOf(B);
-        if (!x || !y) continue;
-        if (x.a <= y.b && y.a <= x.b) {
-          const [p, q] = x.a <= y.a ? [A, B] : [B, A];
-          return bad('overlap', overlapMsg(next, p, q, pid));
-        }
-      }
-    }
-  }
+  /* 5. 同层时间重叠放行：并行任务就是两个人同一时段各干一段，这是正常排法。
+        这里只保留了「结束不能早于开始」（第 1 条）与「子段落在父窗口内」（第 6 条）。 */
 
   /* 6. 子任务必须落在父阶段的窗口里。阶段时间是设定的，不会被撑开：
         排不下就说明该改阶段（明确的动作），而不是让阶段背地里变长。
@@ -1595,7 +1541,7 @@ function viewCalendar() {
         <div class="note" style="margin-top:12px">
           拖到某一天 = 改这一段的计划日期，不是把活交给别人：<br/>
           · 没拆阶段的活：整段一起平移，工期天数不变<br/>
-          · 专项 / 发布任务：拖的是当前这一个阶段，保持阶段长短，且不能压到前后阶段上<br/>
+          · 专项 / 发布任务：拖的是当前这一个阶段，保持阶段长短；同层阶段可以重叠（并行），但不能拖出所属阶段的窗口<br/>
           · 常规工作：只改这一次，规则本身不动，仍只能落在工作日
         </div>
       </div>
@@ -1949,9 +1895,11 @@ function taskDetailHTML(t) {
           <div class="row">
             <input type="date" id="sStart" value="${t.start}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
             <input type="date" id="sEnd" value="${t.end}" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px"/>
+            <span class="lbl2">谁做</span>
+            <select id="sWho" class="who-sel" title="选人即派：添加后会生成一条同名同起止的二级子阶段，等对方接收后生效；不选就是承接人自己做">${stageWhoOptions(t, '')}</select>
             <button class="btn primary sm" data-act="stage-add" data-id="${t.id}">添加</button>
           </div>
-          <div class="mini" style="margin-top:7px;line-height:1.5">改哪一段，点它右边的「改」；整段要别人做，直接在这一行选「谁做」；要拆成几段分别给不同的人，点「+ 子任务」。子任务只能再拆一层。</div>
+          <div class="mini" style="margin-top:7px;line-height:1.5">改哪一段，点它右边的「改」；整段要别人做，直接在那一行选「谁做」，保存后立即派给他；同一层阶段可以重叠（并行）。子任务只能再拆一层。</div>
         </div>` : ''}
       </div>`;
 
@@ -2410,10 +2358,10 @@ function taskModalBody(type, preset) {
     </div>
     <div class="form-col">
       <div class="sec-title">阶段与分工 <span class="mini">可留空，之后再补</span></div>
-      <div class="mini" style="margin:-4px 0 9px;line-height:1.55">按时间把这件事分成几段（阶段）；某一段要别人做，点那段的「+子」拆成子任务，选上谁做。</div>
+      <div class="mini" style="margin:-4px 0 9px;line-height:1.55">按时间把这件事分成几段（阶段）。某一段要别人做，直接在那一段的「谁做」里选人；同一层可以重叠，并行任务各干各的。</div>
       <div id="stageRows">${stageRowHTML(today, today)}</div>
       <button class="btn sm" data-act="mstage-add" style="width:100%">+ 添加阶段</button>
-      <div class="note" style="margin-top:10px">子任务选上人之后，还要点任务上的「派发」，对方才会在承接台收到；派发之前随便改，他那边什么都看不到。</div>
+      <div class="note" style="margin-top:10px">阶段行里选上「谁做」就是直接派出去：保存后会生成一条同名、同起止的二级子阶段，等对方在承接台接收后才生效；不选人就是承接人自己做。</div>
     </div>
   </div>`;
 }
@@ -2431,7 +2379,9 @@ function stageRowHTML(s, e, pid) {
     <div class="row2">
       <input type="date" class="sst" value="${s}"/>
       <input type="date" class="sen" value="${e}"/>
-      ${isSub ? `<span class="lbl2">谁做</span><select class="swho" title="这段由谁做；不选就是承接人自己做">${whoOptionsHTML(draftAssignee(), '')}</select>` : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
+      <span class="lbl2">谁做</span>
+      <select class="swho" title="${isSub ? '这段由谁做；不选就是承接人自己做' : '选人即派：保存后生成一条同名同起止的二级子阶段，等对方接收后生效；不选就是承接人自己做'}">${whoOptionsHTML(draftAssignee(), '')}</select>
+      ${isSub ? '' : `<button class="addsub" data-act="mstage-sub" title="在这个阶段下加子任务">+ 子任务</button>`}
       <button class="del" data-act="mstage-del" title="删除">✕</button>
     </div>
   </div>`;
@@ -2462,10 +2412,15 @@ function readStageRows(fallback) {
     const name = r.querySelector('.sname').value.trim();
     if (!name) return null;
     const st = r.querySelector('.sst').value || fallback;
-    let en = r.querySelector('.sen').value || st;
-    if (en < st) en = st;
+    /* 结束早于开始不在读的时候悄悄夹住：那会让下面的校验永远看不到这个错。
+       原样交出去，由 validateStages 第 1 条明确拒收。 */
+    const en = r.querySelector('.sen').value || st;
     const whoEl = r.querySelector('.swho');
-    return { id: r.dataset.tmp || uid('s'), pid: r.dataset.pid || null, name, start: st, end: en, done: false, who: whoEl ? (whoEl.value || null) : null };
+    const node = { id: r.dataset.tmp || uid('s'), pid: r.dataset.pid || null, name, start: st, end: en, done: false };
+    /* 一级阶段的「谁做」不是阶段字段（一级阶段不存 who）：保存后另走派发通道，
+       这里只留子任务的 who。 */
+    if (node.pid) node.who = whoEl ? (whoEl.value || null) : null;
+    return node;
   }).filter(Boolean);
   const tops = new Set(out.filter(x => !x.pid).map(x => x.id));
   out.forEach(x => { if (x.pid && !tops.has(x.pid)) x.pid = null; });
@@ -2476,13 +2431,29 @@ function openNewTask(type, preset) {
   /* 类型不再在弹窗里改，但「承接人决定它是什么」：
      派给别人 = 发布任务（等他接收），派给自己 = 一条专项（直接进我的专项工作）。
      两者其实是同一件事的两种归属，所以只留一个入口，别做两套几乎一样的表单。 */
-  openModal(t === 'assign' ? '发布任务' : `新建${TYPES[t].name}`, taskModalBody(t, preset), () => {
+  openModal(t === 'assign' ? '发布任务' : `新建${TYPES[t].name}`, taskModalBody(t, preset), async () => {
     const title = $('#f_title').value.trim();
     if (!title) { toast('先填任务名称'); return false; }
     const s = $('#f_start').value, e = $('#f_end').value || s;
     if (!s) { toast('请选择开始时间'); return false; }
     if (e < s) { toast('结束时间不能早于开始时间'); return false; }
+    /* 一级阶段行的「谁做」：保存后立刻派发（选人即派）。
+       一级阶段本身不落 who，这里先记 id → 人；子任务的 who 仍走阶段字段。 */
+    const topWho = [];
+    $$('#stageRows .mrow').forEach(r => {
+      if (r.dataset.pid) return;
+      const sel = r.querySelector('.swho');
+      const who = sel ? (sel.value || '') : '';
+      if (who) topWho.push({ id: r.dataset.tmp, who });
+    });
     const stages = readStageRows(s);
+    /* 既选了一级行「谁做」又手工加了子任务：选人会自动生成子任务，两条一起会撞。
+       先让人删掉一条，别等到服务端才报「已经拆成子任务」。 */
+    const conflict = topWho.find(p => stages.some(x => x.pid === p.id));
+    if (conflict) {
+      toast(`「${(stages.find(x => x.id === conflict.id) || {}).name || '这一段'}」既选了「谁做」又加了子任务：选人会自动生成子任务，先删掉手工加的那条`);
+      return false;
+    }
     /* 新建弹窗读回阶段树之后也走同一套校验：这里的「阶段」以前只重算父阶段并集，
        同层重叠、重名、超截止统统放过，等于绕开后面所有入口。 */
     const draft = { stages: [], type: t, dueDate: e };
@@ -2490,8 +2461,11 @@ function openNewTask(type, preset) {
     if (!vStage.ok) { toast(vStage.msg); return false; }
     /* 任务周期 = 一级阶段的包络：弹窗里阶段日期改了但起止没跟着改的话，
        存下去就是「任务 7月3日–11月6日，阶段却排到明年」——服务端会拒，这里先对齐。 */
-    const span = { start: s, end: e };
+    const span = { start: s, end: e, stages };
     restatTaskSpan(span);
+    const tStart = span.start || s, tEnd = span.end || e;
+    /* 总截止不能早于阶段包络（服务端 INV-3/INV-4）；弹窗里没收截止输入，取两者较大值 */
+    const dueVal = e > tEnd ? e : tEnd;
     const typeVal = t;
     const assigneeNo = canAssignOthers(typeVal) ? $('#f_assignee').value : S.me.no;
     /* 派给一个从没登录过工作台的人 = 白派：他收不到，任务躺在那里假装有进展。 */
@@ -2500,7 +2474,13 @@ function openNewTask(type, preset) {
       toast(`${e2 ? e2.name : '这个人'} 还没有登录过工作台，任务派过去他收不到。先让他登录一次，或者改派给别的同事。`);
       return false;
     }
-    /* 子任务责任人也一样要拦：他只在承接台收到，没有别的渠道 */
+    /* 责任人（一级行选的人、子任务选的人）也一样要拦：他只在承接台收到，没有别的渠道 */
+    for (const p of topWho) {
+      if (!empActivated(p.who)) {
+        toast(`${nameOf(p.who)} 还没有登录过工作台，这一段派过去他收不到。`);
+        return false;
+      }
+    }
     for (const st of stages) {
       if (!st.pid || !st.who) continue;
       if (!empActivated(st.who)) {
@@ -2511,12 +2491,13 @@ function openNewTask(type, preset) {
     const realType = (typeVal === 'assign' || typeVal === 'special')
       ? (assigneeNo === S.me.no ? 'special' : 'assign') : typeVal;
     const observers = realType === 'special' ? obsPicked.slice() : [];
+    const taskId = uid('t');
     S.tasks.push({
-      id: uid('t'), type: realType, title,
+      id: taskId, type: realType, title,
       ownerNo: S.me.no, publisherNo: S.me.no, assigneeNo,
-      dueDate: e,
+      dueDate: dueVal,
       assignee: assigneeNo === S.me.no ? '我' : nameOf(assigneeNo),
-      start: s, end: e, time: $('#f_time').value || '',
+      start: tStart, end: tEnd, time: $('#f_time').value || '',
       std: $('#f_std').value.trim(), status: 'todo',
       cat1: catInputVal('#modal', 'cat1'), cat2: catInputVal('#modal', 'cat2'),
       imp: Number($('#f_imp').value) || null, urg: Number($('#f_urg').value) || null,
@@ -2525,10 +2506,27 @@ function openNewTask(type, preset) {
       routineId: null, planDate: null, detached: false, observers
     });
     S.intake = buildIntake(); S.stageIntake = buildStageIntake(); S.members = buildMembers();
-    save(); render(); closeModal();
-    if (realType === 'assign') toast(`已发布给 ${nameOf(assigneeNo)}，等他在承接台接收`);
-    else if (typeVal === 'assign') toast('承接人是你自己，已放入你的专项工作');
-    else toast(observers.length ? `已创建：${title}（知情人 ${observers.length} 人）` : '已创建：' + title);
+    /* 先把任务存下去，再逐段派发：dispatch 要在库里找得到这条任务。
+       以前这里是 fire-and-forget 的 save()，紧接着调派发会撞「任务不存在」。 */
+    try { await persist(); } catch (err) { toast('保存失败：' + err.message); return false; }
+    let dispatched = 0, firstErr = '';
+    for (const p of topWho) {
+      try {
+        const r = await api('/api/task/dispatch', {
+          method: 'POST',
+          body: JSON.stringify({ me: S.me.no, id: taskId, topStageId: p.id, who: p.who })
+        });
+        if (r && r.ok) dispatched++;
+        else firstErr = firstErr || (r && r.msg) || '有一段没派出去';
+      } catch (err) { firstErr = firstErr || err.message; }
+    }
+    if (topWho.length) await refresh(true);
+    closeModal(); render();
+    let msg = realType === 'assign' ? `已发布给 ${nameOf(assigneeNo)}，等他在承接台接收`
+      : typeVal === 'assign' ? '承接人是你自己，已放入你的专项工作'
+        : observers.length ? `已创建：${title}（知情人 ${observers.length} 人）` : '已创建：' + title;
+    if (dispatched) msg += `；${dispatched} 段已派出，等对方接收后生效`;
+    toast(firstErr || msg);
   }, t === 'assign' ? '发布' : '创建');
   if (t !== 'temp') $('#modal').classList.add('wide');
   renumberStageRows();
@@ -2778,28 +2776,11 @@ function dragCheck(t, date, si) {
       }
       return { ok: true };
     }
-    /* 专项/发布任务的阶段是区间：整体平移，保持阶段长短，且不能压到前后阶段 */
+    /* 专项/发布任务的阶段是区间：整体平移，保持阶段长短。
+       同层重叠是允许的（并行任务同一时段各干一段），这里不再拦「压到前后段」；
+       真正要拦的只剩「子任务不能拖出父阶段窗口」和「不超过发布时定的总截止」。 */
     const span = stage.end ? diffDays(stage.end, stage.start || stage.end) : 0;
     const newEnd = addDays(date, span);
-    /* 相邻关系按同层算：子任务只和同父的兄弟比，顶层阶段只和顶层比。
-       按数组下标直接取上一条会把「上一阶段的最后一个子任务」当成相邻段，误报重叠。 */
-    const sib = siblingsOf(t.stages, si);
-    const pos = sib.findIndex(o => o.i === si);
-    const prev = pos > 0 ? sib[pos - 1].x : null;
-    const next = pos >= 0 && pos < sib.length - 1 ? sib[pos + 1].x : null;
-    const scope = stage.pid ? '同一个阶段下的' : '';
-    if (prev) {
-      const pe = prev.end || prev.date || prev.start;
-      if (pe && date <= pe) {
-        return { ok: false, why: `会和${scope}「${prev.name || ''}」（到 ${fmt(pe)}）重叠；要按顺序，不能倒着排` };
-      }
-    }
-    if (next) {
-      const ns = next.start || next.date || next.end;
-      if (ns && newEnd >= ns) {
-        return { ok: false, why: `会压到${scope}「${next.name || ''}」（${fmt(ns)} 开始）；先把下一段往后挪，或把这一段缩短` };
-      }
-    }
     /* 子任务不能拖出父阶段的窗口。阶段的起止是人设的，拖子任务不会让它变长——
        要更多时间就把那一段延长，那是个看得见的动作，而不是拖完发现阶段悄悄变了。 */
     if (stage.pid) {
@@ -2816,7 +2797,7 @@ function dragCheck(t, date, si) {
       }
     }
     /* 周末不单独拦：阶段是区间，跨周末是常态（一段 11-06 → 11-10 中间必然包含周末）。
-       真正要拦的是「同层重叠」和「超出父阶段窗口」，上面已经判过了。 */
+       同层重叠也不再拦——并行是正常排法；上面只判了「超出父阶段窗口」。 */
     /* 拖过了发布时定的总截止：服务端最后会拒，但那时候人已经看到日期变了，白折腾一次。
        只锁「别人发布给我」的活——自己建的专项，截止跟着计划走，不该拦自己。 */
     const due = t.dueDate || '';
@@ -3241,8 +3222,14 @@ document.addEventListener('click', e => {
       const name = $('#sName').value.trim();
       if (!name) { toast('先填阶段名称'); break; }
       const s = $('#sStart').value || t.start, e2 = $('#sEnd').value || s;
+      const whoEl = $('#sWho');
+      const who = whoEl ? (whoEl.value || '') : '';
+      if (who && !empActivated(who)) {
+        toast(`${nameOf(who)} 还没有登录过工作台，这一段派过去他收不到。`);
+        break;
+      }
       /* 新段先拼在末尾交给校验，通过后由校验按开始日重排到它该在的位置；
-         所以这里不要求它比最后一段更晚——只要和已有各段不重叠就行。 */
+         所以这里不要求它比最后一段更晚——同层允许重叠（并行）。 */
       const next = (t.stages || []).map(x => Object.assign({}, x));
       const node = { id: uid('s'), pid: null, name, start: s, end: e2, done: false };
       next.push(node);
@@ -3251,7 +3238,13 @@ document.addEventListener('click', e => {
       t.stages = next;
       /* 任务周期是一级阶段的包络，加完段要跟着更新：不然卡片和总截止还按旧区间算 */
       restatTaskSpan(t);
-      save(); openTaskPage(t.id); render(); toast('阶段已添加');
+      /* 选人即派：先把这一段存下去，再走派发；顺序不能反，服务端那时还看不到它。 */
+      (async () => {
+        try { await persist(); } catch (err) { toast('保存失败：' + err.message); return; }
+        if (view === 'task') { openTaskPage(t.id); render(); }
+        if (who) await dispatchTopStage(t.id, t.stages.indexOf(node), node.id, who, null);
+        else toast('阶段已添加');
+      })();
       break;
     }
     case 'stage-sub': {
@@ -3278,14 +3271,13 @@ document.addEventListener('click', e => {
           <input type="date" class="sst" value="${slot.start}"/>
           <input type="date" class="sen" value="${slot.end}"/>
           <span class="lbl2">谁做</span>
-          <select class="swho" title="这段由谁做；不选就是承接人自己做">
-            <option value="">承接人自己做</option>
-            ${(S.roster || []).filter(x => x.activated).map(x => `<option value="${x.no}">${esc(x.name)}</option>`).join('')}
+          <select class="swho" title="这段由谁做；选人即派，等对方接收后生效；不选就是承接人自己做">
+            ${stageWhoOptions(t, '')}
           </select>
           <button class="btn primary sm" data-act="stage-add-sub" data-id="${t.id}" data-idx="${i}">加</button>
           <button class="btn ghost sm" data-act="subadd-cancel">取消</button>
         </div>
-        <div class="mini" style="margin-top:6px;line-height:1.5">${slotTip}<br/>选上别人之后，点上面的「派发」，他才会在承接台收到。</div>
+        <div class="mini" style="margin-top:6px;line-height:1.5">${slotTip}<br/>选上别人并点「加」，会立刻派给他，等对方接收后生效。</div>
       </div>`);
       break;
     }
@@ -3322,7 +3314,7 @@ document.addEventListener('click', e => {
         </div>
         <div class="mini" style="margin-top:6px">${kids.length
           ? `这一段的窗口是 ${dateSpan(s)}，下面 ${kids.length} 个子任务要排在里面；缩短时不能把它们挤到窗口外。`
-          : '结束日期不能早于开始日期，也不能压到前后两段上'}</div>
+          : '结束日期不能早于开始日期；同一层的阶段可以重叠（并行）'}</div>
       </div>`);
       break;
     }
@@ -3377,8 +3369,7 @@ document.addEventListener('click', e => {
       if (!p || p.pid) { toast('这一级不能再拆了'); break; }
       const whoEl = box.querySelector('.swho');
       const who = whoEl ? (whoEl.value || null) : null;
-      /* 选了具体的人先记下 who，但不写 whoAt：要等这一页上的「派发」按下去，
-         对方那边才看得到。和新建任务时的口径完全一致。 */
+      /* 选人即派：和一级行、发布弹窗同一个口径——存完立即派，等对方接收后生效。 */
       if (who && !empActivated(who)) {
         toast(`${nameOf(who)} 还没有登录过工作台，子任务派过去他收不到。`);
         break;
@@ -3395,8 +3386,21 @@ document.addEventListener('click', e => {
       const v = validateStages(t, next, { action: 'add-sub', newName: name, newPid: next[i].id, newNode: node });
       if (!v.ok) { toast(v.msg); break; }
       t.stages = next;
-      save(); openTaskPage(t.id); render();
-      toast(who ? `子任务已加，${nameOf(who)} 这一段还等你点「派发」` : '子任务已添加');
+      /* 选人即派：存完立即派，等对方接收后生效（和一级行、发布弹窗同一个口径）。 */
+      (async () => {
+        try { await persist(); } catch (err) { toast('保存失败：' + err.message); return; }
+        if (view === 'task') { openTaskPage(t.id); render(); }
+        if (!who) { toast('子任务已添加'); return; }
+        try {
+          const r = await api('/api/task/dispatch', {
+            method: 'POST',
+            body: JSON.stringify({ me: S.me.no, id: t.id, stageId: node.id, who })
+          });
+          if (!r.ok) { toast(r.msg || '这一段没派出去'); return; }
+          await refresh(true); render();
+          toast(`子任务已加，已派给 ${nameOf(who)}，等对方接收后生效`);
+        } catch (err) { toast('派发失败：' + err.message); }
+      })();
       break;
     }
     case 'stage-toggle': {
@@ -3557,7 +3561,16 @@ document.addEventListener('click', e => {
       }
       break;
     case 'modal-ok': {
-      if (modalOk && modalOk() === false) return;
+      if (!modalOk) break;
+      const r = modalOk();
+      if (r === false) return;
+      /* 异步提交（例如发布任务后紧接着逐段派发）：按钮先锁住，避免连点建出两条。 */
+      if (r && typeof r.then === 'function') {
+        const btn = $('[data-act="modal-ok"]');
+        if (btn) btn.disabled = true;
+        r.catch(e => toast('保存失败：' + e.message))
+          .finally(() => { const b = $('[data-act="modal-ok"]'); if (b) b.disabled = false; });
+      }
       break;
     }
     case 'modal-cancel': closeModal(); break;
@@ -3682,11 +3695,11 @@ document.addEventListener('change', e => {
     if (dn) dn.style.display = e.target.value === 'day' ? 'block' : 'none';
     return;
   }
-  /* 弹窗里换了承接人：子任务那几行「承接人自己做（谁）」要跟着变，
+  /* 弹窗里换了承接人：所有「谁做」下拉的「承接人自己做（谁）」都要跟着变，
      否则人已经换成李四了，下拉还在说「王磊自己做」 */
   if (modal && e.target.id === 'f_assignee') {
     const own = e.target.value || S.me.no;
-    document.querySelectorAll('#stageRows .mrow.sub .swho').forEach(s => {
+    document.querySelectorAll('#stageRows .mrow .swho').forEach(s => {
       const o = s.querySelector('option[value=""]');
       if (o) o.textContent = `承接人自己做（${nameOf(own)}）`;
     });

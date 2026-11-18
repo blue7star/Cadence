@@ -732,22 +732,23 @@ async function main() {
     JSON.stringify({ msg: ivA.msg, idx: ivIdxA, n: ivCount() }));
 
   /* 只压中间那一段（11-01→11-06 全落在「二、指标口径」里），避免同时碰到过渡段，
-     这样断言能证明「不是拿最后一段当邻居」这件事，而不是碰巧撞上别的段。 */
-  const ivB = await ivAdd('压中间段', '2026-11-01', '2026-11-06');
-  check('压到中间段：拦下，点名两段并给出带年份的重叠区间',
-    ivB.msg.includes('压上了') && ivB.msg.includes('第 2 段「二、指标口径」')
-      && ivB.msg.includes('2026-11-01 到 2026-11-06') && ivCount() === 6,
+     这样断言能证明「不是拿最后一段当邻居」这件事，而不是碰巧撞上别的段。
+     用户口径（2026-11-18）：同层阶段允许时间重叠——并行任务就是两个人同一时段各干一段。 */
+  const ivB = await ivAdd('压中间段（完全重叠）', '2026-11-01', '2026-11-06');
+  const ivStB = JSON.parse((ivRow() || { stages: '[]' }).stages || '[]');
+  check('两段完全重叠可保存：同层时间重叠放行，不弹错误提示',
+    ivCount() === 7 && ivStB.some(s => s.name === '压中间段（完全重叠）') && ivB.msg.includes('已添加'),
     JSON.stringify({ msg: ivB.msg, n: ivCount() }));
 
   const ivC = await ivAdd('压最后段', '2027-06-20', '2027-07-05');
-  check('压到最后段：同样拦下——判定跟数组顺序无关，不再拿最后一段当邻居',
-    ivC.msg.includes('五、受治理问数') && ivC.msg.includes('2027-06-20') && ivCount() === 6,
-    JSON.stringify({ msg: ivC.msg, n: ivCount() }));
+  check('跨年重叠也能保存：与最后一段重叠且把任务周期延到 07-05',
+    ivC.msg.includes('已添加') && ivCount() === 8 && (ivRow() || {}).end_date === '2027-07-05',
+    JSON.stringify({ msg: ivC.msg, n: ivCount(), end: (ivRow() || {}).end_date }));
 
   const ivD = await ivAdd('尾段之后', '2027-07-01', '2027-07-02');
   const ivStD = JSON.parse((ivRow() || { stages: '[]' }).stages || '[]');
-  check('首尾相接不算冲突：07-01 接在 06-30 后面放行，任务周期跟着包络延到 07-02',
-    ivStD.length === 7 && ivStD[6].name === '尾段之后' && (ivRow() || {}).end_date === '2027-07-02',
+  check('尾段之后仍能加：任务周期按 min(开始) → max(结束) 收敛',
+    ivStD.length === 9 && (ivRow() || {}).end_date === '2027-07-05',
     JSON.stringify({ n: ivStD.length, end: (ivRow() || {}).end_date, msg: ivD.msg }));
 
   await js(`(function(){document.querySelector('#view [data-act="stage-edit"]').click();return 1})()`);
@@ -762,20 +763,43 @@ async function main() {
     ivE.msg.includes('已更新') && ivRowE[0].start === '2026-07-03' && ivRowE[0].end === '2026-09-30',
     JSON.stringify({ msg: ivE.msg, first: ivRowE[0] }));
 
-  /* 服务端才是判定者：绕过界面直接塞脏数据，必须被拒且不落库 */
-  const ivF = await ivPush({ tasks: [ivBody({ stages: ivStages.map((s, i) => Object.assign({}, s, i === 2 ? { start: '2026-11-05' } : {})) })] });
-  check('直调 /api/sync 塞重叠段：被服务端拒收，库里的阶段不动',
-    (ivF.errors || []).some(m => m.includes('时间重叠')) && ivCount() === 7,
+  /* 服务端同样是放行者：同层重叠不再是错误，只留「结束早于开始」「子段越界」「周期=包络」 */
+  const ovStages = [
+    { id: 'ov1', name: 'A段', start: '2026-11-18', end: '2026-11-19' },
+    { id: 'ov2', name: 'B段', start: '2026-11-18', end: '2026-11-20' }
+  ];
+  const ivF = await ivPush({ tasks: [ivBody({ start: '2026-11-18', end: '2026-11-20', stages: ovStages })] });
+  check('直调 /api/sync 保存两段完全重叠：服务端放行，阶段按原样落库',
+    !(ivF.errors || []).length && ivCount() === 2,
     JSON.stringify({ errors: ivF.errors, n: ivCount() }));
 
-  const ivG = await ivPush({ tasks: [ivBody({ stages: ivStages.concat([{ id: 'iv6', pid: 'iv2', name: '越界子任务', start: '2026-09-01', end: '2026-09-02' }]) })] });
-  check('直调 /api/sync 塞子任务到父阶段窗口外：被服务端拒收',
-    (ivG.errors || []).some(m => m.includes('超出所属阶段')) && ivCount() === 7,
+  const ivG = await ivPush({ tasks: [ivBody({ start: '2026-11-18', end: '2026-11-20', stages: [
+    { id: 'pw1', name: '父段', start: '2026-11-18', end: '2026-11-20' },
+    { id: 'kw1', pid: 'pw1', name: '越界子任务', start: '2026-11-01', end: '2026-11-02' }
+  ] })] });
+  check('直调 /api/sync 塞子任务到父阶段窗口外：仍被服务端拒收',
+    (ivG.errors || []).some(m => m.includes('超出所属阶段')) && ivCount() === 2,
     JSON.stringify({ errors: ivG.errors, n: ivCount() }));
 
-  const ivH = await ivPush({ tasks: [ivBody({ end: '2027-05-30' })] });
-  check('直调 /api/sync 让任务周期短于阶段包络：被服务端拒收',
-    (ivH.errors || []).some(m => m.includes('任务周期')) && ivCount() === 7,
+  const ivI = await ivPush({ tasks: [ivBody({ start: '2026-11-18', end: '2026-11-20', stages: [
+    { id: 'bk1', name: '倒着写的段', start: '2026-11-20', end: '2026-11-18' }
+  ] })] });
+  check('结束早于开始：仍被服务端拒收，库里的阶段不动',
+    (ivI.errors || []).some(m => m.includes('结束早于开始')) && ivCount() === 2,
+    JSON.stringify({ errors: ivI.errors, n: ivCount() }));
+
+  const ivJ = await ivPush({ tasks: [ivBody({ start: '2026-11-18', end: '2026-11-20', stages: [
+    { id: 'tp1', name: '父段', start: '2026-11-18', end: '2026-11-20' },
+    { id: 'tk1', pid: 'tp1', name: '子段一', start: '2026-11-18', end: '2026-11-19' },
+    { id: 'tk2', pid: 'tp1', name: '子段二', start: '2026-11-18', end: '2026-11-20' }
+  ] })] });
+  check('一父两子三段互相重叠：可保存（并行是正常排法）',
+    !(ivJ.errors || []).length && ivCount() === 3,
+    JSON.stringify({ errors: ivJ.errors, n: ivCount() }));
+
+  const ivH = await ivPush({ tasks: [ivBody({ start: '2026-11-18', end: '2026-11-19', stages: ovStages })] });
+  check('任务周期短于阶段包络（max 结束）：仍被服务端拒收',
+    (ivH.errors || []).some(m => m.includes('任务周期')) && ivCount() === 3,
     JSON.stringify({ errors: ivH.errors, n: ivCount() }));
 
   await ivPush({ del: { tasks: [IV] } });
@@ -850,14 +874,15 @@ async function main() {
     const hint=(document.querySelector('#dragHint')||{}).textContent||'';
     const no=cell.classList.contains('drop-no');
     cell.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));
-    return {id:t.id, i:i, name:st.name, hint:hint, no:no, before:{start:st.start,end:st.end}};
+    return {id:t.id, i:i, name:st.name, hint:hint, no:no, date:cell.dataset.date, before:{start:st.start,end:st.end}};
   })()`);
   await sleep(1200);
   const stageAfter = stageDrag.err ? null : await js(`(async()=>{const s=await (await fetch('/api/state?me=1012')).json();
     const t=s.tasks.find(x=>x.id==='${stageDrag.id}');
     if(!t) return null; const st=(t.stages||[])[${stageDrag.i}]; return st?{start:st.start,end:st.end}:null})()`);
-  check('阶段不能压到前一段：拦下并说明和哪一段撞了，日期不变',
-    !stageDrag.err && stageDrag.no && stageDrag.hint.includes('重叠') && !!stageAfter && stageAfter.start === stageDrag.before.start,
+  check('阶段拖到与前一段重叠：放行（并行），不弹黄提示，日期按拖动更新',
+    !stageDrag.err && !stageDrag.no && !stageDrag.hint.includes('重叠')
+      && !!stageAfter && stageAfter.start === stageDrag.date,
     JSON.stringify({ drag: stageDrag, after: stageAfter }));
 
   const routineDrag = await js(`(function(){
@@ -1659,6 +1684,78 @@ async function main() {
     await push('1002', { del: { tasks: [madeAssign.id] } });
   }
 
+  /* ---------- 9.42 发布弹窗：一级阶段行直接选「谁做」，保存即派 ----------
+     用户在发布弹窗里分段时就该能定人；以前只有建完之后进详情页才有这个入口。 */
+  await nav('assign'); await sleep(500);
+  await js(`document.querySelector('[data-act="new"][data-type="assign"]').click();'ok'`);
+  await sleep(500);
+  const mdWho = await js(`(async()=>{
+    const rows=()=>[...document.querySelectorAll('#stageRows .mrow')];
+    const r1=rows()[0];
+    r1.querySelector('.sname').value='并行段一';
+    r1.querySelector('.sst').value='2026-11-18';
+    r1.querySelector('.sen').value='2026-11-19';
+    /* 选第一个真人（下拉第一项是「承接人自己做」） */
+    const sw=r1.querySelector('.swho');
+    sw.selectedIndex = Math.min(1, sw.options.length-1);
+    document.querySelector('[data-act="mstage-add"]').click();
+    await new Promise(r=>setTimeout(r,200));
+    const r2=rows()[1];
+    r2.querySelector('.sname').value='并行段二';
+    r2.querySelector('.sst').value='2026-11-18';
+    r2.querySelector('.sen').value='2026-11-20';
+    document.querySelector('#f_title').value='E2E发布：两段并行';
+    return { rows:rows().length, whoSel:document.querySelectorAll('#stageRows .mrow .swho').length,
+      firstWho:sw.value, whoOpts:sw.options.length };
+  })()`);
+  check('发布弹窗：每个一级阶段行都有「谁做」下拉，且能选人',
+    mdWho.rows === 2 && mdWho.whoSel === 2 && !!mdWho.firstWho && mdWho.whoOpts >= 2, JSON.stringify(mdWho));
+  await shot('13b-assign-modal-who');
+  await js(`document.querySelector('#modal [data-act="modal-ok"]').click();'ok'`);
+  await sleep(3500);
+  const mdTask = dbGet(`SELECT id,start_date,end_date,stages FROM task
+    WHERE title='E2E发布：两段并行' ORDER BY created_at DESC LIMIT 1`);
+  let mdStages = [];
+  try { mdStages = JSON.parse((mdTask || {}).stages || '[]'); } catch { mdStages = []; }
+  const mdKid = mdTask ? dbGet('SELECT id,title,assignee_no,intake_status,parent_stage_id FROM task WHERE parent_task_id=?', mdTask.id) : null;
+  /* 派发会在同一次提交里补一条同名二级节点，任务行以派发后的读数为准（重新取一次） */
+  const mdTask2 = mdTask ? dbGet('SELECT id,start_date,end_date,stages FROM task WHERE id=?', mdTask.id) : null;
+  if (mdTask2) mdStages = JSON.parse(mdTask2.stages || '[]');
+  check('发布弹窗两段同日期可保存，任务周期取包络（11-18 → 11-20）',
+    !!mdTask2 && mdStages.filter(s => !s.pid).length === 2
+      && mdTask2.start_date === '2026-11-18' && mdTask2.end_date === '2026-11-20',
+    JSON.stringify({ task: mdTask2 && { id: mdTask2.id, start: mdTask2.start_date, end: mdTask2.end_date }, tops: mdStages.filter(s => !s.pid).length }));
+  const mdAuto = mdKid ? mdStages.find(s => s.id === mdKid.parent_stage_id) : null;
+  check('阶段行选人 = 保存即派：生成同名二级节点 + 待接收子专项',
+    !!mdKid && mdKid.intake_status === 'pending' && mdKid.assignee_no === mdWho.firstWho
+      && !!mdAuto && mdAuto.name === '并行段一' && mdAuto.pid === mdStages.find(s => !s.pid && s.name === '并行段一').id,
+    JSON.stringify({ kid: mdKid, auto: mdAuto, stages: mdStages.map(s => ({ id: s.id, pid: s.pid, name: s.name })), picked: mdWho.firstWho }));
+  if (mdTask) {
+    await push('1012', { del: { tasks: [mdTask.id, mdKid && mdKid.id].filter(Boolean) } });
+    await push('1003', { del: { tasks: [mdTask.id, mdKid && mdKid.id].filter(Boolean) } });
+  }
+
+  /* 真错误仍要拦：阶段结束早于开始时，弹窗不能悄悄夹成同一天放过去 */
+  await js(`document.querySelector('[data-act="new"][data-type="assign"]').click();'ok'`);
+  await sleep(400);
+  const mdBadDate = await js(`(async()=>{
+    const r1=document.querySelector('#stageRows .mrow');
+    r1.querySelector('.sname').value='倒着写的段';
+    r1.querySelector('.sst').value='2026-11-20';
+    r1.querySelector('.sen').value='2026-11-18';
+    document.querySelector('#f_title').value='E2E发布：倒着写';
+    document.querySelector('#modal [data-act="modal-ok"]').click();
+    await new Promise(r=>setTimeout(r,600));
+    return { toast:(document.querySelector('#toast')||{}).textContent||'',
+      modalOpen:document.querySelector('#modalWrap').classList.contains('show') };
+  })()`);
+  await js(`(function(){const b=document.querySelector('#modal [data-act="modal-cancel"]');if(b)b.click();return 1})()`);
+  await sleep(300);
+  const mdBadRow = dbGet("SELECT id FROM task WHERE title='E2E发布：倒着写'");
+  check('发布弹窗：阶段结束早于开始仍被拒，弹窗不关、任务不落库',
+    mdBadDate.modalOpen && mdBadDate.toast.includes('早于开始') && !mdBadRow,
+    JSON.stringify({ toast: mdBadDate.toast, modalOpen: mdBadDate.modalOpen, row: mdBadRow }));
+
   /* 界面之外再兜一层：直接写接口把「专项 + 别人承接」塞进去。
      服务端按承接人定类型（决策①）：承接人是别人 → 这条只能是发布任务，
      不会造出一条「挂在别人名下、我还看不见」的专项。 */
@@ -2396,6 +2493,63 @@ async function main() {
     check('反向：临时任务不拆阶段，一级入口被拒', reTemp.ok === false && /不拆阶段/.test(reTemp.msg || ''), JSON.stringify(reTemp));
     await push('1012', { del: { tasks: [otherChild && otherChild.id, TOPWT].filter(Boolean) } });
     await push('1012', { del: { tasks: [TOPW] } });
+
+    /* ---------- 9.9c 另外两个建段入口：添加阶段、+ 子任务，也能当场选人并直接派发 ----------
+       用户口径（2026-11-18）：三处能产生阶段的入口要一样，不能只有发布弹窗有。 */
+    const ADDS = 't_e2e_addstage_who';
+    await push('1012', { del: { tasks: [ADDS] } });
+    await pushJ('1012', { tasks: [{ id: ADDS, type: 'special', title: 'E2E添加阶段选人',
+      ownerNo: '1012', assigneeNo: '1012', start: d(0), end: d(4), dueDate: d(4), status: 'todo',
+      stages: [{ id: 'as1', pid: null, name: '已有段', start: d(0), end: d(4), done: false }] }] });
+    await whoAmI('1012');
+    await js(`openTaskPage('${ADDS}');'ok'`); await sleep(800);
+    const addStageWho = await js(`(async()=>{
+      document.querySelector('#sName').value='新段带人';
+      document.querySelector('#sStart').value='${d(1)}';
+      document.querySelector('#sEnd').value='${d(2)}';
+      const sel=document.querySelector('#sWho');
+      if(!sel) return {err:'添加阶段表单没有谁做'};
+      sel.value='1004';
+      document.querySelector('[data-act="stage-add"]').click();
+      await new Promise(r=>setTimeout(r,4000));
+      return {hasSel:true, val:sel.value};
+    })()`);
+    const addStageRow = dbGet("SELECT id,intake_status,assignee_no,parent_stage_id FROM task WHERE parent_task_id=? AND title LIKE '%新段带人%'", ADDS);
+    const addStagesNow = JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', ADDS) || {}).stages || '[]');
+    const addStageTop = addStagesNow.find(s => s.name === '新段带人' && !s.pid) || {};
+    const addStageAuto = addStagesNow.find(s => s.pid === addStageTop.id && s.name === '新段带人') || {};
+    check('详情页「添加阶段」：表单里能选「谁做」，添加后立刻派成待接收',
+      !addStageWho.err && addStageWho.val === '1004' && !!addStageTop.id && !!addStageAuto.id
+        && !!addStageRow && addStageRow.assignee_no === '1004' && addStageRow.intake_status === 'pending'
+        && addStageRow.parent_stage_id === addStageAuto.id,
+      JSON.stringify({ form: addStageWho, top: addStageTop.id, auto: addStageAuto.id, child: addStageRow }));
+
+    const subWho = await js(`(async()=>{
+      const row=[...document.querySelectorAll('#view .stage:not(.sub)')].find(x=>x.textContent.includes('新段带人'));
+      if(!row) return {err:'没有新段'};
+      row.querySelector('[data-act="stage-sub"]').click();
+      await new Promise(r=>setTimeout(r,300));
+      const box=document.querySelector('.subadd');
+      if(!box) return {err:'没有加子任务表单'};
+      box.querySelector('.sname').value='子段带人';
+      /* 表单默认日期从全任务算，这里显式落到父段窗口内 */
+      box.querySelector('.sst').value='${d(1)}';
+      box.querySelector('.sen').value='${d(2)}';
+      box.querySelector('.swho').value='1003';
+      box.querySelector('[data-act="stage-add-sub"]').click();
+      await new Promise(r=>setTimeout(r,4000));
+      return {ok:true, who:box.querySelector('.swho').value, toast:(document.querySelector('#toast')||{}).textContent||''};
+    })()`);
+    const subRow = dbGet("SELECT id,intake_status,assignee_no,parent_stage_id FROM task WHERE parent_task_id=? AND title LIKE '%子段带人%'", ADDS);
+    const subNode = (JSON.parse((dbGet('SELECT stages FROM task WHERE id=?', ADDS) || {}).stages || '[]'))
+      .find(s => s.name === '子段带人') || {};
+    check('阶段行「+ 子任务」：选人后加完即派，落成待接收子专项',
+      !subWho.err && !!subNode.id && !!subRow && subRow.assignee_no === '1003'
+        && subRow.intake_status === 'pending' && subRow.parent_stage_id === subNode.id,
+      JSON.stringify({ ui: subWho, node: subNode, child: subRow }));
+    await push('1012', { del: { tasks: [ADDS, addStageRow && addStageRow.id, subRow && subRow.id].filter(Boolean) } });
+    await push('1003', { del: { tasks: [subRow && subRow.id].filter(Boolean) } });
+    await push('1004', { del: { tasks: [addStageRow && addStageRow.id].filter(Boolean) } });
 
     /* ---------- 9.10 界面上的「谁做」：真拨那个下拉，不是调接口 ----------
        教训：上一版 127 条断言全绿，而下拉拨完什么都不发生——

@@ -38,3 +38,4 @@ paths: _dev/, import-emp.js, .agents/gates/, .agents/templates/, .agents/scripts
 | TASK-20261117-stage-top-who | 见 git | — | e2e 新增 9.9b：一级阶段行「谁做」从 DOM 拨动 → 同名同起止二级节点 + pending 子专项；老阶段补 `id`；五条直调拒绝路径（已拆、二级、缺人、非承接人、花名册外）+ 临时任务拒绝；第三级 `topStageId` 也被三层封顶拒；v2 追加撤回完整性：撤回后自动段消失、一级入口恢复、再派同一人/换人成功、旧 id 被拒 |
 | TASK-20261117-admin-fixed-password | 见 git | — | verify 的 admin 重启断言从「换新密码、旧密码作废」改为「两次启动都是固定 123456、旧密码仍可用、仍要求改密」；保留「改密后重启保留新密码、不再打印」 |
 | TASK-20261118-temp-done-date | 见 git | — | e2e 新增临时任务完成日期四断言（完成落库且导出一致、取消完成清空、存量 `done_at=NULL` 导出留空、有阶段取叶子 `doneAt` 的旧断言保留） |
+| TASK-20261118-stage-overlap-and-create-who | 见 git | — | e2e 6.9 改为「重叠放行」并补两段完全重叠、一父两子重叠、倒序拒绝、父窗越界拒绝；7 的拖拽重叠改为放行且无黄色提示；新增 9.42（发布弹窗每行「谁做」+ 保存即派 + 倒序拒绝）与 9.9c（添加阶段、+ 子任务选人即派） |
